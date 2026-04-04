@@ -7,12 +7,12 @@
   "metadata": {
     "description": "Official plugin marketplace for Xianix the-agent — AI-powered GitHub automation tools.",
     "version": "1.0.0",
-    "pluginRoot": "./Marketplace/plugins"
+    "pluginRoot": "./plugins"
   },
   "plugins": [
     {
       "name": "pr-helper",
-      "source": "./Marketplace/plugins/pr-helper",
+      "source": "./plugins/pr-helper",
       "description": "Assists with pull request workflows: summarises diffs, posts review comments, and labels PRs based on configurable rules.",
       "version": "1.0.0",
       "author": {
@@ -21,6 +21,21 @@
       },
       "category": "code-review",
       "keywords": ["pull-request", "github", "review", "automation"],
+      "license": "MIT"
+    },
+    {
+      "name": "pr-reviewer",
+      "source": "./plugins/pr-reviewer",
+      "description": "Comprehensive PR review plugin with specialized agents for code quality, security, test coverage, and performance analysis. Works with GitHub, Azure DevOps, Bitbucket, and any git repository.",
+      "version": "1.1.0",
+      "author": {
+        "name": "99x",
+        "email": "xianix@99x.io"
+      },
+      "homepage": "https://github.com/99x/xianix-team",
+      "repository": "https://github.com/99x/xianix-team",
+      "category": "code-review",
+      "keywords": ["pr-review", "pull-request", "review", "code-quality", "security", "testing", "azure-devops", "github"],
       "license": "MIT"
     }
   ]
