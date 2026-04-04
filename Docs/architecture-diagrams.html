@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Xianix Agent — Architecture Diagrams</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2e3248;
+      --accent: #6c63ff;
+      --accent2: #00d9ff;
+      --text: #e2e8f0;
+      --muted: #8892a4;
+      --success: #34d399;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      padding: 2rem;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 3rem;
+    }
+
+    header h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 0.5rem;
+    }
+
+    header p {
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 0.5rem;
+      justify-content: center;
+      margin-bottom: 2rem;
+      flex-wrap: wrap;
+    }
+
+    .tab-btn {
+      padding: 0.55rem 1.25rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+
+    .tab-btn:hover { border-color: var(--accent); color: var(--text); }
+    .tab-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.75rem;
+      margin-bottom: 2rem;
+    }
+
+    .card h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--accent2);
+      margin-bottom: 0.4rem;
+    }
+
+    .card p {
+      color: var(--muted);
+      font-size: 0.85rem;
+      margin-bottom: 1.25rem;
+      line-height: 1.6;
+    }
+
+    .mermaid {
+      background: #12141f;
+      border-radius: 8px;
+      padding: 1.5rem;
+      overflow-x: auto;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+    }
+
+    @media (max-width: 900px) {
+      .grid-2 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Xianix Agent — Architecture Diagrams</h1>
+  <p>Flow diagrams &amp; sequence diagrams for the Xianix AI agent system</p>
+</header>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab('overview')">System Overview</button>
+  <button class="tab-btn" onclick="switchTab('activation')">Agent Activation</button>
+  <button class="tab-btn" onclick="switchTab('event')">Event Flow</button>
+  <button class="tab-btn" onclick="switchTab('sequences')">Sequence Diagrams</button>
+</div>
+
+<!-- ── OVERVIEW ────────────────────────────────────── -->
+<div id="tab-overview" class="tab-panel active">
+  <div class="card">
+    <h2>High-Level System Architecture</h2>
+    <p>End-to-end view of all components and how they connect — from external event sources through to Claude Code plugin execution.</p>
+    <div class="mermaid">
+flowchart TD
+    GH["🐙 GitHub / Azure DevOps"]:::ext
+    ACP["☁️ Xians ACP\n(Agent Communication Platform)"]:::platform
+    APP["🖥️ .NET Console App\n(XianixAgent)"]:::app
+    ORCH["⚙️ EventOrchestrator"]:::core
+    RULES["📋 rules.json\n(Filter · Extract · Identify)"]:::config
+    WF["🔄 XianixWorkflow\n(Temporal Workflow)"]:::core
+    WS["📁 Isolated Workspace\n(per Tenant)"]:::infra
+    CLONE["📥 Clone Repository"]:::infra
+    PLUGINS["🔌 Install Claude Code Plugins"]:::infra
+    INVOKE["🤖 Invoke Claude Code Plugin"]:::ai
+
+    GH -->|"webhook event"| ACP
+    ACP -->|"webhook context"| APP
+    APP --> ORCH
+    ORCH -->|"evaluate"| RULES
+    RULES -->|"matched · inputs extracted"| ORCH
+    ORCH -->|"signal"| WF
+    WF --> WS
+    WF --> CLONE
+    CLONE --> PLUGINS
+    PLUGINS --> INVOKE
+
+    classDef ext     fill:#1e293b,stroke:#475569,color:#94a3b8
+    classDef platform fill:#1e1b4b,stroke:#6c63ff,color:#a5b4fc
+    classDef app     fill:#172554,stroke:#3b82f6,color:#93c5fd
+    classDef core    fill:#14532d,stroke:#22c55e,color:#86efac
+    classDef config  fill:#431407,stroke:#f97316,color:#fdba74
+    classDef infra   fill:#1c1917,stroke:#78716c,color:#a8a29e
+    classDef ai      fill:#4a044e,stroke:#c026d3,color:#e879f9
+    </div>
+  </div>
+</div>
+
+<!-- ── ACTIVATION ─────────────────────────────────── -->
+<div id="tab-activation" class="tab-panel">
+  <div class="card">
+    <h2>Agent Activation Flow</h2>
+    <p>Steps taken when the Xianix agent first starts up — platform initialisation, agent registration, workflow binding, and knowledge upload.</p>
+    <div class="mermaid">
+flowchart TD
+    START([▶ Start .NET Application]):::node
+    INIT["XiansPlatform.InitializeAsync\n(ServerUrl · ApiKey · LogLevels)"]:::node
+    REG["Register XianixAgent\n(Name · Description · Prompts)"]:::node
+    KNOW["Upload rules.json\nas Embedded Knowledge"]:::node
+    WFS["Define Workflows"]:::node
+
+    CONV["ConversationalWorkflow\n(Supervisor)"]:::workflow
+    HOOK["WebhookWorkflow\n(Integrator)"]:::workflow
+
+    MAF["Bind MafSubAgent\nfor Chat Messages"]:::sub
+    ORCH2["Bind EventOrchestrator\nfor Webhook Events"]:::sub
+
+    RUN["xiansAgent.RunAllAsync\n(start all workflows)"]:::final
+    READY([✅ Agent Ready & Listening]):::done
+
+    START --> INIT --> REG --> KNOW --> WFS
+    WFS --> CONV & HOOK
+    CONV --> MAF
+    HOOK --> ORCH2
+    MAF & ORCH2 --> RUN --> READY
+
+    classDef node    fill:#1e293b,stroke:#3b82f6,color:#bfdbfe
+    classDef workflow fill:#14532d,stroke:#22c55e,color:#86efac
+    classDef sub     fill:#2d1b69,stroke:#8b5cf6,color:#ddd6fe
+    classDef final   fill:#172554,stroke:#60a5fa,color:#bfdbfe
+    classDef done    fill:#14532d,stroke:#4ade80,color:#86efac
+    </div>
+  </div>
+</div>
+
+<!-- ── EVENT FLOW ─────────────────────────────────── -->
+<div id="tab-event" class="tab-panel">
+  <div class="grid-2">
+
+    <div class="card">
+      <h2>Webhook Event Processing</h2>
+      <p>How an inbound webhook is received, evaluated against rules, and either ignored or forwarded to the workflow as a signal.</p>
+      <div class="mermaid">
+flowchart TD
+    WH(["📨 Webhook Arrives"]):::start
+    CTX["Extract context\n(name · payload · tenantId)"]:::step
+    EVAL["WebhookRulesEvaluator\n.EvaluateAsync()"]:::step
+    MATCH{{"Rule\nMatched?"}}:::dec
+    IGN["Return status: ignored\n↩ respond to caller"]:::bad
+    LOG["Log matched inputs"]:::step
+    SIG["Signal XianixWorkflow\nwith extracted inputs"]:::good
+    WF2(["🔄 Workflow Executes"]):::end2
+
+    WH --> CTX --> EVAL --> MATCH
+    MATCH -- No --> IGN
+    MATCH -- Yes --> LOG --> SIG --> WF2
+
+    classDef start fill:#1e3a5f,stroke:#60a5fa,color:#bfdbfe
+    classDef step  fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef dec   fill:#431407,stroke:#f97316,color:#fdba74
+    classDef bad   fill:#3b0764,stroke:#a855f7,color:#e9d5ff
+    classDef good  fill:#14532d,stroke:#22c55e,color:#86efac
+    classDef end2  fill:#14532d,stroke:#4ade80,color:#86efac
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Workflow Execution Steps</h2>
+      <p>Once the XianixWorkflow is signalled, it sets up an isolated environment and invokes the correct Claude Code plugin.</p>
+      <div class="mermaid">
+flowchart TD
+    SIG2(["📡 Workflow Signal Received"]):::start
+    WS2["Create Isolated Workspace\n(per Tenant)"]:::step
+    CLONE2["Clone Repository\n(from Git URL in inputs)"]:::step
+    INST["Install Claude Code Plugins\n(from rules config)"]:::step
+    INV["Invoke Claude Code Plugin\n(e.g. pr-review-plugin)"]:::step
+    DONE2(["✅ Plugin Execution Complete"]):::end2
+
+    SIG2 --> WS2 --> CLONE2 --> INST --> INV --> DONE2
+
+    classDef start fill:#1e3a5f,stroke:#60a5fa,color:#bfdbfe
+    classDef step  fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef end2  fill:#14532d,stroke:#4ade80,color:#86efac
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── SEQUENCES ──────────────────────────────────── -->
+<div id="tab-sequences" class="tab-panel">
+
+  <div class="card">
+    <h2>Sequence: Agent Startup</h2>
+    <p>Chronological message exchange during application boot.</p>
+    <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant APP as .NET App
+    participant PLAT as XiansPlatform
+    participant XIANS as Xians Server
+    participant KNO as Knowledge Store
+
+    APP->>PLAT: InitializeAsync(config)
+    PLAT->>XIANS: Authenticate & connect
+    XIANS-->>PLAT: Session established
+    PLAT-->>APP: XiansPlatform ready
+
+    APP->>PLAT: Agents.Register(descriptor)
+    PLAT->>XIANS: Register agent metadata
+    XIANS-->>APP: XiansAgent handle
+
+    APP->>KNO: UploadEmbeddedResource(rules.json)
+    KNO-->>APP: Knowledge uploaded
+
+    APP->>APP: DefineWorkflows (Supervisor + Integrator)
+    APP->>XIANS: RunAllAsync()
+    XIANS-->>APP: Agent live ✅
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Sequence: Webhook Event Handling</h2>
+    <p>Full round-trip from a GitHub/Azure DevOps event to plugin execution.</p>
+    <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant GH as GitHub / AzDO
+    participant ACP as Xians ACP
+    participant WH as WebhookWorkflow
+    participant ORCH as EventOrchestrator
+    participant RULES as RulesEvaluator
+    participant WF as XianixWorkflow
+    participant CC as Claude Code Plugin
+
+    GH->>ACP: POST webhook (e.g. PR opened)
+    ACP->>WH: OnWebhook(context)
+
+    WH->>ORCH: OrchestrateAsync(name, payload, tenantId)
+    ORCH->>RULES: EvaluateAsync(webhookName, payload)
+
+    alt No matching rule
+        RULES-->>ORCH: null
+        ORCH-->>WH: OrchestrationResult.Ignored
+        WH-->>ACP: { status: "ignored" }
+    else Rule matched
+        RULES-->>ORCH: inputs map
+        ORCH-->>WH: OrchestrationResult.Matched(inputs)
+        WH-->>ACP: { status: "success", inputs }
+
+        WH->>WF: Signal(inputs)
+        WF->>WF: Create isolated workspace
+        WF->>WF: Clone repository
+        WF->>WF: Install plugins
+        WF->>CC: Invoke plugin (e.g. pr-review)
+        CC-->>WF: Execution result
+    end
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Sequence: Chat Message Handling</h2>
+    <p>How user chat messages are handled via the MAF sub-agent supervisor workflow.</p>
+    <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant USER as User (Chat)
+    participant XIANS as Xians Platform
+    participant CONV as ConversationalWorkflow
+    participant KNO as Knowledge Store
+    participant MAF as MafSubAgent (LLM)
+
+    USER->>XIANS: Send chat message
+    XIANS->>CONV: OnUserChatMessage(context)
+
+    CONV->>KNO: GetAsync("Welcome Message")
+    KNO-->>CONV: knowledge content
+
+    CONV->>MAF: RunAsync(context)
+    MAF->>MAF: LLM reasoning with context
+    MAF-->>CONV: response text
+
+    CONV->>USER: ReplyAsync(response)
+    </div>
+  </div>
+
+</div>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      darkMode: true,
+      background: '#12141f',
+      primaryColor: '#1e293b',
+      primaryTextColor: '#e2e8f0',
+      primaryBorderColor: '#3b82f6',
+      lineColor: '#6c63ff',
+      secondaryColor: '#1a1d27',
+      tertiaryColor: '#14532d',
+      noteBkgColor: '#1e293b',
+      noteTextColor: '#e2e8f0',
+      activationBkgColor: '#1e1b4b',
+      activationBorderColor: '#6c63ff',
+      sequenceNumberColor: '#0f1117',
+    },
+    flowchart: { curve: 'basis' },
+  });
+
+  function switchTab(id) {
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('tab-' + id).classList.add('active');
+    event.target.classList.add('active');
+  }
+</script>
+</body>
+</html>

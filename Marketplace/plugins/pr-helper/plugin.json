@@ -1,0 +1,14 @@
+{
+  "name": "pr-helper",
+  "version": "1.0.0",
+  "description": "Assists with pull request workflows: summarises diffs, posts review comments, and labels PRs based on configurable rules.",
+  "author": {
+    "name": "Xianix Team",
+    "email": "team@xians.ai"
+  },
+  "homepage": "https://github.com/xians/xianix",
+  "license": "MIT",
+  "keywords": ["pull-request", "github", "review", "automation"],
+  "agents": "./agents",
+  "hooks": "./hooks.json"
+}

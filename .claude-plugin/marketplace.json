@@ -1,0 +1,27 @@
+{
+  "name": "xianix-tools",
+  "owner": {
+    "name": "Xianix Team",
+    "email": "team@xians.ai"
+  },
+  "metadata": {
+    "description": "Official plugin marketplace for Xianix the-agent — AI-powered GitHub automation tools.",
+    "version": "1.0.0",
+    "pluginRoot": "./Marketplace/plugins"
+  },
+  "plugins": [
+    {
+      "name": "pr-helper",
+      "source": "./Marketplace/plugins/pr-helper",
+      "description": "Assists with pull request workflows: summarises diffs, posts review comments, and labels PRs based on configurable rules.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Xianix Team",
+        "email": "team@xians.ai"
+      },
+      "category": "code-review",
+      "keywords": ["pull-request", "github", "review", "automation"],
+      "license": "MIT"
+    }
+  ]
+}

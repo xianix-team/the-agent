@@ -7,6 +7,9 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/main/Dotnet.gitignore
 
+# Environment secrets — never commit .env
+.env
+
 # Build results
 [Dd]ebug/
 [Dd]ebugPublic/

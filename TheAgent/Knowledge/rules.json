@@ -1,0 +1,54 @@
+[
+    {
+        "webhook-name": "pull requests",
+        "filter-rules": [
+            {
+                "name": "pr-event",
+                "rule": "action==opened"
+            }
+        ],
+        "input-rules": [
+            {
+                "name": "pr-number",
+                "value": "number"
+            },
+            {
+                "name": "repository-url",
+                "value": "repository.clone_url"
+            },
+            {
+                "name": "repository-name",
+                "value": "repository.full_name"
+            },
+            {
+                "name": "pr-title",
+                "value": "pull_request.title"
+            },
+            {
+                "name": "pr-head-branch",
+                "value": "pull_request.head.ref"
+            },
+            {
+                "name": "platform",
+                "value": "github",
+                "constant": true
+            }
+        ],
+        "claude-code-plugins": [
+            {
+                "name": "github",
+                "description": "GitHub MCP server — provides typed GitHub API tools (read PR diffs, post reviews, manage issues)",
+                "url": "github@claude-plugins-official",
+                "marketplace": "anthropics/claude-plugins-official"
+            },
+
+            {
+                "name": "pr-reviewer",
+                "description": "Comprehensive PR review plugin with specialized agents for code quality, security, test coverage, and performance analysis. Works with GitHub, Azure DevOps, Bitbucket, and any git repository.",
+                "url": "pr-reviewer@xianix-team",
+                "marketplace": "99x/xianix-team"
+            }
+        ],
+        "prompt": "You are reviewing pull request #<pr-number> titled \"<pr-title>\" in the repository <repository-name> (branch: <pr-head-branch>).\n\nRun /code-review to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."
+    }
+]

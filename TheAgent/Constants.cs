@@ -1,0 +1,7 @@
+namespace Xianix;
+
+public static class Constants
+{
+    public const string AgentName = "Xianix AI-DLC Agent";
+    public const string RulesKnowledgeName = "Rules";
+}
