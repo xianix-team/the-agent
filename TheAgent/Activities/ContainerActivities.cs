@@ -121,9 +121,6 @@ public class ContainerActivities
                 Follow     = true,
             };
 
-            var stdoutBuilder = new StringBuilder();
-            var stderrBuilder = new StringBuilder();
-
             using var logStream = await _docker.Containers.GetContainerLogsAsync(
                 containerId, false, logsParams, cts.Token);
 
@@ -212,34 +209,62 @@ public class ContainerActivities
         var env = new List<string>
         {
             $"TENANT_ID={input.TenantId}",
+            $"EXECUTION_ID={input.ExecutionId}",
             $"XIANIX_INPUTS={input.InputsJson}",
             $"CLAUDE_CODE_PLUGINS={input.ClaudeCodePlugins}",
             $"PROMPT={input.Prompt}",
             $"ANTHROPIC_API_KEY={EnvConfig.AnthropicApiKey}",
         };
 
-        // Inject the platform token — parse platform from the inputs JSON.
-        // This is a C# control-plane concern (which secret to mount), not a script concern.
-        string platform = "github";
+        // GITHUB_TOKEN is always injected unconditionally — it is required to clone private
+        // marketplace repos from GitHub regardless of which CM platform the PR originates from.
+        if (!string.IsNullOrEmpty(EnvConfig.GithubToken))
+            env.Add($"GITHUB_TOKEN={EnvConfig.GithubToken}");
+
+        // Inject the platform-specific token for PR access (diff reads, posting comments, etc.)
+        if (!string.IsNullOrEmpty(EnvConfig.AzureDevOpsToken))
+        {
+            env.Add($"AZURE_DEVOPS_TOKEN={EnvConfig.AzureDevOpsToken}");
+        }
+
+        // Inject per-plugin env vars declared in rules.json under each plugin's "envs" array.
+        // Values may be static strings or {{env.VAR_NAME}} references resolved from the host environment.
         try
         {
-            using var doc = System.Text.Json.JsonDocument.Parse(input.InputsJson);
-            if (doc.RootElement.TryGetProperty("platform", out var p))
-                platform = p.GetString() ?? "github";
+            using var pluginsDoc = System.Text.Json.JsonDocument.Parse(input.ClaudeCodePlugins);
+            foreach (var plugin in pluginsDoc.RootElement.EnumerateArray())
+            {
+                if (!plugin.TryGetProperty("envs", out var envsEl)) continue;
+                foreach (var entry in envsEl.EnumerateArray())
+                {
+                    var name     = entry.TryGetProperty("name",     out var n) ? n.GetString() : null;
+                    var value    = entry.TryGetProperty("value",    out var v) ? v.GetString() : null;
+                    var constant = entry.TryGetProperty("constant", out var c) && c.GetBoolean();
+                    if (string.IsNullOrEmpty(name) || value is null) continue;
+                    env.Add($"{name}={ResolveEnvValue(value, constant)}");
+                }
+            }
         }
-        catch { /* malformed JSON — fall back to github */ }
-
-        switch (platform.ToLowerInvariant())
+        catch (System.Text.Json.JsonException ex)
         {
-            case "github" when !string.IsNullOrEmpty(EnvConfig.GithubToken):
-                env.Add($"GITHUB_TOKEN={EnvConfig.GithubToken}");
-                break;
-            case "azuredevops" when !string.IsNullOrEmpty(EnvConfig.AzureDevOpsToken):
-                env.Add($"AZURE_DEVOPS_TOKEN={EnvConfig.AzureDevOpsToken}");
-                break;
+            ActivityExecutionContext.Current.Logger.LogWarning(
+                ex, "Malformed CLAUDE_CODE_PLUGINS JSON — skipping per-plugin env injection.");
         }
 
         return env;
+    }
+
+    /// <summary>
+    /// Resolves an env value from rules.json.
+    /// By default <c>value</c> is treated as <c>env.VAR_NAME</c> — the <c>env.</c> prefix is stripped
+    /// and the named variable is read from the host process environment.
+    /// When <paramref name="constant"/> is true the value is returned as-is (static literal).
+    /// </summary>
+    private static string ResolveEnvValue(string value, bool constant)
+    {
+        if (constant) return value;
+        var varName = value.StartsWith("env.", StringComparison.Ordinal) ? value[4..] : value;
+        return Environment.GetEnvironmentVariable(varName) ?? "";
     }
 
     private async Task TryKillContainerAsync(string containerId)

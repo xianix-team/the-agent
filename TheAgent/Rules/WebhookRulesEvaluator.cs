@@ -4,8 +4,9 @@ using Xians.Lib.Agents.Core;
 namespace Xianix.Rules;
 
 /// <summary>
-/// Evaluates webhook rule sets against a JSON payload: all filter rules must pass (AND);
-/// then input rules are resolved into a dictionary (JSON paths and optional constant literals). Returns null if no matching webhook or any filter fails.
+/// Evaluates webhook rule sets against a JSON payload: at least one <c>match</c> entry must pass (OR);
+/// then inputs are resolved into a dictionary (JSON paths and optional constant literals).
+/// Returns null if no matching webhook, no match entry passes, or the payload is not valid JSON.
 /// </summary>
 public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
 {
@@ -48,16 +49,14 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             return null;
 
         var set = ruleSets.FirstOrDefault(s =>
-            string.Equals(s.WebhookName, webhookName, StringComparison.Ordinal));
+            string.Equals(s.WebhookName, webhookName, StringComparison.OrdinalIgnoreCase));
 
         if (set is null)
             return null;
 
-        foreach (var filter in set.FilterRules)
-        {
-            if (!EvaluateFilter(filter.Rule, root))
-                return null;
-        }
+        // OR logic: pass if the match list is empty (no restrictions) or any entry matches.
+        if (set.Match.Count > 0 && !set.Match.Any(m => EvaluateFilter(m.Rule, root)))
+            return null;
 
         var dict = new Dictionary<string, object?>(StringComparer.Ordinal);
         foreach (var input in set.InputRules)
@@ -90,7 +89,7 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             return prompt;
 
         foreach (var (key, value) in inputs)
-            prompt = prompt.Replace($"<{key}>", value?.ToString() ?? "", StringComparison.OrdinalIgnoreCase);
+            prompt = prompt.Replace($"{{{{{key}}}}}", value?.ToString() ?? "", StringComparison.OrdinalIgnoreCase);
 
         return prompt;
     }

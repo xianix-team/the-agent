@@ -30,7 +30,7 @@ public static class EnvConfig
     public static string AzureDevOpsToken   => Get("AZURE_DEVOPS_TOKEN");
 
     // Docker executor
-    public static string ExecutorImage      => Get("EXECUTOR_IMAGE", "xianix-executor:latest");
+    public static string ExecutorImage      => Get("EXECUTOR_IMAGE", "99xio/xianix-executor:latest");
     public static long   ContainerMemoryBytes =>
         long.TryParse(Get("CONTAINER_MEMORY_MB", "1024"), out var mb) ? mb * 1024 * 1024 : 1024L * 1024 * 1024;
     public static double ContainerCpuCount =>

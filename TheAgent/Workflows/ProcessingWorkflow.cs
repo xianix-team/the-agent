@@ -41,7 +41,13 @@ public class ProcessingWorkflow
         // Serialize the full inputs dict as JSON — the container scripts extract what they need.
         var inputsJson        = JsonSerializer.Serialize(result.Inputs);
         var claudeCodePlugins = JsonSerializer.Serialize(
-            result.Execution.Plugins.Select(p => new { name = p.Name, url = p.Url, marketplace = p.Marketplace }));
+            result.Execution.Plugins.Select(p => new
+            {
+                name        = p.Name,
+                url         = p.Url,
+                marketplace = p.Marketplace,
+                envs        = p.Envs.Select(e => new { name = e.Name, value = e.Value }),
+            }));
         var executionLabel = $"webhook={result.WebhookName}";
 
         // Repository URL is still needed here to compute the per-tenant persistent volume name.
@@ -54,6 +60,7 @@ public class ProcessingWorkflow
         var input = new ContainerExecutionInput
         {
             TenantId          = result.TenantId,
+            ExecutionId       = Workflow.Random.Next().ToString("x8"),
             InputsJson        = inputsJson,
             ClaudeCodePlugins = claudeCodePlugins,
             Prompt            = result.Execution.Prompt,
@@ -93,37 +100,80 @@ public class ProcessingWorkflow
                 CleanupActivityOptions);
         }
 
-        // 5. Log the outcome — extract the clean "result" text from the Python JSON payload.
+        // 5. Parse cost & usage from the executor JSON payload.
+        ParseExecutorOutput(executionResult);
+
+        // 6. Log the outcome.
         if (executionResult.Succeeded)
         {
-            var reviewText = TryExtractResult(executionResult.StdOut);
+            var reviewText = TryExtractField(executionResult.StdOut, "result");
             Workflow.Logger.LogInformation(
-                "Execution '{Label}' completed successfully for tenant={TenantId}.\n{Output}",
-                executionLabel, result.TenantId, reviewText);
+                "Execution '{Label}' completed for tenant={TenantId}. " +
+                "Cost=${CostUsd:F4}, tokens(in={InputTokens}, out={OutputTokens}, " +
+                "cacheRead={CacheRead}, cacheCreate={CacheCreate}), session={SessionId}.\n{Output}",
+                executionLabel, result.TenantId,
+                executionResult.CostUsd ?? 0,
+                executionResult.InputTokens ?? 0,
+                executionResult.OutputTokens ?? 0,
+                executionResult.CacheReadTokens ?? 0,
+                executionResult.CacheCreationTokens ?? 0,
+                executionResult.SessionId ?? "n/a",
+                reviewText);
         }
         else
         {
             Workflow.Logger.LogError(
-                "Execution '{Label}' failed (exit={ExitCode}) for tenant={TenantId}.\nStderr: {Stderr}",
-                executionLabel, executionResult.ExitCode, result.TenantId, executionResult.StdErr);
+                "Execution '{Label}' failed (exit={ExitCode}) for tenant={TenantId}. " +
+                "Cost=${CostUsd:F4}.\nStderr: {Stderr}",
+                executionLabel, executionResult.ExitCode, result.TenantId,
+                executionResult.CostUsd ?? 0, executionResult.StdErr);
         }
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Tries to parse the executor JSON payload and return just the "result" text block.
-    /// Falls back to the raw stdout if parsing fails.
+    /// Parses the executor JSON payload from StdOut and populates cost/usage fields
+    /// on <paramref name="result"/>. Silently skips if the JSON is missing or malformed.
     /// </summary>
-    private static string TryExtractResult(string stdout)
+    private static void ParseExecutorOutput(ContainerExecutionResult result)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(result.StdOut);
+            var root = doc.RootElement;
+
+            result.CostUsd             = GetDouble(root, "cost_usd");
+            result.InputTokens         = GetLong(root, "input_tokens");
+            result.OutputTokens        = GetLong(root, "output_tokens");
+            result.CacheReadTokens     = GetLong(root, "cache_read_tokens");
+            result.CacheCreationTokens = GetLong(root, "cache_creation_tokens");
+            result.SessionId           = GetString(root, "session_id");
+        }
+        catch (JsonException) { }
+    }
+
+    private static string? TryExtractField(string stdout, string field)
     {
         try
         {
             using var doc = JsonDocument.Parse(stdout);
-            if (doc.RootElement.TryGetProperty("result", out var resultProp))
-                return resultProp.GetString() ?? stdout;
+            if (doc.RootElement.TryGetProperty(field, out var prop))
+                return prop.GetString() ?? stdout;
         }
         catch (JsonException) { }
         return stdout;
     }
+
+    private static double? GetDouble(JsonElement root, string prop)
+        => root.TryGetProperty(prop, out var el) && el.ValueKind == JsonValueKind.Number
+            ? el.GetDouble() : null;
+
+    private static long? GetLong(JsonElement root, string prop)
+        => root.TryGetProperty(prop, out var el) && el.ValueKind == JsonValueKind.Number
+            ? el.GetInt64() : null;
+
+    private static string? GetString(JsonElement root, string prop)
+        => root.TryGetProperty(prop, out var el) && el.ValueKind == JsonValueKind.String
+            ? el.GetString() : null;
 }

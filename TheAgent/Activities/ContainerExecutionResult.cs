@@ -12,4 +12,12 @@ public sealed class ContainerExecutionResult
     public required string StdOut          { get; init; }   // structured JSON from execute_plugin.py
     public required string StdErr          { get; init; }   // progress / diagnostic logs
     public bool Succeeded => ExitCode == 0;
+
+    // ── Cost & token usage (parsed from the executor JSON payload) ────────
+    public double? CostUsd              { get; set; }
+    public long?   InputTokens          { get; set; }
+    public long?   OutputTokens         { get; set; }
+    public long?   CacheReadTokens      { get; set; }
+    public long?   CacheCreationTokens  { get; set; }
+    public string? SessionId            { get; set; }
 }

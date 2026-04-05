@@ -7,10 +7,10 @@ public sealed class WebhookRuleSet
     [JsonPropertyName("webhook-name")]
     public string WebhookName { get; init; } = "";
 
-    [JsonPropertyName("filter-rules")]
-    public List<FilterRuleEntry> FilterRules { get; init; } = [];
+    [JsonPropertyName("match")]
+    public List<MatchEntry> Match { get; init; } = [];
 
-    [JsonPropertyName("input-rules")]
+    [JsonPropertyName("inputs")]
     public List<InputRuleEntry> InputRules { get; init; } = [];
 
     /// <summary>
@@ -58,9 +58,38 @@ public sealed class PluginEntry
     /// </summary>
     [JsonPropertyName("marketplace")]
     public string Marketplace { get; init; } = "";
+
+    /// <summary>
+    /// Optional environment variables to inject into the executor container before running the plugin.
+    /// Each entry's <c>value</c> may be a static string or a <c>{{env.VAR_NAME}}</c> reference that
+    /// is resolved from the host process environment at container-start time.
+    /// </summary>
+    [JsonPropertyName("envs")]
+    public List<EnvEntry> Envs { get; init; } = [];
 }
 
-public sealed class FilterRuleEntry
+/// <summary>
+/// A named environment variable to inject into the executor container.
+/// By default <c>value</c> is an <c>env.VAR_NAME</c> reference resolved from the host process environment.
+/// Set <c>"constant": true</c> to use <c>value</c> as a static literal string instead.
+/// </summary>
+public sealed class EnvEntry
+{
+    [JsonPropertyName("name")]
+    public string Name { get; init; } = "";
+
+    /// <summary>
+    /// <c>env.VAR_NAME</c> to read from the host environment, or a literal string when <see cref="Constant"/> is true.
+    /// </summary>
+    [JsonPropertyName("value")]
+    public string Value { get; init; } = "";
+
+    /// <summary>When true, <see cref="Value"/> is used as-is (not resolved as an env var reference).</summary>
+    [JsonPropertyName("constant")]
+    public bool Constant { get; init; }
+}
+
+public sealed class MatchEntry
 {
     public string Name { get; init; } = "";
     public string Rule { get; init; } = "";

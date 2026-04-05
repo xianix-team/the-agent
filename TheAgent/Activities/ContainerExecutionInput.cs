@@ -8,6 +8,11 @@ public sealed record ContainerExecutionInput
     public required string TenantId { get; init; }
 
     /// <summary>
+    /// Unique identifier for this execution, used to isolate the git worktree inside the container.
+    /// </summary>
+    public required string ExecutionId { get; init; }
+
+    /// <summary>
     /// JSON object of all user-defined inputs extracted from the webhook payload
     /// (e.g. repository-url, platform, pr-number, pr-title …).
     /// Passed to the container as <c>XIANIX_INPUTS</c> — scripts read what they need via jq.

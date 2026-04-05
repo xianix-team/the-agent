@@ -608,8 +608,8 @@ The current `rules.json` already contains a `plugins` array per rule set, but th
 ```json
 {
     "webhook-name": "pull requests",
-    "filter-rules": [...],
-    "input-rules": [...],
+    "match": [...],
+    "inputs": [...],
     "plugins": [
         {
             "name": "pr-review",
