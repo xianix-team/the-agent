@@ -45,8 +45,8 @@
             {
                 "name": "pr-reviewer",
                 "description": "Comprehensive PR review plugin with specialized agents for code quality, security, test coverage, and performance analysis. Works with GitHub, Azure DevOps, Bitbucket, and any git repository.",
-                "url": "pr-reviewer@xianix-team",
-                "marketplace": "99x/xianix-team"
+                "url": "pr-reviewer@xianix-plugins-official",
+                "marketplace": "xianix-team/xianix-plugins-official"
             }
         ],
         "prompt": "You are reviewing pull request #<pr-number> titled \"<pr-title>\" in the repository <repository-name> (branch: <pr-head-branch>).\n\nRun /code-review to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."
