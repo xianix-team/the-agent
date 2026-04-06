@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - 'v*'
-    paths:
-      - 'Executor/**'
   workflow_dispatch:
 
 env:

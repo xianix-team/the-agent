@@ -10,14 +10,52 @@ cp .env.example .env
 
 Key variables to set: `XIANS_SERVER_URL`, `XIANS_API_KEY`, `LLM_API_KEY`, and at least one platform token (`GITHUB_TOKEN` or `AZURE_DEVOPS_TOKEN`). See `.env.example` for the full list.
 
-## Build the Executor image
+## Docker Images
 
-The agent spawns Docker containers to execute plugins in isolated environments. The executor image must be built before running the agent. See [Executor/README.md](Executor/README.md) for full details.
+The project produces two Docker images, both published to Docker Hub under the `99xio` org.
+
+### Executor
+
+The agent spawns executor containers to run plugins in isolated environments. See [Executor/README.md](Executor/README.md) for full details.
 
 ```bash
 cd Executor/
-docker build -t xianix-executor:latest .
+docker build -t 99xio/xianix-executor:latest .
 ```
+
+### TheAgent
+
+The agent itself is also containerised. It requires access to the Docker socket to manage executor containers.
+
+```bash
+cd TheAgent/
+docker build -t 99xio/xianix-agent:latest .
+```
+
+Run locally with Docker socket mounted:
+
+```bash
+docker run --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  --env-file .env \
+  99xio/xianix-agent:latest
+```
+
+### Publishing
+
+Both images are published to Docker Hub automatically when you push a version tag:
+
+```bash
+VERSION=v1.0.0
+git tag $VERSION
+git push origin $VERSION
+```
+
+This triggers [publish-executor.yml](.github/workflows/publish-executor.yml) and [publish-theagent.yml](.github/workflows/publish-theagent.yml) in parallel. Tags are derived from the version (e.g. `v1.2.3` produces `1.2.3`, `1.2`, `1`, and `latest`). Pre-release tags (e.g. `v1.0.0-rc1`) skip the `latest` tag. Both workflows can also be triggered manually via `workflow_dispatch`.
+
+### CI Secrets
+
+Both workflows require a `DOCKERHUB_TOKEN` secret in the repository settings (**Settings > Secrets and variables > Actions**).
 
 ## Run
 
