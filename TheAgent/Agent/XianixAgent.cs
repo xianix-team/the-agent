@@ -17,7 +17,7 @@ public class XianixAgent(IEventOrchestrator orchestrator, ILogger<XianixAgent> l
         var xiansAgent = await CreateAndRegisterAgentAsync();
 
         ConfigureCustomWorkflows(xiansAgent);
-        ConfigureConversationalWorkflow(xiansAgent);
+        // ConfigureConversationalWorkflow(xiansAgent);
         ConfigureWebhookWorkflow(xiansAgent, cancellationToken);
 
         logger.LogInformation("All workflows configured. Starting agent.");
@@ -35,18 +35,18 @@ public class XianixAgent(IEventOrchestrator orchestrator, ILogger<XianixAgent> l
             .AddActivity<ContainerActivities>();
     }
 
-    private static void ConfigureConversationalWorkflow(XiansAgent xiansAgent)
-    {
-        var mafAgent = new MafSubAgent(EnvConfig.AnthropicApiKey);
-        var conversationalWorkflow = xiansAgent.Workflows.DefineSupervisor();
+    // private static void ConfigureConversationalWorkflow(XiansAgent xiansAgent)
+    // {
+    //     var mafAgent = new MafSubAgent(EnvConfig.AnthropicApiKey);
+    //     var conversationalWorkflow = xiansAgent.Workflows.DefineSupervisor();
 
-        conversationalWorkflow.OnUserChatMessage(async (context) =>
-        {
-            context.SkipResponse = true;
-            var response = await mafAgent.RunAsync(context);
-            await context.ReplyAsync(response);
-        });
-    }
+    //     conversationalWorkflow.OnUserChatMessage(async (context) =>
+    //     {
+    //         context.SkipResponse = true;
+    //         var response = await mafAgent.RunAsync(context);
+    //         await context.ReplyAsync(response);
+    //     });
+    // }
 
     private void ConfigureWebhookWorkflow(XiansAgent xiansAgent, CancellationToken cancellationToken)
     {
@@ -97,7 +97,7 @@ public class XianixAgent(IEventOrchestrator orchestrator, ILogger<XianixAgent> l
                 "I want to review a Pull Request",
                 "Let's discuss the codebase",
             ],
-            IsTemplate = false
+            IsTemplate = true
         });
 
         await xiansAgent.Knowledge.UploadEmbeddedResourceAsync(
