@@ -288,7 +288,11 @@ az vm run-command invoke \
 After populating the Key Vault secrets, start the agent for the first time:
 
 ```bash
-vmrun "sudo systemctl start xianix-agent"
+az vm run-command invoke \
+  --resource-group xianix-agent-rg \
+  --name xianix-agent-vm \
+  --command-id RunShellScript \
+  --scripts "sudo systemctl start xianix-agent"
 ```
 
 ### Check Status and Logs
@@ -398,13 +402,21 @@ done
 ### Restart the Agent
 
 ```bash
-vmrun "sudo systemctl restart xianix-agent"
+az vm run-command invoke \
+  --resource-group xianix-agent-rg \
+  --name xianix-agent-vm \
+  --command-id RunShellScript \
+  --scripts "sudo systemctl restart xianix-agent"
 ```
 
 ### Stop the Agent
 
 ```bash
-vmrun "sudo systemctl stop xianix-agent"
+az vm run-command invoke \
+  --resource-group xianix-agent-rg \
+  --name xianix-agent-vm \
+  --command-id RunShellScript \
+  --scripts "sudo systemctl stop xianix-agent"
 ```
 
 ### Rotate a Secret
@@ -417,13 +429,21 @@ az keyvault secret set \
   --name ANTHROPIC-API-KEY \
   --value "<new-key>"
 
-vmrun "sudo systemctl restart xianix-agent"
+az vm run-command invoke \
+  --resource-group xianix-agent-rg \
+  --name xianix-agent-vm \
+  --command-id RunShellScript \
+  --scripts "sudo systemctl restart xianix-agent"
 ```
 
 ### Update the Agent Image
 
 ```bash
-vmrun "docker pull 99xio/xianix-agent:latest && sudo systemctl restart xianix-agent"
+az vm run-command invoke \
+  --resource-group xianix-agent-rg \
+  --name xianix-agent-vm \
+  --command-id RunShellScript \
+  --scripts "docker pull 99xio/xianix-agent:latest && sudo systemctl restart xianix-agent"
 ```
 
 ### Update the Executor Image
@@ -431,7 +451,11 @@ vmrun "docker pull 99xio/xianix-agent:latest && sudo systemctl restart xianix-ag
 The executor is pulled on demand, but you can pre-pull a new version ahead of time:
 
 ```bash
-vmrun "docker pull 99xio/xianix-executor:latest"
+az vm run-command invoke \
+  --resource-group xianix-agent-rg \
+  --name xianix-agent-vm \
+  --command-id RunShellScript \
+  --scripts "docker pull 99xio/xianix-executor:latest"
 ```
 
 ### Start / Stop / Restart the VM Itself
