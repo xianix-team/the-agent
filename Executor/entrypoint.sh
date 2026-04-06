@@ -39,12 +39,12 @@ if [ -d "${REPO_DIR}" ] && { [ -d "${REPO_DIR}/.git" ] || [ -f "${REPO_DIR}/HEAD
     log "--- Fetching into existing repo ---"
     if ! git -C "${REPO_DIR}" fetch --all --prune >&2 2>&1; then
         log "--- Fetch failed, re-cloning ---"
-        rm -rf "${REPO_DIR}"
+        find "${REPO_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
         git clone --bare "${REPOSITORY_URL}" "${REPO_DIR}" >&2 2>&1
     fi
 else
     log "--- Cloning repository (bare, first run for this tenant+repo) ---"
-    rm -rf "${REPO_DIR}"
+    find "${REPO_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
     git clone --bare "${REPOSITORY_URL}" "${REPO_DIR}" >&2 2>&1
 fi
 

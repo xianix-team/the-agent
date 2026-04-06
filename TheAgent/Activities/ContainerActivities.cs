@@ -12,13 +12,13 @@ namespace Xianix.Activities;
 /// Temporal activities that manage Docker container lifecycles for tenant-isolated plugin execution.
 /// Each method is a discrete Temporal activity — heavy I/O lives here, never in workflow code.
 ///
-/// Note: the Xians platform instantiates activities via Activator.CreateInstance() (no-arg),
-/// so this class must have a parameterless constructor. The DockerClient is created from the
-/// local daemon URI on construction.
+/// The Xians platform instantiates activities via Activator.CreateInstance() (no-arg),
+/// so this class must have a parameterless constructor.
 /// </summary>
-public class ContainerActivities
+public class ContainerActivities : IDisposable
 {
     private readonly IDockerClient _docker;
+    private bool _disposed;
 
     public ContainerActivities()
     {
@@ -27,26 +27,26 @@ public class ContainerActivities
 
     /// <summary>
     /// Creates a named Docker volume for the tenant+repo pair if it does not already exist.
-    /// Volume name is deterministic: xianix-{tenantId}-{sha256(repoUrl)[..12]}.
+    /// Volume name is deterministic: <c>xianix-{tenantId}-{sha256(repoUrl)[..12]}</c>.
     /// </summary>
     [Activity]
     public async Task<string> EnsureWorkspaceVolumeAsync(string tenantId, string repositoryUrl)
     {
         var volumeName = BuildVolumeName(tenantId, repositoryUrl);
-        ActivityExecutionContext.Current.Logger.LogInformation(
-            "Ensuring workspace volume '{VolumeName}' for tenant={TenantId}.", volumeName, tenantId);
+        var logger = ActivityExecutionContext.Current.Logger;
+        logger.LogInformation("Ensuring workspace volume '{VolumeName}' for tenant={TenantId}.", volumeName, tenantId);
 
         var volumes = await _docker.Volumes.ListAsync();
-        var existing = volumes.Volumes?.Any(v => v.Name == volumeName) ?? false;
+        var exists = volumes.Volumes?.Any(v => v.Name == volumeName) ?? false;
 
-        if (!existing)
+        if (!exists)
         {
             await _docker.Volumes.CreateAsync(new VolumesCreateParameters { Name = volumeName });
-            ActivityExecutionContext.Current.Logger.LogInformation("Created volume '{VolumeName}'.", volumeName);
+            logger.LogInformation("Created volume '{VolumeName}'.", volumeName);
         }
         else
         {
-            ActivityExecutionContext.Current.Logger.LogDebug("Volume '{VolumeName}' already exists.", volumeName);
+            logger.LogDebug("Volume '{VolumeName}' already exists.", volumeName);
         }
 
         return volumeName;
@@ -60,7 +60,8 @@ public class ContainerActivities
     public async Task<string> StartContainerAsync(ContainerExecutionInput input)
     {
         var image = EnvConfig.ExecutorImage;
-        ActivityExecutionContext.Current.Logger.LogInformation(
+        var logger = ActivityExecutionContext.Current.Logger;
+        logger.LogInformation(
             "Starting container for tenant={TenantId}, plugins={PluginCount}, image={Image}.",
             input.TenantId, input.ClaudeCodePlugins, image);
 
@@ -82,7 +83,7 @@ public class ContainerActivities
                 NanoCPUs    = (long)(EnvConfig.ContainerCpuCount * 1_000_000_000),
                 PidsLimit   = 256,
                 SecurityOpt = ["no-new-privileges"],
-                AutoRemove  = false,  // we remove explicitly so we can read logs first
+                AutoRemove  = false,
             },
         };
 
@@ -90,15 +91,14 @@ public class ContainerActivities
         var containerId = response.ID;
 
         await _docker.Containers.StartContainerAsync(containerId, new ContainerStartParameters());
-        ActivityExecutionContext.Current.Logger.LogInformation(
-            "Container '{ContainerId}' started.", containerId[..12]);
+        logger.LogInformation("Container '{ContainerId}' started.", ShortId(containerId));
 
         return containerId;
     }
 
     /// <summary>
     /// Waits for the container to exit, collects stdout (JSON result) and stderr (progress logs),
-    /// and enforces a timeout. Returns a <see cref="ContainerExecutionResult"/>.
+    /// and enforces a timeout.
     /// </summary>
     [Activity]
     public async Task<ContainerExecutionResult> WaitAndCollectOutputAsync(
@@ -107,8 +107,9 @@ public class ContainerActivities
         string executionLabel,
         int timeoutSeconds = 600)
     {
-        ActivityExecutionContext.Current.Logger.LogInformation(
-            "Waiting for container '{ContainerId}' (timeout={Timeout}s).", containerId[..12], timeoutSeconds);
+        var logger = ActivityExecutionContext.Current.Logger;
+        var shortId = ShortId(containerId);
+        logger.LogInformation("Waiting for container '{ContainerId}' (timeout={Timeout}s).", shortId, timeoutSeconds);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
 
@@ -125,22 +126,16 @@ public class ContainerActivities
                 containerId, false, logsParams, cts.Token);
 
             var (stdout, stderr) = await logStream.ReadOutputToEndAsync(cts.Token);
-
             var waitResponse = await _docker.Containers.WaitContainerAsync(containerId, cts.Token);
-
-            ActivityExecutionContext.Current.Logger.LogInformation(
-                "Container '{ContainerId}' exited with code {ExitCode}.", containerId[..12], waitResponse.StatusCode);
-
-            if (!string.IsNullOrWhiteSpace(stderr))
-                ActivityExecutionContext.Current.Logger.LogDebug(
-                    "Container stderr:\n{Stderr}", stderr);
-
             var exitCode = (int)waitResponse.StatusCode;
 
-            // Log stdout on non-zero exit so Python errors are visible without inspecting raw payloads.
+            logger.LogInformation("Container '{ContainerId}' exited with code {ExitCode}.", shortId, exitCode);
+
+            if (!string.IsNullOrWhiteSpace(stderr))
+                logger.LogDebug("Container stderr:\n{Stderr}", stderr);
+
             if (exitCode != 0 && !string.IsNullOrWhiteSpace(stdout))
-                ActivityExecutionContext.Current.Logger.LogError(
-                    "Container '{ContainerId}' stdout on failure:\n{Stdout}", containerId[..12], stdout);
+                logger.LogError("Container '{ContainerId}' stdout on failure:\n{Stdout}", shortId, stdout);
 
             return new ContainerExecutionResult
             {
@@ -153,9 +148,7 @@ public class ContainerActivities
         }
         catch (OperationCanceledException)
         {
-            ActivityExecutionContext.Current.Logger.LogWarning(
-                "Container '{ContainerId}' timed out after {Timeout}s. Killing.", containerId[..12], timeoutSeconds);
-
+            logger.LogWarning("Container '{ContainerId}' timed out after {Timeout}s. Killing.", shortId, timeoutSeconds);
             await TryKillContainerAsync(containerId);
 
             return new ContainerExecutionResult
@@ -170,13 +163,13 @@ public class ContainerActivities
     }
 
     /// <summary>
-    /// Removes the container. The workspace volume is intentionally kept — it persists for reuse.
+    /// Removes the container. The workspace volume is intentionally kept for reuse.
     /// </summary>
     [Activity]
     public async Task CleanupContainerAsync(string containerId)
     {
         ActivityExecutionContext.Current.Logger.LogInformation(
-            "Cleaning up container '{ContainerId}'.", containerId[..12]);
+            "Cleaning up container '{ContainerId}'.", ShortId(containerId));
         try
         {
             await _docker.Containers.RemoveContainerAsync(
@@ -185,21 +178,36 @@ public class ContainerActivities
         }
         catch (DockerContainerNotFoundException)
         {
-            // Already gone — idempotent cleanup is fine.
+            // Already removed — idempotent.
         }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _docker.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
+    private static string ShortId(string containerId) =>
+        containerId.Length >= 12 ? containerId[..12] : containerId;
+
     private static string BuildVolumeName(string tenantId, string repositoryUrl)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryUrl);
+
         var repoHash = Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(repositoryUrl)))[..12].ToLowerInvariant();
 
-        // Sanitise tenantId: keep only alphanumeric + hyphens, truncate to 40 chars
-        var safeTenant = new string(tenantId
+        var sanitised = tenantId
             .Select(c => char.IsLetterOrDigit(c) ? c : '-')
-            .ToArray())[..Math.Min(tenantId.Length, 40)];
+            .Take(40)
+            .ToArray();
+        var safeTenant = new string(sanitised);
 
         return $"xianix-{safeTenant}-{repoHash}";
     }
@@ -216,22 +224,26 @@ public class ContainerActivities
             $"ANTHROPIC_API_KEY={EnvConfig.AnthropicApiKey}",
         };
 
-        // GITHUB_TOKEN is always injected unconditionally — it is required to clone private
-        // marketplace repos from GitHub regardless of which CM platform the PR originates from.
         if (!string.IsNullOrEmpty(EnvConfig.GithubToken))
             env.Add($"GITHUB_TOKEN={EnvConfig.GithubToken}");
 
-        // Inject the platform-specific token for PR access (diff reads, posting comments, etc.)
         if (!string.IsNullOrEmpty(EnvConfig.AzureDevOpsToken))
-        {
             env.Add($"AZURE_DEVOPS_TOKEN={EnvConfig.AzureDevOpsToken}");
-        }
 
-        // Inject per-plugin env vars declared in rules.json under each plugin's "envs" array.
-        // Values may be static strings or {{env.VAR_NAME}} references resolved from the host environment.
+        InjectPluginEnvVars(input.ClaudeCodePlugins, env);
+
+        return env;
+    }
+
+    /// <summary>
+    /// Injects per-plugin env vars declared in rules.json.
+    /// Values may be static strings or <c>env.VAR_NAME</c> references resolved from the host.
+    /// </summary>
+    private static void InjectPluginEnvVars(string claudeCodePluginsJson, List<string> env)
+    {
         try
         {
-            using var pluginsDoc = System.Text.Json.JsonDocument.Parse(input.ClaudeCodePlugins);
+            using var pluginsDoc = System.Text.Json.JsonDocument.Parse(claudeCodePluginsJson);
             foreach (var plugin in pluginsDoc.RootElement.EnumerateArray())
             {
                 if (!plugin.TryGetProperty("envs", out var envsEl)) continue;
@@ -250,15 +262,13 @@ public class ContainerActivities
             ActivityExecutionContext.Current.Logger.LogWarning(
                 ex, "Malformed CLAUDE_CODE_PLUGINS JSON — skipping per-plugin env injection.");
         }
-
-        return env;
     }
 
     /// <summary>
     /// Resolves an env value from rules.json.
-    /// By default <c>value</c> is treated as <c>env.VAR_NAME</c> — the <c>env.</c> prefix is stripped
+    /// By default <c>value</c> is treated as <c>env.VAR_NAME</c> — the prefix is stripped
     /// and the named variable is read from the host process environment.
-    /// When <paramref name="constant"/> is true the value is returned as-is (static literal).
+    /// When <paramref name="constant"/> is true the value is returned as-is.
     /// </summary>
     private static string ResolveEnvValue(string value, bool constant)
     {
@@ -276,7 +286,7 @@ public class ContainerActivities
         catch (Exception ex)
         {
             ActivityExecutionContext.Current.Logger.LogWarning(
-                ex, "Failed to kill container '{ContainerId}'.", containerId[..12]);
+                ex, "Failed to kill container '{ContainerId}'.", ShortId(containerId));
         }
     }
 }

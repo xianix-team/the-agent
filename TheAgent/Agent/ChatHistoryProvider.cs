@@ -16,52 +16,29 @@ internal sealed class ChatHistoryProvider(UserMessageContext userContext) : AICo
         InvokingContext context,
         CancellationToken cancellationToken = default)
     {
-        AIContext inputContext = context.AIContext;
-#pragma warning disable MAAI001
+        var input = context.AIContext;
+
+#pragma warning disable MAAI001 // InvokingContext ctor is internal-preview
         var filteredInput = new InvokingContext(context.Agent, context.Session, new AIContext
         {
-            Instructions = inputContext.Instructions,
-            Messages = inputContext.Messages is not null ? ProvideInputMessageFilter(inputContext.Messages) : null,
-            Tools = inputContext.Tools
+            Instructions = input.Instructions,
+            Messages = input.Messages is not null ? ProvideInputMessageFilter(input.Messages) : null,
+            Tools = input.Tools
         });
 #pragma warning restore MAAI001
 
-        AIContext additional = await ProvideAIContextAsync(filteredInput, cancellationToken).ConfigureAwait(false);
+        var additional = await ProvideAIContextAsync(filteredInput, cancellationToken).ConfigureAwait(false);
 
-        string? instructions = inputContext.Instructions;
-        string? additionalInstructions = additional.Instructions;
-        string? mergedInstructions = (instructions, additionalInstructions) switch
-        {
-            (null, _) => additionalInstructions,
-            (_, null) => instructions,
-            _ => instructions + "\n" + additionalInstructions
-        };
-
-        IEnumerable<ChatMessage>? historyStamped = additional.Messages?.Select(m =>
-            m.WithAgentRequestMessageSource(AgentRequestMessageSourceType.AIContextProvider, typeof(ChatHistoryProvider).FullName));
-
-        IEnumerable<ChatMessage>? inputMessages = inputContext.Messages;
-        IEnumerable<ChatMessage>? mergedMessages = (historyStamped, inputMessages) switch
-        {
-            (null, _) => inputMessages,
-            (_, null) => historyStamped,
-            _ => historyStamped!.Concat(inputMessages!)
-        };
-
-        IEnumerable<AITool>? tools = inputContext.Tools;
-        IEnumerable<AITool>? additionalTools = additional.Tools;
-        IEnumerable<AITool>? mergedTools = (tools, additionalTools) switch
-        {
-            (null, _) => additionalTools,
-            (_, null) => tools,
-            _ => tools!.Concat(additionalTools!)
-        };
+        var historyStamped = additional.Messages?.Select(m =>
+            m.WithAgentRequestMessageSource(
+                AgentRequestMessageSourceType.AIContextProvider,
+                typeof(ChatHistoryProvider).FullName));
 
         return new AIContext
         {
-            Instructions = mergedInstructions,
-            Messages = mergedMessages,
-            Tools = mergedTools
+            Instructions = MergeStrings(input.Instructions, additional.Instructions),
+            Messages     = Merge(historyStamped, input.Messages),
+            Tools        = Merge(input.Tools, additional.Tools),
         };
     }
 
@@ -75,7 +52,9 @@ internal sealed class ChatHistoryProvider(UserMessageContext userContext) : AICo
             .Where(msg => !string.IsNullOrEmpty(msg.Text))
             .OrderBy(msg => msg.CreatedAt)
             .Select(msg => new ChatMessage(
-                msg.Direction.ToLowerInvariant() == "outgoing" ? ChatRole.Assistant : ChatRole.User,
+                string.Equals(msg.Direction, "outgoing", StringComparison.OrdinalIgnoreCase)
+                    ? ChatRole.Assistant
+                    : ChatRole.User,
                 msg.Text!))
             .ToList();
 
@@ -84,4 +63,18 @@ internal sealed class ChatHistoryProvider(UserMessageContext userContext) : AICo
 
     protected override ValueTask StoreAIContextAsync(InvokedContext context, CancellationToken cancellationToken = default) =>
         default;
+
+    private static string? MergeStrings(string? a, string? b) => (a, b) switch
+    {
+        (null, _) => b,
+        (_, null) => a,
+        _ => a + "\n" + b,
+    };
+
+    private static IEnumerable<T>? Merge<T>(IEnumerable<T>? first, IEnumerable<T>? second) => (first, second) switch
+    {
+        (null, _) => second,
+        (_, null) => first,
+        _ => first!.Concat(second!),
+    };
 }

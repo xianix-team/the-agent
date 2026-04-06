@@ -3,29 +3,20 @@ using Xians.Lib.Agents.Messaging;
 
 namespace Xianix.Agent;
 
-public class MafSubAgentTools
+public class MafSubAgentTools(UserMessageContext context)
 {
-    private readonly UserMessageContext _context;
-
-    public MafSubAgentTools(UserMessageContext context)
-    {
-        _context = context;
-    }
-
     [Description("Get the current date and time.")]
     public async Task<string> GetCurrentDateTime()
     {
-        // User message related functionality
-        await _context.ReplyAsync($"The current date and time is: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        var now = DateTime.Now;
-        return $"The current date and time is: {now:yyyy-MM-dd HH:mm:ss}";
+        var now = DateTime.UtcNow;
+        var formatted = $"The current date and time is: {now:yyyy-MM-dd HH:mm:ss} UTC";
+        await context.ReplyAsync(formatted);
+        return formatted;
     }
 
     [Description("Get the order data.")]
-    public async Task<string> GetOrderData(int orderNumber)
+    public string GetOrderData(int orderNumber)
     {
-        await Task.CompletedTask;
-        // Returning elaborated dummy info for demonstration
         return $"Order #{orderNumber}:\n" +
                $"- Customer: John Doe\n" +
                $"- Item: Widget Pro X100\n" +

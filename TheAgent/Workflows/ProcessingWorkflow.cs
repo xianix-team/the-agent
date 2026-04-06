@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Temporalio.Exceptions;
 using Temporalio.Workflows;
 using Xianix.Activities;
 using Xianix.Orchestrator;
@@ -9,7 +10,7 @@ namespace Xianix.Workflows;
 [Workflow(Constants.AgentName + ":Processing Workflow")]
 public class ProcessingWorkflow
 {
-    private static ActivityOptions ContainerActivityOptions => new()
+    private static readonly ActivityOptions ContainerActivityOptions = new()
     {
         StartToCloseTimeout = TimeSpan.FromMinutes(20),
         RetryPolicy = new()
@@ -20,8 +21,13 @@ public class ProcessingWorkflow
         },
     };
 
-    // Cleanup gets its own options — no retries, shorter timeout, must always run.
-    private static ActivityOptions CleanupActivityOptions => new()
+    private static readonly ActivityOptions WaitActivityOptions = new()
+    {
+        StartToCloseTimeout = TimeSpan.FromMinutes(35),
+        RetryPolicy = new() { MaximumAttempts = 1 },
+    };
+
+    private static readonly ActivityOptions CleanupActivityOptions = new()
     {
         StartToCloseTimeout = TimeSpan.FromMinutes(2),
         RetryPolicy = new() { MaximumAttempts = 1 },
@@ -30,34 +36,63 @@ public class ProcessingWorkflow
     [WorkflowRun]
     public async Task WorkflowRun(OrchestrationResult result)
     {
-        if (result.Execution is null)
+        try
         {
-            Workflow.Logger.LogWarning(
-                "ProcessingWorkflow: no execution spec configured for webhook '{WebhookName}'. Nothing to execute.",
-                result.WebhookName);
-            return;
-        }
+            if (result.Execution is null)
+            {
+                Workflow.Logger.LogWarning(
+                    "No execution spec for webhook '{WebhookName}'. Skipping.",
+                    result.WebhookName);
+                return;
+            }
 
-        // Serialize the full inputs dict as JSON — the container scripts extract what they need.
-        var inputsJson        = JsonSerializer.Serialize(result.Inputs);
+            var executionLabel = $"webhook={result.WebhookName}";
+            var repositoryUrl = OrchestrationResult.GetInputString(result.Inputs, "repository-url") ?? string.Empty;
+
+            Workflow.Logger.LogInformation(
+                "ProcessingWorkflow starting: tenant={TenantId}, repo={Repo}, plugins={PluginCount}.",
+                result.TenantId, repositoryUrl, result.Execution.Plugins.Count);
+
+            var input = BuildContainerInput(result);
+
+            var volumeName = await Workflow.ExecuteActivityAsync(
+                (ContainerActivities a) => a.EnsureWorkspaceVolumeAsync(result.TenantId, repositoryUrl),
+                ContainerActivityOptions);
+
+            input = input with { VolumeName = volumeName };
+
+            var containerId = await Workflow.ExecuteActivityAsync(
+                (ContainerActivities a) => a.StartContainerAsync(input),
+                ContainerActivityOptions);
+
+            var executionResult = await WaitAndCleanupAsync(containerId, result.TenantId, executionLabel);
+
+            ParseExecutorOutput(executionResult);
+            LogOutcome(executionResult, executionLabel, result.TenantId);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Workflow.Logger.LogError(ex, "ProcessingWorkflow failed fatally for tenant={TenantId}.", result.TenantId);
+            throw new ApplicationFailureException(
+                $"Processing workflow failed: {ex.Message}", ex, nonRetryable: true);
+        }
+    }
+
+    // ── Pipeline steps ───────────────────────────────────────────────────────
+
+    private static ContainerExecutionInput BuildContainerInput(OrchestrationResult result)
+    {
+        var inputsJson = JsonSerializer.Serialize(result.Inputs);
         var claudeCodePlugins = JsonSerializer.Serialize(
-            result.Execution.Plugins.Select(p => new
+            result.Execution!.Plugins.Select(p => new
             {
                 name        = p.Name,
                 url         = p.Url,
                 marketplace = p.Marketplace,
                 envs        = p.Envs.Select(e => new { name = e.Name, value = e.Value }),
             }));
-        var executionLabel = $"webhook={result.WebhookName}";
 
-        // Repository URL is still needed here to compute the per-tenant persistent volume name.
-        var repositoryUrl = OrchestrationResult.GetInputString(result.Inputs, "repository-url") ?? string.Empty;
-
-        Workflow.Logger.LogInformation(
-            "ProcessingWorkflow starting: tenant={TenantId}, repo={Repo}, plugins={PluginCount}.",
-            result.TenantId, repositoryUrl, result.Execution.Plugins.Count);
-
-        var input = new ContainerExecutionInput
+        return new ContainerExecutionInput
         {
             TenantId          = result.TenantId,
             ExecutionId       = Workflow.Random.Next().ToString("x8"),
@@ -65,45 +100,29 @@ public class ProcessingWorkflow
             ClaudeCodePlugins = claudeCodePlugins,
             Prompt            = result.Execution.Prompt,
         };
+    }
 
-        // 1. Ensure the persistent workspace volume exists for this tenant+repo pair.
-        var volumeName = await Workflow.ExecuteActivityAsync(
-            (ContainerActivities a) => a.EnsureWorkspaceVolumeAsync(result.TenantId, repositoryUrl),
-            ContainerActivityOptions);
-
-        input = input with { VolumeName = volumeName };
-
-        // 2. Start the executor container.
-        var containerId = await Workflow.ExecuteActivityAsync(
-            (ContainerActivities a) => a.StartContainerAsync(input),
-            ContainerActivityOptions);
-
-        // 3. Wait for the container to finish and collect output via stdio.
-        //    Cleanup runs in a finally block so it always executes, even on failure.
-        ContainerExecutionResult executionResult;
+    private static async Task<ContainerExecutionResult> WaitAndCleanupAsync(
+        string containerId, string tenantId, string executionLabel)
+    {
         try
         {
-            executionResult = await Workflow.ExecuteActivityAsync(
+            return await Workflow.ExecuteActivityAsync(
                 (ContainerActivities a) => a.WaitAndCollectOutputAsync(
-                    containerId, result.TenantId, executionLabel, 1800),
-                new ActivityOptions
-                {
-                    StartToCloseTimeout = TimeSpan.FromMinutes(35),
-                    RetryPolicy         = new() { MaximumAttempts = 1 },
-                });
+                    containerId, tenantId, executionLabel, 1800),
+                WaitActivityOptions);
         }
         finally
         {
-            // 4. Always remove the container. The volume is kept for the next request.
             await Workflow.ExecuteActivityAsync(
                 (ContainerActivities a) => a.CleanupContainerAsync(containerId),
                 CleanupActivityOptions);
         }
+    }
 
-        // 5. Parse cost & usage from the executor JSON payload.
-        ParseExecutorOutput(executionResult);
-
-        // 6. Log the outcome.
+    private static void LogOutcome(
+        ContainerExecutionResult executionResult, string executionLabel, string tenantId)
+    {
         if (executionResult.Succeeded)
         {
             var reviewText = TryExtractField(executionResult.StdOut, "result");
@@ -111,7 +130,7 @@ public class ProcessingWorkflow
                 "Execution '{Label}' completed for tenant={TenantId}. " +
                 "Cost=${CostUsd:F4}, tokens(in={InputTokens}, out={OutputTokens}, " +
                 "cacheRead={CacheRead}, cacheCreate={CacheCreate}), session={SessionId}.\n{Output}",
-                executionLabel, result.TenantId,
+                executionLabel, tenantId,
                 executionResult.CostUsd ?? 0,
                 executionResult.InputTokens ?? 0,
                 executionResult.OutputTokens ?? 0,
@@ -125,19 +144,18 @@ public class ProcessingWorkflow
             Workflow.Logger.LogError(
                 "Execution '{Label}' failed (exit={ExitCode}) for tenant={TenantId}. " +
                 "Cost=${CostUsd:F4}.\nStderr: {Stderr}",
-                executionLabel, executionResult.ExitCode, result.TenantId,
+                executionLabel, executionResult.ExitCode, tenantId,
                 executionResult.CostUsd ?? 0, executionResult.StdErr);
         }
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────
+    // ── JSON helpers ─────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Parses the executor JSON payload from StdOut and populates cost/usage fields
-    /// on <paramref name="result"/>. Silently skips if the JSON is missing or malformed.
-    /// </summary>
     private static void ParseExecutorOutput(ContainerExecutionResult result)
     {
+        if (string.IsNullOrWhiteSpace(result.StdOut))
+            return;
+
         try
         {
             using var doc = JsonDocument.Parse(result.StdOut);
@@ -150,7 +168,10 @@ public class ProcessingWorkflow
             result.CacheCreationTokens = GetLong(root, "cache_creation_tokens");
             result.SessionId           = GetString(root, "session_id");
         }
-        catch (JsonException) { }
+        catch (JsonException ex)
+        {
+            Workflow.Logger.LogDebug(ex, "Failed to parse executor JSON output; cost/usage will be unavailable.");
+        }
     }
 
     private static string? TryExtractField(string stdout, string field)

@@ -13,13 +13,13 @@
     <PackageReference Include="Docker.DotNet" Version="3.125.15" />
     <PackageReference Include="DotNetEnv" Version="3.1.1" />
     <PackageReference Include="Microsoft.Agents.AI.OpenAI" Version="1.0.0-rc5" />
-    <!-- <PackageReference Include="Xians.Lib" Version="3.20.0" /> -->
+    <PackageReference Include="Xians.Lib" Version="3.21.1" />
 
   </ItemGroup>
 
   <ItemGroup>
     <!-- Use PackageReference Xians.Lib above for Docker/CI. For local dev against platform repo, uncomment: -->
-    <ProjectReference Include="..\..\..\platform\XiansAi.Lib\Xians.Lib\Xians.Lib.csproj" />
+    <!-- <ProjectReference Include="..\..\..\platform\XiansAi.Lib\Xians.Lib\Xians.Lib.csproj" /> -->
   </ItemGroup>
 
   <ItemGroup>

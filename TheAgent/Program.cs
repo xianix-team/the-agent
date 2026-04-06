@@ -6,8 +6,6 @@ using Xianix.Orchestrator;
 using Xianix.Rules;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
-
-// Load .env by traversing up the directory tree (DotNetEnv)
 EnvConfig.Load();
 
 Console.ForegroundColor = ConsoleColor.Cyan;
@@ -24,8 +22,6 @@ services.AddLogging(builder =>
     builder.SetMinimumLevel(LogLevel.Debug);
 });
 
-// ContainerActivities is instantiated directly by the Xians platform (no DI).
-// Only application-level services that XianixAgent depends on are registered here.
 services.AddSingleton<IWebhookRulesEvaluator, WebhookRulesEvaluator>();
 services.AddSingleton<IEventOrchestrator, EventOrchestrator>();
 services.AddSingleton<XianixAgent>();
