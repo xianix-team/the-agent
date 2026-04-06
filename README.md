@@ -1,4 +1,32 @@
-# the-agent
+# The Xianix Agent
+
+## Architecture
+
+The system connects your code platform to AI-powered automation through a layered pipeline:
+
+```mermaid
+flowchart LR
+    A["GitHub / Azure DevOps\n(PR events, comments)"]
+    B["Xians Webhooks\n(app.xians.ai)"]
+    C["TheAgent\n(.NET Console App)"]
+    D["Executor\n(Docker container)"]
+    E["ClaudeCode Plugins\n(review, triage…)"]
+
+    A -->|webhook| B
+    B -->|dispatches task| C
+    C -->|spawns & mounts socket| D
+    D -->|runs| E
+```
+
+| Layer | What it does |
+|---|---|
+| **GitHub / Azure DevOps** | Source of events — PR opened, comment posted, etc. |
+| **Xians Webhooks** | Receives platform events and routes them to the registered agent. |
+| **TheAgent** | Long-running .NET process that polls Xians, interprets tasks, and orchestrates execution. |
+| **Executor** | Isolated Docker container spawned per task; has no persistent state. |
+| **ClaudeCode Plugins** | Skills (e.g. PR review, post-review) that run inside the Executor and call the LLM. |
+
+---
 
 ## Setup
 
@@ -80,3 +108,4 @@ export WEBHOOK_URL=https://app.xians.ai/webhooks/<your-agent-id>
 ./Scripts/simulate-pr-opened.sh    # should respond { "status": "success" }
 ./Scripts/simulate-pr-closed.sh    # should respond { "status": "ignored" }
 ```
+# documentation
