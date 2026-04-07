@@ -448,7 +448,7 @@ az vm run-command invoke \
 
 ### Update the Executor Image
 
-The executor is pulled on demand, but you can pre-pull a new version ahead of time:
+The agent does **not** auto-pull the executor image — it always uses the locally cached version. To update to a newer image, pull it explicitly on the VM before the next run:
 
 ```bash
 az vm run-command invoke \
@@ -475,7 +475,7 @@ The agent starts automatically on boot via the systemd service — no manual int
 - The VM has no public IP and no open inbound ports. It is unreachable from the internet.
 - All outbound traffic (Docker Hub pulls, Xians platform webhooks, API calls) flows through the NAT Gateway.
 - To manage the VM, use **Azure Bastion** (`xianix-agent-bastion`) or `az vm run-command invoke` — SSH over the public internet is not possible by design.
-- The executor image (`99xio/xianix-executor:latest`) is pulled on demand by the agent — it has been pre-pulled here for faster first-run startup.
+- The executor image (`99xio/xianix-executor:latest`) is **not** auto-pulled by the agent — it always uses the locally cached version. The image has been pre-pulled during setup; to update it, use `docker pull 99xio/xianix-executor:latest` on the VM explicitly.
 - No secrets are stored on disk. The `/etc/xianix/` directory holds only the startup script.
 - SSH keys were auto-generated during VM creation and stored in `~/.ssh/` on the machine that ran `az vm create`.
 - The `--restart unless-stopped` Docker flag and the systemd `Restart=on-failure` directive together ensure the agent survives container crashes and VM reboots.

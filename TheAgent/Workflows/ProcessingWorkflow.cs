@@ -4,6 +4,7 @@ using Temporalio.Exceptions;
 using Temporalio.Workflows;
 using Xianix.Activities;
 using Xianix.Orchestrator;
+using Xians.Lib.Agents.Core;
 
 namespace Xianix.Workflows;
 
@@ -34,29 +35,29 @@ public class ProcessingWorkflow
     };
 
     [WorkflowRun]
-    public async Task WorkflowRun(OrchestrationResult result)
+    public async Task WorkflowRun(OrchestrationResult orchestrationResult)
     {
         try
         {
-            if (result.Execution is null)
+            if (orchestrationResult.Execution is null)
             {
                 Workflow.Logger.LogWarning(
                     "No execution spec for webhook '{WebhookName}'. Skipping.",
-                    result.WebhookName);
+                    orchestrationResult.WebhookName);
                 return;
             }
 
-            var executionLabel = $"webhook={result.WebhookName}";
-            var repositoryUrl = OrchestrationResult.GetInputString(result.Inputs, "repository-url") ?? string.Empty;
+            var executionLabel = $"webhook={orchestrationResult.WebhookName}";
+            var repositoryUrl = OrchestrationResult.GetInputString(orchestrationResult.Inputs, "repository-url") ?? string.Empty;
 
             Workflow.Logger.LogInformation(
                 "ProcessingWorkflow starting: tenant={TenantId}, repo={Repo}, plugins={PluginCount}.",
-                result.TenantId, repositoryUrl, result.Execution.Plugins.Count);
+                orchestrationResult.TenantId, repositoryUrl, orchestrationResult.Execution.Plugins.Count);
 
-            var input = BuildContainerInput(result);
+            var input = BuildContainerInput(orchestrationResult);
 
             var volumeName = await Workflow.ExecuteActivityAsync(
-                (ContainerActivities a) => a.EnsureWorkspaceVolumeAsync(result.TenantId, repositoryUrl),
+                (ContainerActivities a) => a.EnsureWorkspaceVolumeAsync(orchestrationResult.TenantId, repositoryUrl),
                 ContainerActivityOptions);
 
             input = input with { VolumeName = volumeName };
@@ -65,14 +66,15 @@ public class ProcessingWorkflow
                 (ContainerActivities a) => a.StartContainerAsync(input),
                 ContainerActivityOptions);
 
-            var executionResult = await WaitAndCleanupAsync(containerId, result.TenantId, executionLabel);
+            var executionResult = await WaitAndCleanupAsync(containerId, orchestrationResult.TenantId, executionLabel);
 
             ParseExecutorOutput(executionResult);
-            LogOutcome(executionResult, executionLabel, result.TenantId);
+            LogOutcome(executionResult, executionLabel, orchestrationResult.TenantId);
+            await ReportExecutionMetricsAsync(orchestrationResult, executionResult);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Workflow.Logger.LogError(ex, "ProcessingWorkflow failed fatally for tenant={TenantId}.", result.TenantId);
+            Workflow.Logger.LogError(ex, "ProcessingWorkflow failed fatally for tenant={TenantId}.", orchestrationResult.TenantId);
             throw new ApplicationFailureException(
                 $"Processing workflow failed: {ex.Message}", ex, nonRetryable: true);
         }
@@ -147,6 +149,44 @@ public class ProcessingWorkflow
                 executionLabel, executionResult.ExitCode, tenantId,
                 executionResult.CostUsd ?? 0, executionResult.StdErr);
         }
+    }
+
+    // ── Metrics ──────────────────────────────────────────────────────────────
+
+    private static async Task ReportExecutionMetricsAsync(
+        OrchestrationResult orchestrationResult,
+        ContainerExecutionResult executionResult)
+    {
+        var succeeded = executionResult.Succeeded ? 1 : 0;
+        var failed    = executionResult.Succeeded ? 0 : 1;
+
+        var builder = XiansContext.Metrics
+            .ForModel("claude")
+            .WithCustomIdentifier(orchestrationResult.WebhookName)
+            .WithMetrics(
+                ("actions", "called",    1,         "count"),
+                ("actions", "succeeded", succeeded, "count"),
+                ("actions", "failed",    failed,    "count")
+            );
+        if (executionResult.CostUsd.HasValue)
+            builder = builder.WithMetric("actions", orchestrationResult.WebhookName, 1, "count");
+
+        if (executionResult.CostUsd.HasValue)
+            builder = builder.WithMetric("cost", "usd", executionResult.CostUsd.Value, "usd");
+
+        if (executionResult.InputTokens.HasValue)
+            builder = builder.WithMetric("tokens", "input", executionResult.InputTokens.Value, "tokens");
+
+        if (executionResult.OutputTokens.HasValue)
+            builder = builder.WithMetric("tokens", "output", executionResult.OutputTokens.Value, "tokens");
+
+        if (executionResult.CacheReadTokens.HasValue)
+            builder = builder.WithMetric("tokens", "cache_read", executionResult.CacheReadTokens.Value, "tokens");
+
+        if (executionResult.CacheCreationTokens.HasValue)
+            builder = builder.WithMetric("tokens", "cache_creation", executionResult.CacheCreationTokens.Value, "tokens");
+
+        await builder.ReportAsync();
     }
 
     // ── JSON helpers ─────────────────────────────────────────────────────────
