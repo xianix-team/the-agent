@@ -15,7 +15,7 @@ public sealed class WebhookRuleSet
 
     /// <summary>
     /// Claude Code marketplace plugins to install before running the prompt.
-    /// Each entry is a marketplace plugin reference (name + url) — no execution command here.
+    /// Each entry is a marketplace plugin reference (name + github-source) — no execution command here.
     /// </summary>
     [JsonPropertyName("claude-code-plugins")]
     public List<PluginEntry> ClaudeCodePlugins { get; init; } = [];
@@ -45,8 +45,8 @@ public sealed class PluginEntry
     /// e.g. <c>github@claude-plugins-official</c> or <c>everything-claude-code@everything-claude-code</c>.
     /// Passed directly to <c>claude plugin install</c> inside the executor container.
     /// </summary>
-    [JsonPropertyName("url")]
-    public string Url { get; init; } = "";
+    [JsonPropertyName("github-source")]
+    public string GithubSource { get; init; } = "";
 
     /// <summary>
     /// Optional marketplace source to register before installing the plugin.

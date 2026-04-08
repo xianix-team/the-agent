@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Temporalio.Exceptions;
 using Temporalio.Workflows;
@@ -86,12 +87,12 @@ public class ProcessingWorkflow
     {
         var inputsJson = JsonSerializer.Serialize(result.Inputs);
         var claudeCodePlugins = JsonSerializer.Serialize(
-            result.Execution!.Plugins.Select(p => new
+            result.Execution!.Plugins.Select(p => new PluginSerializationDto
             {
-                name        = p.Name,
-                url         = p.Url,
-                marketplace = p.Marketplace,
-                envs        = p.Envs.Select(e => new { name = e.Name, value = e.Value }),
+                Name        = p.Name,
+                GithubSource = p.GithubSource,
+                Marketplace = p.Marketplace,
+                Envs        = p.Envs.Select(e => new EnvSerializationDto { Name = e.Name, Value = e.Value }),
             }));
 
         return new ContainerExecutionInput
@@ -237,4 +238,33 @@ public class ProcessingWorkflow
     private static string? GetString(JsonElement root, string prop)
         => root.TryGetProperty(prop, out var el) && el.ValueKind == JsonValueKind.String
             ? el.GetString() : null;
+}
+
+/// <summary>
+/// Serialization DTO for a Claude Code plugin entry passed to the executor container.
+/// Uses <c>github-source</c> as the JSON key so the executor script can read it with
+/// <c>jq -r '.["github-source"]'</c>.
+/// </summary>
+file sealed record PluginSerializationDto
+{
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    [JsonPropertyName("github-source")]
+    public required string GithubSource { get; init; }
+
+    [JsonPropertyName("marketplace")]
+    public required string Marketplace { get; init; }
+
+    [JsonPropertyName("envs")]
+    public required IEnumerable<EnvSerializationDto> Envs { get; init; }
+}
+
+file sealed record EnvSerializationDto
+{
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    [JsonPropertyName("value")]
+    public required string Value { get; init; }
 }

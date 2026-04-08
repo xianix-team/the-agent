@@ -65,12 +65,12 @@ cd "${WORK_DIR}"
 log "--- Worktree ready at ${WORK_DIR} ---"
 
 # ── Install Claude Code plugins ─────────────────────────────────────────────
-# Each entry is a JSON object: { name, url, marketplace? }
+# Each entry is a JSON object: { name, github-source, marketplace? }
 #
-#   url         — plugin reference in `plugin-name@marketplace-name` format passed to
-#                 `claude plugin install` (e.g. `code-review@claude-plugins-official`)
-#   marketplace — optional source for `claude plugin marketplace add` before installing.
-#                 Each unique marketplace is registered only once (deduplication).
+#   github-source — plugin reference in `plugin-name@marketplace-name` format passed to
+#                   `claude plugin install` (e.g. `code-review@claude-plugins-official`)
+#   marketplace   — optional source for `claude plugin marketplace add` before installing.
+#                   Each unique marketplace is registered only once (deduplication).
 #
 # Failures on individual plugins are non-fatal — the prompt may still succeed with
 # partial tooling.
@@ -93,7 +93,7 @@ if [ -n "${CLAUDE_CODE_PLUGINS:-}" ] && [ "${CLAUDE_CODE_PLUGINS}" != "[]" ]; th
     # Pass 2: install each plugin
     echo "${CLAUDE_CODE_PLUGINS}" | jq -c '.[]' | while IFS= read -r plugin; do
         name=$(echo "${plugin}" | jq -r '.name')
-        url=$(echo "${plugin}" | jq -r '.url')
+        url=$(echo "${plugin}"  | jq -r '.["github-source"]')
 
         log "  Installing plugin '${name}' (${url})"
         claude plugin install "${url}" --scope project >&2 2>&1 || \

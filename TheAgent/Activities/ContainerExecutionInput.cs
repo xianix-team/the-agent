@@ -20,7 +20,7 @@ public sealed record ContainerExecutionInput
     public required string InputsJson { get; init; }
 
     /// <summary>
-    /// JSON-serialized array of <c>{ "name", "url", "marketplace" }</c> objects describing
+    /// JSON-serialized array of <c>{ "name", "github-source", "marketplace" }</c> objects describing
     /// the Claude Code marketplace plugins to install before running the prompt.
     /// </summary>
     public required string ClaudeCodePlugins { get; init; }
