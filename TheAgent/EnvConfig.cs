@@ -29,6 +29,32 @@ public static class EnvConfig
     public static string GithubToken        => Get("GITHUB_TOKEN");
     public static string AzureDevOpsToken   => Get("AZURE_DEVOPS_TOKEN");
 
+    /// <summary>
+    /// Returns the GitHub token for the given tenant.
+    /// Checks <c>&lt;TENANTID_IN_CAPS&gt;_GITHUB_TOKEN</c> first; falls back to <c>GITHUB_TOKEN</c>.
+    /// </summary>
+    public static string GetGithubToken(string tenantId)
+        => Get(TenantKey(tenantId, "GITHUB_TOKEN"), Get("GITHUB_TOKEN"));
+
+    /// <summary>
+    /// Returns the Azure DevOps token for the given tenant.
+    /// Checks <c>&lt;TENANTID_IN_CAPS&gt;_AZURE_DEVOPS_TOKEN</c> first; falls back to <c>AZURE_DEVOPS_TOKEN</c>.
+    /// </summary>
+    public static string GetAzureDevOpsToken(string tenantId)
+        => Get(TenantKey(tenantId, "AZURE_DEVOPS_TOKEN"), Get("AZURE_DEVOPS_TOKEN"));
+
+    /// <summary>
+    /// Builds a tenant-scoped env-var key: upper-cases the tenant ID and replaces
+    /// non-alphanumeric characters with underscores, then appends the base key name.
+    /// e.g. tenantId="my-org" + baseKey="GITHUB_TOKEN" → "MY_ORG_GITHUB_TOKEN"
+    /// </summary>
+    private static string TenantKey(string tenantId, string baseKey)
+    {
+        var sanitised = new string(
+            tenantId.Select(c => char.IsLetterOrDigit(c) ? char.ToUpperInvariant(c) : '_').ToArray());
+        return $"{sanitised}_{baseKey}";
+    }
+
     // Docker executor
     public static string ExecutorImage      => Get("EXECUTOR_IMAGE", "99xio/xianix-executor:latest");
     public static long   ContainerMemoryBytes =>

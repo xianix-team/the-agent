@@ -224,11 +224,13 @@ public class ContainerActivities : IDisposable
             $"ANTHROPIC_API_KEY={EnvConfig.AnthropicApiKey}",
         };
 
-        if (!string.IsNullOrEmpty(EnvConfig.GithubToken))
-            env.Add($"GITHUB_TOKEN={EnvConfig.GithubToken}");
+        var githubToken = EnvConfig.GetGithubToken(input.TenantId);
+        if (!string.IsNullOrEmpty(githubToken))
+            env.Add($"GITHUB_TOKEN={githubToken}");
 
-        if (!string.IsNullOrEmpty(EnvConfig.AzureDevOpsToken))
-            env.Add($"AZURE_DEVOPS_TOKEN={EnvConfig.AzureDevOpsToken}");
+        var azureDevOpsToken = EnvConfig.GetAzureDevOpsToken(input.TenantId);
+        if (!string.IsNullOrEmpty(azureDevOpsToken))
+            env.Add($"AZURE_DEVOPS_TOKEN={azureDevOpsToken}");
 
         InjectPluginEnvVars(input.ClaudeCodePlugins, env);
 

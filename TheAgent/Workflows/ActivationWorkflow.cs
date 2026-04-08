@@ -11,17 +11,14 @@ public class ActivationWorkflow
     private const int MaxHistoryLength = 1000;
 
     private readonly Queue<OrchestrationResult> _webhookResults = new();
-    private string? _repositoryUrl;
 
     private bool ShouldContinueAsNew =>
         Workflow.AllHandlersFinished &&
         (Workflow.ContinueAsNewSuggested || Workflow.CurrentHistoryLength > MaxHistoryLength);
 
     [WorkflowRun]
-    public async Task WorkflowRun(string? repositoryUrl = null)
+    public async Task WorkflowRun()
     {
-        _repositoryUrl = repositoryUrl;
-
         try
         {
             await ProcessActivationLoopAsync();
@@ -64,15 +61,6 @@ public class ActivationWorkflow
                 continue;
             }
 
-            if (!string.IsNullOrEmpty(_repositoryUrl) &&
-                !string.Equals(_repositoryUrl, payloadRepoUrl, StringComparison.Ordinal))
-            {
-                Workflow.Logger.LogWarning(
-                    "Webhook {WebhookName} ignored: bound to {BoundRepo}, got {PayloadRepo}.",
-                    result.WebhookName, _repositoryUrl, payloadRepoUrl);
-                continue;
-            }
-
             await StartProcessingAsync(result);
         }
     }
@@ -88,8 +76,7 @@ public class ActivationWorkflow
 
         // _repositoryUrl may legitimately be null when the workflow is not bound to a specific repo.
         throw Workflow.CreateContinueAsNewException(
-            Workflow.Info.WorkflowType,
-            new object?[] { _repositoryUrl });
+            Workflow.Info.WorkflowType, []);
     }
 
     private async Task StartProcessingAsync(OrchestrationResult result)
