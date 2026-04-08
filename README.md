@@ -63,8 +63,8 @@ docker build -t 99xio/xianix-agent:latest .
 Run locally with Docker socket mounted:
 
 ```bash
+cd TheAgent/
 docker run --rm \
-  -v /var/run/docker.sock:/var/run/docker.sock \
   --env-file .env \
   99xio/xianix-agent:latest
 ```
@@ -108,4 +108,3 @@ export WEBHOOK_URL=https://app.xians.ai/webhooks/<your-agent-id>
 ./Scripts/simulate-pr-opened.sh    # should respond { "status": "success" }
 ./Scripts/simulate-pr-closed.sh    # should respond { "status": "ignored" }
 ```
-# documentation
