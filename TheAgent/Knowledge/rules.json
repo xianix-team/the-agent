@@ -37,7 +37,6 @@
         "claude-code-plugins": [
             {
                 "name": "pr-reviewer",
-                "description": "Comprehensive PR review plugin with specialized agents for code quality, security, test coverage, and performance analysis. Works with GitHub, Azure DevOps, Bitbucket, and any git repository.",
                 "github-source": "pr-reviewer@xianix-plugins-official",
                 "marketplace": "xianix-team/plugins-official",
                 "envs": [
@@ -49,5 +48,53 @@
             }
         ],
         "prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."
+    },
+    {
+        "webhook-name": "azuredevops pull requests",
+        "match": [
+            {
+                "name": "pr-opened-event",
+                "rule": "eventType==git.pullrequest.created"
+            },
+            {
+                "name": "pr-updated-event",
+                "rule": "eventType==git.pullrequest.updated"
+            }
+        ],
+        "inputs": [
+            {
+                "name": "pr-number",
+                "value": "resource.pullRequestId"
+            },
+            {
+                "name": "repository-url",
+                "value": "resource.repository.remoteUrl"
+            },
+            {
+                "name": "repository-name",
+                "value": "resource.repository.name"
+            },
+            {
+                "name": "pr-title",
+                "value": "resource.title"
+            },
+            {
+                "name": "pr-head-branch",
+                "value": "resource.sourceRefName"
+            },
+            {
+                "name": "platform",
+                "value": "azuredevops",
+                "constant": true
+            }
+        ],
+        "claude-code-plugins": [
+            {
+                "name": "pr-reviewer",
+                "github-source": "pr-reviewer@xianix-plugins-official",
+                "marketplace": "xianix-team/plugins-official"
+            }
+        ],
+        "prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review. The `az` CLI is authenticated and available if you need it directly."
     }
 ]

@@ -22,14 +22,17 @@ public sealed class EventOrchestrator : IEventOrchestrator
     {
         _logger.LogDebug("Orchestrating event '{WebhookName}' for tenant '{TenantId}'.", webhookName, tenantId);
 
-        var evaluation = await _rulesEvaluator.EvaluateAsync(webhookName, payload);
+        var outcome = await _rulesEvaluator.EvaluateAsync(webhookName, payload);
 
-        if (evaluation is null)
+        if (!outcome.Matched)
         {
-            _logger.LogInformation("Webhook '{WebhookName}' skipped — no matching rule or filter failed.", webhookName);
-            return OrchestrationResult.Ignored(webhookName, tenantId);
+            _logger.LogInformation(
+                "Webhook '{WebhookName}' skipped — {SkipReason}.",
+                webhookName, outcome.SkipReason ?? "no matching rule or filter failed");
+            return OrchestrationResult.Ignored(webhookName, tenantId, outcome.SkipReason);
         }
 
+        var evaluation = outcome.Result!;
         var execution = !string.IsNullOrWhiteSpace(evaluation.Prompt)
             ? new ExecutionSpec(evaluation.Plugins, evaluation.Prompt)
             : null;

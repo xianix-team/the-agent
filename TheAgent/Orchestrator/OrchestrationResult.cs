@@ -24,6 +24,12 @@ public sealed record OrchestrationResult
     /// </summary>
     public ExecutionSpec? Execution { get; init; }
 
+    /// <summary>
+    /// Human-readable explanation of why this webhook was not handled.
+    /// Only set when <see cref="Handled"/> is <c>false</c>.
+    /// </summary>
+    public string? SkipReason { get; init; }
+
     public static OrchestrationResult Matched(
         string webhookName,
         string tenantId,
@@ -31,8 +37,8 @@ public sealed record OrchestrationResult
         ExecutionSpec? execution = null) =>
         new() { Handled = true, WebhookName = webhookName, TenantId = tenantId, Inputs = inputs, Execution = execution };
 
-    public static OrchestrationResult Ignored(string webhookName, string tenantId) =>
-        new() { Handled = false, WebhookName = webhookName, TenantId = tenantId };
+    public static OrchestrationResult Ignored(string webhookName, string tenantId, string? skipReason = null) =>
+        new() { Handled = false, WebhookName = webhookName, TenantId = tenantId, SkipReason = skipReason };
 
     /// <summary>
     /// Resolves a string input after Temporal JSON round-trips (values often deserialize as <see cref="JsonElement"/>).

@@ -56,3 +56,4 @@ CodeCoverage/
 TestResult.xml
 nunit-*.xml
 id_rsa
+TheAgent/.env.production

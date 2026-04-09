@@ -140,6 +140,19 @@ az keyvault secret set --vault-name xianix-kv-agent --name CONTAINER-MEMORY-MB  
 az keyvault secret set --vault-name xianix-kv-agent --name CONTAINER-CPU-COUNT  --value "1"
 ```
 
+To see the KeyVault secrets
+
+```bash
+# To see keys
+az keyvault secret list --vault-name xianix-kv-agent --query "[].name" -o table
+
+# To see the value
+az keyvault secret show --vault-name xianix-kv-agent --name AZURE-DEVOPS-TOKEN --query "value" -o tsv
+
+# To remove a secret
+az keyvault secret delete --vault-name xianix-kv-agent --name AZURE-DEVOPS-TOKEN
+```
+
 ### Via Azure Portal
 
 Navigate to **Key Vault `xianix-kv-agent` → Secrets → Generate/Import** and add each secret listed above.

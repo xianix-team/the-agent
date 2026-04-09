@@ -22,7 +22,7 @@ public class EventOrchestratorTests
         var inputs = new Dictionary<string, object?> { ["pr_id"] = 42L, ["action"] = "opened" };
         var evaluation = new EvaluationResult(inputs, [], "");
         _evaluator.EvaluateAsync("github-pr", Arg.Any<object?>())
-                  .Returns(Task.FromResult<EvaluationResult?>(evaluation));
+                  .Returns(Task.FromResult(EvaluationOutcome.Match(evaluation)));
 
         var result = await _sut.OrchestrateAsync("github-pr", new { }, "tenant-1");
 
@@ -36,20 +36,21 @@ public class EventOrchestratorTests
     public async Task OrchestrateAsync_WhenEvaluatorReturnsNull_ReturnsIgnoredResult()
     {
         _evaluator.EvaluateAsync("unknown-webhook", Arg.Any<object?>())
-                  .Returns(Task.FromResult<EvaluationResult?>(null));
+                  .Returns(Task.FromResult(EvaluationOutcome.Skip("no rule configured for webhook 'unknown-webhook'")));
 
         var result = await _sut.OrchestrateAsync("unknown-webhook", new { }, "tenant-1");
 
         Assert.False(result.Handled);
         Assert.Equal("unknown-webhook", result.WebhookName);
         Assert.Empty(result.Inputs);
+        Assert.NotNull(result.SkipReason);
     }
 
     [Fact]
     public async Task OrchestrateAsync_WhenEvaluatorThrows_PropagatesException()
     {
         _evaluator.EvaluateAsync(Arg.Any<string>(), Arg.Any<object?>())
-                  .Returns<Task<EvaluationResult?>>(_ => throw new InvalidOperationException("No rules knowledge document found."));
+                  .Returns<Task<EvaluationOutcome>>(_ => throw new InvalidOperationException("No rules knowledge document found."));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _sut.OrchestrateAsync("github-pr", new { }, "tenant-1"));
@@ -60,7 +61,7 @@ public class EventOrchestratorTests
     {
         var payload = new { action = "closed" };
         _evaluator.EvaluateAsync(Arg.Any<string>(), Arg.Any<object?>())
-                  .Returns(Task.FromResult<EvaluationResult?>(null));
+                  .Returns(Task.FromResult(EvaluationOutcome.Skip("no rule configured for webhook 'github-pr'")));
 
         await _sut.OrchestrateAsync("github-pr", payload, "tenant-1");
 
@@ -73,7 +74,7 @@ public class EventOrchestratorTests
         var inputs = new Dictionary<string, object?> { ["key"] = "value" };
         var evaluation = new EvaluationResult(inputs, [], "");
         _evaluator.EvaluateAsync(Arg.Any<string>(), Arg.Any<object?>())
-                  .Returns(Task.FromResult<EvaluationResult?>(evaluation));
+                  .Returns(Task.FromResult(EvaluationOutcome.Match(evaluation)));
 
         var result = await _sut.OrchestrateAsync("github-pr", new { }, "tenant-1");
 
@@ -83,14 +84,14 @@ public class EventOrchestratorTests
     [Fact]
     public async Task OrchestrateAsync_WhenEvaluationHasPromptAndPlugins_SetsExecutionSpec()
     {
-        var plugin = new PluginEntry { Name = "github", Url = "@modelcontextprotocol/server-github" };
+        var plugin = new PluginEntry { Name = "github", GithubSource = "@modelcontextprotocol/server-github" };
         var evaluation = new EvaluationResult(
             new Dictionary<string, object?> { ["pr-number"] = 7 },
             [plugin],
             "Review PR #7 in my-org/my-repo");
 
         _evaluator.EvaluateAsync("pull requests", Arg.Any<object?>())
-                  .Returns(Task.FromResult<EvaluationResult?>(evaluation));
+                  .Returns(Task.FromResult(EvaluationOutcome.Match(evaluation)));
 
         var result = await _sut.OrchestrateAsync("pull requests", new { }, "tenant-1");
 
@@ -110,7 +111,7 @@ public class EventOrchestratorTests
             "");
 
         _evaluator.EvaluateAsync(Arg.Any<string>(), Arg.Any<object?>())
-                  .Returns(Task.FromResult<EvaluationResult?>(evaluation));
+                  .Returns(Task.FromResult(EvaluationOutcome.Match(evaluation)));
 
         var result = await _sut.OrchestrateAsync("github-pr", new { }, "tenant-1");
 

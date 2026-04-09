@@ -62,7 +62,7 @@ public class XianixAgent(IEventOrchestrator orchestrator, ILogger<XianixAgent> l
 
             if (!result.Handled)
             {
-                context.Respond(new { status = "ignored" });
+                context.Respond(new { status = "ignored", reason = result.SkipReason });
                 return;
             }
 

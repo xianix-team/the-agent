@@ -38,6 +38,19 @@ cp .env.example .env
 
 Key variables to set: `XIANS_SERVER_URL`, `XIANS_API_KEY`, `LLM_API_KEY`, and at least one platform token (`GITHUB_TOKEN` or `AZURE_DEVOPS_TOKEN`). See `.env.example` for the full list.
 
+### Environment-specific config
+
+The agent loads its env file based on the `APP_ENV` variable:
+
+| `APP_ENV` | File loaded |
+|---|---|
+| _(not set)_ | `.env` |
+| `prod` | `.env.prod` |
+| `production` | `.env.production` |
+| `staging` | `.env.staging` |
+
+Any value passed to `APP_ENV` maps to `.env.<value>`, so you can define any environment you need without touching the code.
+
 ## Docker Images
 
 The project produces two Docker images, both published to Docker Hub under the `99xio` org.
@@ -90,7 +103,11 @@ Both workflows require a `DOCKERHUB_TOKEN` secret in the repository settings (**
 From the repo root:
 
 ```bash
+# Development (loads .env)
 dotnet run --project TheAgent/TheAgent.csproj
+
+# Production (loads .env.prod)
+APP_ENV=prod dotnet run --project TheAgent/TheAgent.csproj
 ```
 
 ## Tests

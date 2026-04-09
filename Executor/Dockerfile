@@ -1,6 +1,7 @@
 FROM python:3.12-slim
 
-# Install system dependencies + Node.js 20 (for MCP servers that use npx) + gh CLI
+# System deps + Node 20 (npx/MCP) + git + GitHub CLI (gh) + Azure CLI + azure-devops extension (az devops).
+# Azure CLI is installed from Microsoft's bookworm repo (no trixie dist yet); compatible with current slim base.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
@@ -17,7 +18,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
         > /etc/apt/sources.list.d/github-cli.list \
-    && apt-get update && apt-get install -y --no-install-recommends nodejs gh \
+    && curl -sLS https://packages.microsoft.com/keys/microsoft.asc \
+        | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg \
+    && chmod go+r /etc/apt/keyrings/microsoft.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ bookworm main" \
+        > /etc/apt/sources.list.d/azure-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends nodejs gh azure-cli \
+    && az extension add --name azure-devops --yes \
     && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g @anthropic-ai/claude-code

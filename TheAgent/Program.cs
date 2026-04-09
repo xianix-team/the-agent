@@ -6,7 +6,9 @@ using Xianix.Orchestrator;
 using Xianix.Rules;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
-EnvConfig.Load();
+var appEnv = Environment.GetEnvironmentVariable("APP_ENV");
+var envFile = string.IsNullOrWhiteSpace(appEnv) ? ".env" : $".env.{appEnv}";
+EnvConfig.Load(envFile);
 
 Console.ForegroundColor = ConsoleColor.Cyan;
 Console.WriteLine("╔══════════════════════════════╗");

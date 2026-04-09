@@ -23,7 +23,7 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
 
     /// <inheritdoc />
     /// <exception cref="InvalidOperationException">Rules knowledge document is missing.</exception>
-    public async Task<EvaluationResult?> EvaluateAsync(string webhookName, object? payload)
+    public async Task<EvaluationOutcome> EvaluateAsync(string webhookName, object? payload)
     {
         var rulesKnowledge = await XiansContext.CurrentAgent.Knowledge.GetAsync(Constants.RulesKnowledgeName);
         if (rulesKnowledge == null)
@@ -34,29 +34,39 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
     }
 
     /// <inheritdoc />
-    public EvaluationResult? EvaluateWithRules(
+    public EvaluationOutcome EvaluateWithRules(
         string webhookName,
         object? payload,
         IReadOnlyList<WebhookRuleSet> ruleSets)
         => EvaluateCore(webhookName, payload, ruleSets);
 
-    private EvaluationResult? EvaluateCore(
+    private EvaluationOutcome EvaluateCore(
         string webhookName,
         object? payload,
         IReadOnlyList<WebhookRuleSet> ruleSets)
     {
         if (!TryGetRootElement(payload, out var root))
-            return null;
+            return EvaluationOutcome.Skip(
+                $"payload could not be parsed as JSON (type: {payload?.GetType().Name ?? "null"})");
 
         var set = ruleSets.FirstOrDefault(s =>
             string.Equals(s.WebhookName, webhookName, StringComparison.OrdinalIgnoreCase));
 
         if (set is null)
-            return null;
+        {
+            var known = string.Join(", ", ruleSets.Select(s => $"'{s.WebhookName}'"));
+            return EvaluationOutcome.Skip(
+                string.IsNullOrEmpty(known)
+                    ? $"no rule configured for webhook '{webhookName}' (rules list is empty)"
+                    : $"no rule configured for webhook '{webhookName}' — known webhooks: [{known}]");
+        }
 
         // OR logic: pass if the match list is empty (no restrictions) or any entry matches.
         if (set.Match.Count > 0 && !set.Match.Any(m => EvaluateFilter(m.Rule, root)))
-            return null;
+        {
+            var diagnostics = string.Join(", ", set.Match.Select(m => GetFilterDiagnostic(m.Rule, root)));
+            return EvaluationOutcome.Skip($"no match filter passed — rules: [{diagnostics}]");
+        }
 
         var dict = new Dictionary<string, object?>(StringComparer.Ordinal);
         foreach (var input in set.InputRules)
@@ -77,7 +87,34 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
         }
 
         var prompt = InterpolatePrompt(set.Prompt, dict);
-        return new EvaluationResult(dict, set.ClaudeCodePlugins, prompt);
+        return EvaluationOutcome.Match(new EvaluationResult(dict, set.ClaudeCodePlugins, prompt));
+    }
+
+    /// <summary>
+    /// Returns a diagnostic string for a filter rule showing the rule and the actual payload value.
+    /// </summary>
+    private static string GetFilterDiagnostic(string rule, JsonElement root)
+    {
+        rule = rule.Trim();
+        if (rule.Length == 0)
+            return "(empty rule — always passes)";
+
+        var eq = rule.IndexOf("==", StringComparison.Ordinal);
+        var ne = rule.IndexOf("!=", StringComparison.Ordinal);
+
+        string? path = null;
+        if (eq >= 0 && (ne < 0 || eq < ne))
+            path = rule[..eq].Trim();
+        else if (ne >= 0 && (eq < 0 || ne < eq))
+            path = rule[..ne].Trim();
+
+        if (path is null)
+            return $"'{rule}'";
+
+        if (TryGetElementAtPath(root, path, out var actual))
+            return $"'{rule}' (actual: '{actual.GetRawText().Trim('"')}')";
+
+        return $"'{rule}' (path '{path}' not found in payload)";
     }
 
     /// <summary>
