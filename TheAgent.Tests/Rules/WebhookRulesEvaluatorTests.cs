@@ -103,4 +103,119 @@ public class WebhookRulesEvaluatorTests
 
         Assert.True(outcome.Matched);
     }
+
+    [Fact]
+    public void EvaluateWithRules_MessageTextStartsWithPrefix_Matches()
+    {
+        using var doc = JsonDocument.Parse(
+            """
+            {
+              "message": {
+                "text": "Hasith Yaggahavita updated the source branch of pull request 13 in Xianix-tests"
+              }
+            }
+            """);
+
+        var ruleSets = _sut.ParseRules(
+            BuildRulesJson("message.text^='Hasith Yaggahavita updated the source branch'"));
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.True(outcome.Matched);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_MessageTextDoesNotStartWithPrefix_DoesNotMatch()
+    {
+        using var doc = JsonDocument.Parse(
+            """
+            {
+              "message": {
+                "text": "Hasith Yaggahavita rejected pull request 13 in Xianix-tests"
+              }
+            }
+            """);
+
+        var ruleSets = _sut.ParseRules(
+            BuildRulesJson("message.text^='Hasith Yaggahavita updated the source branch'"));
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.False(outcome.Matched);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_NotStartsWithOperator_MatchesWhenPrefixAbsent()
+    {
+        using var doc = JsonDocument.Parse(
+            """
+            {
+              "message": {
+                "text": "Hasith Yaggahavita rejected pull request 13 in Xianix-tests"
+              }
+            }
+            """);
+
+        var ruleSets = _sut.ParseRules(
+            BuildRulesJson("message.text!^='Hasith Yaggahavita updated the source branch'"));
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.True(outcome.Matched);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_NotStartsWithParsesBeforeStartsWith()
+    {
+        using var doc = JsonDocument.Parse("""{ "x": "abc" }""");
+        var ruleSets = _sut.ParseRules(BuildRulesJson("x!^='ab'"));
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.False(outcome.Matched);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_MessageTextContainsStablePhrase_MatchesRegardlessOfActorPrefix()
+    {
+        using var doc = JsonDocument.Parse(
+            """
+            {
+              "message": {
+                "text": "Jane Doe updated the source branch of pull request 13 (…) in Xianix-tests"
+              }
+            }
+            """);
+
+        var ruleSets = _sut.ParseRules(
+            BuildRulesJson("message.text*='updated the source branch of pull request'"));
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.True(outcome.Matched);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_MessageTextContains_RejectionWordingDoesNotMatch()
+    {
+        using var doc = JsonDocument.Parse(
+            """
+            {
+              "message": {
+                "text": "Jane Doe rejected pull request 13 (…) in Xianix-tests"
+              }
+            }
+            """);
+
+        var ruleSets = _sut.ParseRules(
+            BuildRulesJson("message.text*='updated the source branch of pull request'"));
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.False(outcome.Matched);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_NotContainsParsesBeforeContains()
+    {
+        using var doc = JsonDocument.Parse("""{ "x": "abc" }""");
+        var ruleSets = _sut.ParseRules(BuildRulesJson("x!*='ab'"));
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.False(outcome.Matched);
+    }
 }

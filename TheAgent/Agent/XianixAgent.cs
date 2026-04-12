@@ -30,10 +30,6 @@ public class XianixAgent(IEventOrchestrator orchestrator, ILogger<XianixAgent> l
     private static void ConfigureCustomWorkflows(XiansAgent xiansAgent)
     {
         xiansAgent.Workflows
-            .DefineCustom<ActivationWorkflow>(new WorkflowOptions { Activable = true })
-            .AddActivity<ContainerActivities>();
-
-        xiansAgent.Workflows
             .DefineCustom<ProcessingWorkflow>(new WorkflowOptions { Activable = false })
             .AddActivity<ContainerActivities>();
     }
@@ -60,8 +56,9 @@ public class XianixAgent(IEventOrchestrator orchestrator, ILogger<XianixAgent> l
 
                 foreach (var result in batch.Matches)
                 {
-                    await XiansContext.Workflows.SignalWithActivationStartAsync<ActivationWorkflow>(
-                        "ProcessWebhook", result);
+                    await XiansContext.Workflows.StartAsync<ProcessingWorkflow>(
+                        new object[] { result },
+                        Guid.NewGuid().ToString());
                 }
 
                 context.Respond(new

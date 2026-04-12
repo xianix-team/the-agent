@@ -8,6 +8,8 @@ namespace Xianix.Rules;
 /// <summary>
 /// Evaluates webhook rule sets against a JSON payload: at least one <c>match</c> entry must pass (OR);
 /// then inputs are resolved into a dictionary (JSON paths and optional constant literals).
+/// Atomic match operators include <c>==</c>, <c>!=</c>, <c>^=</c> / <c>!^=</c> (string prefix),
+/// and <c>*=</c> / <c>!*=</c> (substring contains).
 /// Returns null if no matching webhook, no match entry passes, or the payload is not valid JSON.
 /// </summary>
 public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
@@ -232,32 +234,93 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
         if (condition.Length == 0)
             return "(empty condition — always passes)";
 
-        var eq = condition.IndexOf("==", StringComparison.Ordinal);
-        var ne = condition.IndexOf("!=", StringComparison.Ordinal);
+        if (!TryParseAtomicCondition(condition, out var path, out var expected, out var opKind))
+            return $"'{condition}' (malformed — expected one of ==, !=, ^=, !^=, *=, !*=)";
 
-        string? path = null;
-        string? expected = null;
-        if (eq >= 0 && (ne < 0 || eq < ne))
+        switch (opKind)
         {
-            path = condition[..eq].Trim();
-            expected = StripQuotes(condition[(eq + 2)..].Trim());
+            case AtomicOpKind.Equal:
+            case AtomicOpKind.NotEqual:
+                var negatedEq = opKind == AtomicOpKind.NotEqual;
+                if (PathContainsWildcardSegment(path))
+                    return GetWildcardPathDiagnostic(path, expected, root, negated: negatedEq);
+
+                if (TryGetElementAtPath(root, path, out var actualEq))
+                    return $"'{condition}' (actual: '{actualEq.GetRawText().Trim('"')}')";
+
+                return $"'{condition}' (path '{path}' not found in payload)";
+            case AtomicOpKind.StartsWith:
+            case AtomicOpKind.NotStartsWith:
+                var negatedSw = opKind == AtomicOpKind.NotStartsWith;
+                if (PathContainsWildcardSegment(path))
+                    return GetWildcardPathStartsWithDiagnostic(path, expected, root, negated: negatedSw);
+
+                if (TryGetElementAtPath(root, path, out var actualSw))
+                {
+                    var s = actualSw.ValueKind == JsonValueKind.String
+                        ? actualSw.GetString() ?? ""
+                        : actualSw.GetRawText().Trim('"');
+                    var ok = s.StartsWith(expected, StringComparison.Ordinal);
+                    var pass = negatedSw ? !ok : ok;
+                    return
+                        $"'{condition}' (actual starts with prefix: {ok}; condition {(pass ? "passes" : "fails")})";
+                }
+
+                return $"'{condition}' (path '{path}' not found in payload)";
+            case AtomicOpKind.Contains:
+            case AtomicOpKind.NotContains:
+                var negatedCt = opKind == AtomicOpKind.NotContains;
+                if (PathContainsWildcardSegment(path))
+                    return GetWildcardPathContainsDiagnostic(path, expected, root, negated: negatedCt);
+
+                if (TryGetElementAtPath(root, path, out var actualCt))
+                {
+                    var s = actualCt.ValueKind == JsonValueKind.String
+                        ? actualCt.GetString() ?? ""
+                        : actualCt.GetRawText().Trim('"');
+                    var ok = s.Contains(expected, StringComparison.Ordinal);
+                    var pass = negatedCt ? !ok : ok;
+                    return
+                        $"'{condition}' (actual contains substring: {ok}; condition {(pass ? "passes" : "fails")})";
+                }
+
+                return $"'{condition}' (path '{path}' not found in payload)";
+            default:
+                return $"'{condition}' (unexpected operator)";
         }
-        else if (ne >= 0 && (eq < 0 || ne < eq))
+    }
+
+    private static string GetWildcardPathContainsDiagnostic(string path, string needle, JsonElement root, bool negated)
+    {
+        if (!TrySplitWildcardPath(path, out var prefixPath, out var suffixPath))
+            return $"'{path}' (invalid path — '*' must have a suffix segment)";
+
+        JsonElement arr;
+        if (string.IsNullOrEmpty(prefixPath))
+            arr = root;
+        else if (!TryGetElementAtPath(root, prefixPath, out arr))
+            return $"'{path}' (prefix '{prefixPath}' not found in payload)";
+
+        if (arr.ValueKind != JsonValueKind.Array)
+            return $"'{path}' (prefix is not an array — actual kind: {arr.ValueKind})";
+
+        var i = 0;
+        foreach (var item in arr.EnumerateArray())
         {
-            path = condition[..ne].Trim();
-            expected = StripQuotes(condition[(ne + 2)..].Trim());
+            if (TryGetElementAtPath(item, suffixPath, out var actual) && JsonContainsLiteral(actual, needle))
+            {
+                var op = negated ? "!*=" : "*=";
+                var s = actual.ValueKind == JsonValueKind.String
+                    ? actual.GetString() ?? ""
+                    : actual.GetRawText().Trim('"');
+                return
+                    $"'{path}' {op} '{needle}' (matched array index {i}: contains — value: '{s}')";
+            }
+
+            i++;
         }
 
-        if (path is null)
-            return $"'{condition}' (malformed — no '==' or '!=' operator)";
-
-        if (PathContainsWildcardSegment(path) && expected is not null)
-            return GetWildcardPathDiagnostic(path, expected, root, negated: ne >= 0 && (eq < 0 || ne < eq));
-
-        if (TryGetElementAtPath(root, path, out var actual))
-            return $"'{condition}' (actual: '{actual.GetRawText().Trim('"')}')";
-
-        return $"'{condition}' (path '{path}' not found in payload)";
+        return $"'{path}' (no array element whose value contains '{needle}')";
     }
 
     private static string GetWildcardPathDiagnostic(string path, string expected, JsonElement root, bool negated)
@@ -288,6 +351,39 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
         }
 
         return $"'{path}' (no array element matched '{expected}')";
+    }
+
+    private static string GetWildcardPathStartsWithDiagnostic(string path, string prefix, JsonElement root, bool negated)
+    {
+        if (!TrySplitWildcardPath(path, out var prefixPath, out var suffixPath))
+            return $"'{path}' (invalid path — '*' must have a suffix segment)";
+
+        JsonElement arr;
+        if (string.IsNullOrEmpty(prefixPath))
+            arr = root;
+        else if (!TryGetElementAtPath(root, prefixPath, out arr))
+            return $"'{path}' (prefix '{prefixPath}' not found in payload)";
+
+        if (arr.ValueKind != JsonValueKind.Array)
+            return $"'{path}' (prefix is not an array — actual kind: {arr.ValueKind})";
+
+        var i = 0;
+        foreach (var item in arr.EnumerateArray())
+        {
+            if (TryGetElementAtPath(item, suffixPath, out var actual) && JsonStartsWithLiteral(actual, prefix))
+            {
+                var op = negated ? "!^=" : "^=";
+                var s = actual.ValueKind == JsonValueKind.String
+                    ? actual.GetString() ?? ""
+                    : actual.GetRawText().Trim('"');
+                return
+                    $"'{path}' {op} '{prefix}' (matched array index {i}: starts with — value: '{s}')";
+            }
+
+            i++;
+        }
+
+        return $"'{path}' (no array element whose value starts with '{prefix}')";
     }
 
     /// <summary>
@@ -343,6 +439,7 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
 
     /// <summary>
     /// Evaluates a compound filter rule supporting <c>&&</c> (AND) and <c>||</c> (OR) operators.
+    /// Atomic comparisons: <c>==</c>, <c>!=</c>, <c>^=</c> / <c>!^=</c> (prefix), <c>*=</c> / <c>!*=</c> (contains).
     /// <c>||</c> has lower precedence: the rule is split into OR-groups first, then each group
     /// is split into AND-conditions. The rule passes if any OR-group passes (i.e. all its
     /// AND-conditions are true).
@@ -366,24 +463,199 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
         if (condition.Length == 0)
             return true;
 
-        var eq = condition.IndexOf("==", StringComparison.Ordinal);
-        var ne = condition.IndexOf("!=", StringComparison.Ordinal);
+        if (!TryParseAtomicCondition(condition, out var path, out var expected, out var opKind))
+            return false;
 
-        if (eq >= 0 && (ne < 0 || eq < ne))
+        return opKind switch
         {
-            var path = condition[..eq].Trim();
-            var expected = StripQuotes(condition[(eq + 2)..].Trim());
-            return EvaluatePathCompare(root, path, expected, negated: false);
-        }
+            AtomicOpKind.Equal => EvaluatePathCompare(root, path, expected, negated: false),
+            AtomicOpKind.NotEqual => EvaluatePathCompare(root, path, expected, negated: true),
+            AtomicOpKind.StartsWith => EvaluatePathStartsWith(root, path, expected, negated: false),
+            AtomicOpKind.NotStartsWith => EvaluatePathStartsWith(root, path, expected, negated: true),
+            AtomicOpKind.Contains => EvaluatePathContains(root, path, expected, negated: false),
+            AtomicOpKind.NotContains => EvaluatePathContains(root, path, expected, negated: true),
+            _ => false,
+        };
+    }
 
-        if (ne >= 0 && (eq < 0 || ne < eq))
+    private enum AtomicOpKind
+    {
+        Equal,
+        NotEqual,
+        StartsWith,
+        NotStartsWith,
+        Contains,
+        NotContains,
+    }
+
+    /// <summary>
+    /// Parses equality, prefix (<c>^=</c> / <c>!^=</c>), and substring (<c>*=</c> / <c>!*=</c>) comparisons.
+    /// The leftmost operator wins; three-character operators (<c>!*=</c>, <c>!^=</c>) are checked before two-character ones.
+    /// </summary>
+    private static bool TryParseAtomicCondition(
+        string condition,
+        out string path,
+        out string expected,
+        out AtomicOpKind opKind)
+    {
+        path = "";
+        expected = "";
+        opKind = AtomicOpKind.Equal;
+
+        for (var i = 0; i < condition.Length; i++)
         {
-            var path = condition[..ne].Trim();
-            var expected = StripQuotes(condition[(ne + 2)..].Trim());
-            return EvaluatePathCompare(root, path, expected, negated: true);
+            if (i + 3 <= condition.Length)
+            {
+                var three = condition.AsSpan(i, 3);
+                if (three.SequenceEqual("!*=".AsSpan()))
+                {
+                    path = condition[..i].Trim();
+                    expected = StripQuotes(condition[(i + 3)..].Trim());
+                    opKind = AtomicOpKind.NotContains;
+                    return path.Length > 0;
+                }
+
+                if (three.SequenceEqual("!^=".AsSpan()))
+                {
+                    path = condition[..i].Trim();
+                    expected = StripQuotes(condition[(i + 3)..].Trim());
+                    opKind = AtomicOpKind.NotStartsWith;
+                    return path.Length > 0;
+                }
+            }
+
+            if (i + 2 > condition.Length)
+                continue;
+
+            var two = condition.AsSpan(i, 2);
+            if (two.SequenceEqual("==".AsSpan()))
+            {
+                path = condition[..i].Trim();
+                expected = StripQuotes(condition[(i + 2)..].Trim());
+                opKind = AtomicOpKind.Equal;
+                return path.Length > 0;
+            }
+
+            if (two.SequenceEqual("!=".AsSpan()))
+            {
+                path = condition[..i].Trim();
+                expected = StripQuotes(condition[(i + 2)..].Trim());
+                opKind = AtomicOpKind.NotEqual;
+                return path.Length > 0;
+            }
+
+            if (two.SequenceEqual("^=".AsSpan()))
+            {
+                path = condition[..i].Trim();
+                expected = StripQuotes(condition[(i + 2)..].Trim());
+                opKind = AtomicOpKind.StartsWith;
+                return path.Length > 0;
+            }
+
+            if (two.SequenceEqual("*=".AsSpan()))
+            {
+                path = condition[..i].Trim();
+                expected = StripQuotes(condition[(i + 2)..].Trim());
+                opKind = AtomicOpKind.Contains;
+                return path.Length > 0;
+            }
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// String prefix match on the value at <paramref name="path"/> (JSON string only). Same wildcard rules as <see cref="EvaluatePathCompare"/>.
+    /// </summary>
+    private static bool EvaluatePathStartsWith(JsonElement root, string path, string prefix, bool negated)
+    {
+        if (PathContainsWildcardSegment(path))
+            return EvaluateWildcardPathStartsWith(root, path, prefix, negated);
+
+        if (!TryGetElementAtPath(root, path, out var actual))
+            return negated;
+
+        var matches = JsonStartsWithLiteral(actual, prefix);
+        return negated ? !matches : matches;
+    }
+
+    private static bool EvaluateWildcardPathStartsWith(JsonElement root, string path, string prefix, bool negated)
+    {
+        if (!TrySplitWildcardPath(path, out var prefixPath, out var suffixPath))
+            return false;
+
+        JsonElement arr;
+        if (string.IsNullOrEmpty(prefixPath))
+            arr = root;
+        else if (!TryGetElementAtPath(root, prefixPath, out arr))
+            return negated;
+
+        if (arr.ValueKind != JsonValueKind.Array)
+            return negated;
+
+        foreach (var item in arr.EnumerateArray())
+        {
+            if (TryGetElementAtPath(item, suffixPath, out var actual) && JsonStartsWithLiteral(actual, prefix))
+                return !negated;
+        }
+
+        return negated;
+    }
+
+    private static bool JsonStartsWithLiteral(JsonElement actual, string prefix)
+    {
+        if (actual.ValueKind != JsonValueKind.String)
+            return false;
+
+        var s = actual.GetString();
+        return s is not null && s.StartsWith(prefix, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Substring match on the value at <paramref name="path"/> (JSON string only). Same wildcard rules as <see cref="EvaluatePathStartsWith"/>.
+    /// </summary>
+    private static bool EvaluatePathContains(JsonElement root, string path, string needle, bool negated)
+    {
+        if (PathContainsWildcardSegment(path))
+            return EvaluateWildcardPathContains(root, path, needle, negated);
+
+        if (!TryGetElementAtPath(root, path, out var actual))
+            return negated;
+
+        var matches = JsonContainsLiteral(actual, needle);
+        return negated ? !matches : matches;
+    }
+
+    private static bool EvaluateWildcardPathContains(JsonElement root, string path, string needle, bool negated)
+    {
+        if (!TrySplitWildcardPath(path, out var prefixPath, out var suffixPath))
+            return false;
+
+        JsonElement arr;
+        if (string.IsNullOrEmpty(prefixPath))
+            arr = root;
+        else if (!TryGetElementAtPath(root, prefixPath, out arr))
+            return negated;
+
+        if (arr.ValueKind != JsonValueKind.Array)
+            return negated;
+
+        foreach (var item in arr.EnumerateArray())
+        {
+            if (TryGetElementAtPath(item, suffixPath, out var actual) && JsonContainsLiteral(actual, needle))
+                return !negated;
+        }
+
+        return negated;
+    }
+
+    private static bool JsonContainsLiteral(JsonElement actual, string needle)
+    {
+        if (actual.ValueKind != JsonValueKind.String)
+            return false;
+
+        var s = actual.GetString();
+        return s is not null && s.Contains(needle, StringComparison.Ordinal);
     }
 
     /// <summary>

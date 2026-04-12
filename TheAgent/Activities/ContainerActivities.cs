@@ -33,9 +33,10 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
     public async Task<string> EnsureWorkspaceVolumeAsync(string tenantId, string repositoryUrl)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryUrl);
 
-        var volumeName = BuildVolumeName(tenantId, repositoryUrl);
+        var volumeName = string.IsNullOrWhiteSpace(repositoryUrl)
+            ? BuildTenantVolumeName(tenantId)
+            : BuildVolumeName(tenantId, repositoryUrl);
         var logger = ActivityExecutionContext.Current.Logger;
         logger.LogInformation("Ensuring workspace volume '{VolumeName}' for tenant={TenantId}.", volumeName, tenantId);
 
@@ -250,14 +251,18 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
         var repoHash = Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(repositoryUrl)))[..12].ToLowerInvariant();
 
-        var sanitised = tenantId
-            .Select(c => char.IsLetterOrDigit(c) ? c : '-')
-            .Take(40)
-            .ToArray();
-        var safeTenant = new string(sanitised);
-
+        var safeTenant = SanitizeTenantId(tenantId);
         return $"xianix-{safeTenant}-{repoHash}";
     }
+
+    private static string BuildTenantVolumeName(string tenantId)
+    {
+        var safeTenant = SanitizeTenantId(tenantId);
+        return $"xianix-{safeTenant}-ephemeral";
+    }
+
+    private static string SanitizeTenantId(string tenantId) =>
+        new(tenantId.Select(c => char.IsLetterOrDigit(c) ? c : '-').Take(40).ToArray());
 
     private static List<string> BuildEnvVars(ContainerExecutionInput input)
     {

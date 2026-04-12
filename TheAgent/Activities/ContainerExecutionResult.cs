@@ -20,4 +20,5 @@ public sealed class ContainerExecutionResult
     public long?   CacheReadTokens      { get; set; }
     public long?   CacheCreationTokens  { get; set; }
     public string? SessionId            { get; set; }
+    public double? DurationSeconds      { get; set; }
 }

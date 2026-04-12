@@ -138,9 +138,10 @@ public class ProcessingWorkflow
             var reviewText = TryExtractField(executionResult.StdOut, "result");
             Workflow.Logger.LogInformation(
                 "Execution '{Label}' completed for tenant={TenantId}. " +
-                "Cost=${CostUsd:F4}, tokens(in={InputTokens}, out={OutputTokens}, " +
+                "Duration={Duration:F1}s, Cost=${CostUsd:F4}, tokens(in={InputTokens}, out={OutputTokens}, " +
                 "cacheRead={CacheRead}, cacheCreate={CacheCreate}), session={SessionId}.\n{Output}",
                 executionLabel, tenantId,
+                executionResult.DurationSeconds ?? 0,
                 executionResult.CostUsd ?? 0,
                 executionResult.InputTokens ?? 0,
                 executionResult.OutputTokens ?? 0,
@@ -151,11 +152,13 @@ public class ProcessingWorkflow
         }
         else
         {
+            var errorDetail = TryExtractField(executionResult.StdOut, "error") ?? executionResult.StdErr;
             Workflow.Logger.LogError(
                 "Execution '{Label}' failed (exit={ExitCode}) for tenant={TenantId}. " +
-                "Cost=${CostUsd:F4}.\nStderr: {Stderr}",
+                "Duration={Duration:F1}s, Cost=${CostUsd:F4}.\nError: {Error}",
                 executionLabel, executionResult.ExitCode, tenantId,
-                executionResult.CostUsd ?? 0, executionResult.StdErr);
+                executionResult.DurationSeconds ?? 0,
+                executionResult.CostUsd ?? 0, errorDetail);
         }
     }
 
@@ -225,6 +228,7 @@ public class ProcessingWorkflow
             result.CacheReadTokens     = GetLong(root, "cache_read_tokens");
             result.CacheCreationTokens = GetLong(root, "cache_creation_tokens");
             result.SessionId           = GetString(root, "session_id");
+            result.DurationSeconds     = GetDouble(root, "duration_seconds");
         }
         catch (JsonException ex)
         {

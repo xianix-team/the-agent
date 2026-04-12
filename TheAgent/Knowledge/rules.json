@@ -55,8 +55,12 @@
                 "name": "azuredevops-pull-request-review",
                 "match-any": [
                     {
-                        "name": "azuredevops-pr-updated-event",
-                        "rule": "eventType==git.pullrequest.updated&&resource.reviewers.*.displayName=='xianix-agent'"
+                        "name": "azuredevops-pr-source-branch-updated",
+                        "rule": "eventType==git.pullrequest.updated&&resource.reviewers.*.displayName=='xianix-agent'&&message.text*='updated the source branch'"
+                    },
+                    {
+                        "name": "azuredevops-pr-reviewer-assigned",
+                        "rule": "eventType==git.pullrequest.updated&&resource.reviewers.*.displayName=='xianix-agent'&&message.text*='as a reviewer'"
                     }
                 ],
                 "use-inputs": [
