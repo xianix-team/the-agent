@@ -15,7 +15,7 @@ namespace Xianix.Activities;
 /// The Xians platform instantiates activities via Activator.CreateInstance() (no-arg),
 /// so this class must have a parameterless constructor.
 /// </summary>
-public class ContainerActivities : IDisposable
+public class ContainerActivities : IDisposable, IAsyncDisposable
 {
     private readonly IDockerClient _docker;
     private bool _disposed;
@@ -32,21 +32,32 @@ public class ContainerActivities : IDisposable
     [Activity]
     public async Task<string> EnsureWorkspaceVolumeAsync(string tenantId, string repositoryUrl)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryUrl);
+
         var volumeName = BuildVolumeName(tenantId, repositoryUrl);
         var logger = ActivityExecutionContext.Current.Logger;
         logger.LogInformation("Ensuring workspace volume '{VolumeName}' for tenant={TenantId}.", volumeName, tenantId);
 
-        var volumes = await _docker.Volumes.ListAsync();
-        var exists = volumes.Volumes?.Any(v => v.Name == volumeName) ?? false;
+        try
+        {
+            var volumes = await _docker.Volumes.ListAsync();
+            var exists = volumes.Volumes?.Any(v => v.Name == volumeName) ?? false;
 
-        if (!exists)
-        {
-            await _docker.Volumes.CreateAsync(new VolumesCreateParameters { Name = volumeName });
-            logger.LogInformation("Created volume '{VolumeName}'.", volumeName);
+            if (!exists)
+            {
+                await _docker.Volumes.CreateAsync(new VolumesCreateParameters { Name = volumeName });
+                logger.LogInformation("Created volume '{VolumeName}'.", volumeName);
+            }
+            else
+            {
+                logger.LogDebug("Volume '{VolumeName}' already exists.", volumeName);
+            }
         }
-        else
+        catch (DockerApiException ex)
         {
-            logger.LogDebug("Volume '{VolumeName}' already exists.", volumeName);
+            logger.LogError(ex, "Docker API error while ensuring volume '{VolumeName}'.", volumeName);
+            throw;
         }
 
         return volumeName;
@@ -59,11 +70,14 @@ public class ContainerActivities : IDisposable
     [Activity]
     public async Task<string> StartContainerAsync(ContainerExecutionInput input)
     {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentException.ThrowIfNullOrWhiteSpace(input.TenantId);
+
         var image = EnvConfig.ExecutorImage;
         var logger = ActivityExecutionContext.Current.Logger;
         logger.LogInformation(
-            "Starting container for tenant={TenantId}, plugins={PluginCount}, image={Image}.",
-            input.TenantId, input.ClaudeCodePlugins, image);
+            "Starting container for tenant={TenantId}, image={Image}.",
+            input.TenantId, image);
 
         var env = BuildEnvVars(input);
 
@@ -87,13 +101,26 @@ public class ContainerActivities : IDisposable
             },
         };
 
-        var response = await _docker.Containers.CreateContainerAsync(containerParams);
-        var containerId = response.ID;
+        try
+        {
+            var response = await _docker.Containers.CreateContainerAsync(containerParams);
+            var containerId = response.ID;
 
-        await _docker.Containers.StartContainerAsync(containerId, new ContainerStartParameters());
-        logger.LogInformation("Container '{ContainerId}' started.", ShortId(containerId));
+            await _docker.Containers.StartContainerAsync(containerId, new ContainerStartParameters());
+            logger.LogInformation("Container '{ContainerId}' started for tenant={TenantId}.", ShortId(containerId), input.TenantId);
 
-        return containerId;
+            return containerId;
+        }
+        catch (DockerImageNotFoundException)
+        {
+            logger.LogError("Docker image '{Image}' not found. Ensure it is pulled or available locally.", image);
+            throw;
+        }
+        catch (DockerApiException ex)
+        {
+            logger.LogError(ex, "Docker API error while starting container for tenant={TenantId}.", input.TenantId);
+            throw;
+        }
     }
 
     /// <summary>
@@ -107,6 +134,9 @@ public class ContainerActivities : IDisposable
         string executionLabel,
         int timeoutSeconds = 600)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(containerId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+
         var logger = ActivityExecutionContext.Current.Logger;
         var shortId = ShortId(containerId);
         logger.LogInformation("Waiting for container '{ContainerId}' (timeout={Timeout}s).", shortId, timeoutSeconds);
@@ -168,6 +198,8 @@ public class ContainerActivities : IDisposable
     [Activity]
     public async Task CleanupContainerAsync(string containerId)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(containerId);
+
         ActivityExecutionContext.Current.Logger.LogInformation(
             "Cleaning up container '{ContainerId}'.", ShortId(containerId));
         try
@@ -180,6 +212,11 @@ public class ContainerActivities : IDisposable
         {
             // Already removed — idempotent.
         }
+        catch (DockerApiException ex)
+        {
+            ActivityExecutionContext.Current.Logger.LogWarning(
+                ex, "Docker API error during cleanup of container '{ContainerId}'.", ShortId(containerId));
+        }
     }
 
     public void Dispose()
@@ -190,6 +227,19 @@ public class ContainerActivities : IDisposable
         GC.SuppressFinalize(this);
     }
 
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        if (_docker is IAsyncDisposable asyncDisposable)
+            await asyncDisposable.DisposeAsync();
+        else
+            _docker.Dispose();
+
+        GC.SuppressFinalize(this);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private static string ShortId(string containerId) =>
@@ -197,9 +247,6 @@ public class ContainerActivities : IDisposable
 
     private static string BuildVolumeName(string tenantId, string repositoryUrl)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryUrl);
-
         var repoHash = Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(repositoryUrl)))[..12].ToLowerInvariant();
 
@@ -243,6 +290,9 @@ public class ContainerActivities : IDisposable
     /// </summary>
     private static void InjectPluginEnvVars(string claudeCodePluginsJson, List<string> env)
     {
+        if (string.IsNullOrWhiteSpace(claudeCodePluginsJson))
+            return;
+
         try
         {
             using var pluginsDoc = System.Text.Json.JsonDocument.Parse(claudeCodePluginsJson);

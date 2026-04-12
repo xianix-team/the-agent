@@ -14,10 +14,13 @@ public class XianixAgent(IEventOrchestrator orchestrator, ILogger<XianixAgent> l
 {
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
-        var xiansAgent = await CreateAndRegisterAgentAsync();
+        logger.LogInformation("Initializing Xians platform connection.");
+        var xiansAgent = await CreateAndRegisterAgentAsync(cancellationToken);
+
+        logger.LogInformation("Uploading knowledge resources.");
+        await UploadKnowledgeAsync(xiansAgent);
 
         ConfigureCustomWorkflows(xiansAgent);
-        // ConfigureConversationalWorkflow(xiansAgent);
         ConfigureWebhookWorkflow(xiansAgent, cancellationToken);
 
         logger.LogInformation("All workflows configured. Starting agent.");
@@ -35,45 +38,58 @@ public class XianixAgent(IEventOrchestrator orchestrator, ILogger<XianixAgent> l
             .AddActivity<ContainerActivities>();
     }
 
-    // private static void ConfigureConversationalWorkflow(XiansAgent xiansAgent)
-    // {
-    //     var mafAgent = new MafSubAgent(EnvConfig.AnthropicApiKey);
-    //     var conversationalWorkflow = xiansAgent.Workflows.DefineSupervisor();
-
-    //     conversationalWorkflow.OnUserChatMessage(async (context) =>
-    //     {
-    //         context.SkipResponse = true;
-    //         var response = await mafAgent.RunAsync(context);
-    //         await context.ReplyAsync(response);
-    //     });
-    // }
-
     private void ConfigureWebhookWorkflow(XiansAgent xiansAgent, CancellationToken cancellationToken)
     {
         var webhookWorkflow = xiansAgent.Workflows.DefineIntegrator();
 
         webhookWorkflow.OnWebhook(async (context) =>
         {
-            var result = await orchestrator.OrchestrateAsync(
-                context.Webhook.Name,
-                context.Webhook.Payload,
-                context.Webhook.TenantId,
-                cancellationToken);
-
-            if (!result.Handled)
+            try
             {
-                context.Respond(new { status = "ignored", reason = result.SkipReason });
-                return;
+                var batch = await orchestrator.OrchestrateAsync(
+                    context.Webhook.Name,
+                    context.Webhook.Payload,
+                    context.Webhook.TenantId,
+                    cancellationToken);
+
+                if (!batch.Handled)
+                {
+                    context.Respond(new { status = "ignored", reason = batch.SkipReason });
+                    return;
+                }
+
+                foreach (var result in batch.Matches)
+                {
+                    await XiansContext.Workflows.SignalWithActivationStartAsync<ActivationWorkflow>(
+                        "ProcessWebhook", result);
+                }
+
+                context.Respond(new
+                {
+                    status = "success",
+                    matchCount = batch.Matches.Count,
+                    matches = batch.Matches.Select(m => new
+                    {
+                        m.ExecutionBlockName,
+                        inputs = m.Inputs,
+                    }),
+                });
             }
-
-            await XiansContext.Workflows.SignalWithActivationStartAsync<ActivationWorkflow>(
-                "ProcessWebhook", result);
-
-            context.Respond(new { status = "success", inputs = result.Inputs });
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex,
+                    "Webhook handler failed for '{WebhookName}', tenant='{TenantId}'.",
+                    context.Webhook.Name, context.Webhook.TenantId);
+                context.Respond(new { status = "error", reason = "Internal processing error." });
+            }
         });
     }
 
-    private static async Task<XiansAgent> CreateAndRegisterAgentAsync()
+    private static async Task<XiansAgent> CreateAndRegisterAgentAsync(CancellationToken cancellationToken)
     {
         var xiansPlatform = await XiansPlatform.InitializeAsync(new()
         {
@@ -86,6 +102,8 @@ public class XianixAgent(IEventOrchestrator orchestrator, ILogger<XianixAgent> l
                 Knowledge = { Enabled = false }
             }
         });
+
+        cancellationToken.ThrowIfCancellationRequested();
 
         var xiansAgent = xiansPlatform.Agents.Register(new()
         {
@@ -100,12 +118,15 @@ public class XianixAgent(IEventOrchestrator orchestrator, ILogger<XianixAgent> l
             IsTemplate = true
         });
 
+        return xiansAgent;
+    }
+
+    private static async Task UploadKnowledgeAsync(XiansAgent xiansAgent)
+    {
         await xiansAgent.Knowledge.UploadEmbeddedResourceAsync(
             resourcePath: "Knowledge/rules.json",
             knowledgeName: Constants.RulesKnowledgeName,
             knowledgeType: "json"
         );
-
-        return xiansAgent;
     }
 }

@@ -24,12 +24,13 @@ public class EventOrchestratorTests
         _evaluator.EvaluateAsync("github-pr", Arg.Any<object?>())
                   .Returns(Task.FromResult(EvaluationOutcome.Match(evaluation)));
 
-        var result = await _sut.OrchestrateAsync("github-pr", new { }, "tenant-1");
+        var batch = await _sut.OrchestrateAsync("github-pr", new { }, "tenant-1");
 
-        Assert.True(result.Handled);
-        Assert.Equal("github-pr", result.WebhookName);
-        Assert.Equal(42L, result.Inputs["pr_id"]);
-        Assert.Equal("opened", result.Inputs["action"]);
+        Assert.True(batch.Handled);
+        Assert.Single(batch.Matches);
+        Assert.Equal("github-pr", batch.Matches[0].WebhookName);
+        Assert.Equal(42L, batch.Matches[0].Inputs["pr_id"]);
+        Assert.Equal("opened", batch.Matches[0].Inputs["action"]);
     }
 
     [Fact]
@@ -38,12 +39,11 @@ public class EventOrchestratorTests
         _evaluator.EvaluateAsync("unknown-webhook", Arg.Any<object?>())
                   .Returns(Task.FromResult(EvaluationOutcome.Skip("no rule configured for webhook 'unknown-webhook'")));
 
-        var result = await _sut.OrchestrateAsync("unknown-webhook", new { }, "tenant-1");
+        var batch = await _sut.OrchestrateAsync("unknown-webhook", new { }, "tenant-1");
 
-        Assert.False(result.Handled);
-        Assert.Equal("unknown-webhook", result.WebhookName);
-        Assert.Empty(result.Inputs);
-        Assert.NotNull(result.SkipReason);
+        Assert.False(batch.Handled);
+        Assert.Empty(batch.Matches);
+        Assert.NotNull(batch.SkipReason);
     }
 
     [Fact]
@@ -76,15 +76,15 @@ public class EventOrchestratorTests
         _evaluator.EvaluateAsync(Arg.Any<string>(), Arg.Any<object?>())
                   .Returns(Task.FromResult(EvaluationOutcome.Match(evaluation)));
 
-        var result = await _sut.OrchestrateAsync("github-pr", new { }, "tenant-1");
+        var batch = await _sut.OrchestrateAsync("github-pr", new { }, "tenant-1");
 
-        Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(result.Inputs);
+        Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(batch.Matches[0].Inputs);
     }
 
     [Fact]
     public async Task OrchestrateAsync_WhenEvaluationHasPromptAndPlugins_SetsExecutionSpec()
     {
-        var plugin = new PluginEntry { Name = "github", GithubSource = "@modelcontextprotocol/server-github" };
+        var plugin = new PluginEntry { PluginName = "github@modelcontextprotocol" };
         var evaluation = new EvaluationResult(
             new Dictionary<string, object?> { ["pr-number"] = 7 },
             [plugin],
@@ -93,13 +93,15 @@ public class EventOrchestratorTests
         _evaluator.EvaluateAsync("pull requests", Arg.Any<object?>())
                   .Returns(Task.FromResult(EvaluationOutcome.Match(evaluation)));
 
-        var result = await _sut.OrchestrateAsync("pull requests", new { }, "tenant-1");
+        var batch = await _sut.OrchestrateAsync("pull requests", new { }, "tenant-1");
 
-        Assert.True(result.Handled);
-        Assert.NotNull(result.Execution);
-        Assert.Single(result.Execution!.Plugins);
-        Assert.Equal("github", result.Execution.Plugins[0].Name);
-        Assert.Equal("Review PR #7 in my-org/my-repo", result.Execution.Prompt);
+        Assert.True(batch.Handled);
+        Assert.Single(batch.Matches);
+        Assert.NotNull(batch.Matches[0].Execution);
+        Assert.Single(batch.Matches[0].Execution!.Plugins);
+        Assert.Equal("github", batch.Matches[0].Execution.Plugins[0].ShortName);
+        Assert.Equal("github@modelcontextprotocol", batch.Matches[0].Execution.Plugins[0].PluginName);
+        Assert.Equal("Review PR #7 in my-org/my-repo", batch.Matches[0].Execution.Prompt);
     }
 
     [Fact]
@@ -113,9 +115,35 @@ public class EventOrchestratorTests
         _evaluator.EvaluateAsync(Arg.Any<string>(), Arg.Any<object?>())
                   .Returns(Task.FromResult(EvaluationOutcome.Match(evaluation)));
 
-        var result = await _sut.OrchestrateAsync("github-pr", new { }, "tenant-1");
+        var batch = await _sut.OrchestrateAsync("github-pr", new { }, "tenant-1");
 
-        Assert.True(result.Handled);
-        Assert.Null(result.Execution);
+        Assert.True(batch.Handled);
+        Assert.Null(batch.Matches[0].Execution);
+    }
+
+    [Fact]
+    public async Task OrchestrateAsync_WhenMultipleExecutionsMatch_ReturnsAll()
+    {
+        var a = new EvaluationResult(
+            new Dictionary<string, object?> { ["a"] = 1 },
+            [],
+            "prompt-a",
+            "block-a");
+        var b = new EvaluationResult(
+            new Dictionary<string, object?> { ["b"] = 2 },
+            [],
+            "prompt-b",
+            "block-b");
+        _evaluator.EvaluateAsync("multi", Arg.Any<object?>())
+                  .Returns(Task.FromResult(EvaluationOutcome.MatchMany([a, b])));
+
+        var batch = await _sut.OrchestrateAsync("multi", new { }, "tenant-1");
+
+        Assert.True(batch.Handled);
+        Assert.Equal(2, batch.Matches.Count);
+        Assert.Equal("block-a", batch.Matches[0].ExecutionBlockName);
+        Assert.Equal("prompt-a", batch.Matches[0].Execution!.Prompt);
+        Assert.Equal("block-b", batch.Matches[1].ExecutionBlockName);
+        Assert.Equal("prompt-b", batch.Matches[1].Execution!.Prompt);
     }
 }

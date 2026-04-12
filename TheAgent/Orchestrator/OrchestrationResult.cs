@@ -25,6 +25,11 @@ public sealed record OrchestrationResult
     public ExecutionSpec? Execution { get; init; }
 
     /// <summary>
+    /// Optional <c>name</c> of the rules execution block that matched (from rules.json).
+    /// </summary>
+    public string? ExecutionBlockName { get; init; }
+
+    /// <summary>
     /// Human-readable explanation of why this webhook was not handled.
     /// Only set when <see cref="Handled"/> is <c>false</c>.
     /// </summary>
@@ -34,8 +39,17 @@ public sealed record OrchestrationResult
         string webhookName,
         string tenantId,
         Dictionary<string, object?> inputs,
-        ExecutionSpec? execution = null) =>
-        new() { Handled = true, WebhookName = webhookName, TenantId = tenantId, Inputs = inputs, Execution = execution };
+        ExecutionSpec? execution = null,
+        string? executionBlockName = null) =>
+        new()
+        {
+            Handled = true,
+            WebhookName = webhookName,
+            TenantId = tenantId,
+            Inputs = inputs,
+            Execution = execution,
+            ExecutionBlockName = executionBlockName,
+        };
 
     public static OrchestrationResult Ignored(string webhookName, string tenantId, string? skipReason = null) =>
         new() { Handled = false, WebhookName = webhookName, TenantId = tenantId, SkipReason = skipReason };
@@ -60,6 +74,19 @@ public sealed record OrchestrationResult
             _ => value.ToString()
         };
     }
+}
+
+/// <summary>
+/// Result of orchestrating a webhook: zero or more matched execution runs, or a skip reason.
+/// </summary>
+public sealed record OrchestrateWebhookResult
+{
+    public IReadOnlyList<OrchestrationResult> Matches { get; init; } = [];
+
+    /// <summary>Set when <see cref="Matches"/> is empty.</summary>
+    public string? SkipReason { get; init; }
+
+    public bool Handled => Matches.Count > 0;
 }
 
 /// <summary>

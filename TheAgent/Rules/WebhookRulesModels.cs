@@ -4,55 +4,60 @@ namespace Xianix.Rules;
 
 public sealed class WebhookRuleSet
 {
-    [JsonPropertyName("webhook-name")]
+    [JsonPropertyName("webhook")]
     public string WebhookName { get; init; } = "";
 
-    [JsonPropertyName("match")]
+    [JsonPropertyName("executions")]
+    public List<WebhookExecution> Executions { get; init; } = [];
+}
+
+public sealed class WebhookExecution
+{
+    /// <summary>Optional label for this execution block (used in skip reasons and logs).</summary>
+    [JsonPropertyName("name")]
+    public string Name { get; init; } = "";
+
+    [JsonPropertyName("match-any")]
     public List<MatchEntry> Match { get; init; } = [];
 
-    [JsonPropertyName("inputs")]
+    [JsonPropertyName("use-inputs")]
     public List<InputRuleEntry> InputRules { get; init; } = [];
 
-    /// <summary>
-    /// Claude Code marketplace plugins to install before running the prompt.
-    /// Each entry is a marketplace plugin reference (name + github-source) — no execution command here.
-    /// </summary>
-    [JsonPropertyName("claude-code-plugins")]
-    public List<PluginEntry> ClaudeCodePlugins { get; init; } = [];
+    [JsonPropertyName("use-plugins")]
+    public List<PluginEntry> Plugins { get; init; } = [];
 
     /// <summary>
-    /// Claude Code prompt template to execute after all plugins are installed.
-    /// Supports &lt;input-name&gt; placeholders that are replaced with resolved input values.
+    /// Prompt template to execute after all plugins are installed.
+    /// Supports <c>{{input-name}}</c> placeholders that are replaced with resolved input values.
     /// </summary>
-    [JsonPropertyName("prompt")]
+    [JsonPropertyName("execute-prompt")]
     public string Prompt { get; init; } = "";
 }
 
 /// <summary>
-/// Describes a Claude Code marketplace plugin to install into the executor container before running the prompt.
-/// Does not contain execution logic — that lives in the rule set's <see cref="WebhookRuleSet.Prompt"/>.
+/// A marketplace plugin to install into the executor container before running the prompt.
 /// </summary>
 public sealed class PluginEntry
 {
-    [JsonPropertyName("name")]
-    public string Name { get; init; } = "";
-
-    [JsonPropertyName("description")]
-    public string Description { get; init; } = "";
+    /// <summary>
+    /// Derived from <see cref="PluginName"/>: the portion before the <c>@</c> delimiter.
+    /// </summary>
+    [JsonIgnore]
+    public string ShortName => PluginName.Contains('@') ? PluginName[..PluginName.IndexOf('@')] : PluginName;
 
     /// <summary>
-    /// Claude Code plugin reference in <c>plugin-name@marketplace-name</c> format,
-    /// e.g. <c>github@claude-plugins-official</c> or <c>everything-claude-code@everything-claude-code</c>.
+    /// Plugin reference in <c>plugin-name@marketplace-name</c> format,
+    /// e.g. <c>pr-reviewer@xianix-plugins-official</c>.
     /// Passed directly to <c>claude plugin install</c> inside the executor container.
     /// </summary>
-    [JsonPropertyName("github-source")]
-    public string GithubSource { get; init; } = "";
+    [JsonPropertyName("plugin-name")]
+    public string PluginName { get; init; } = "";
 
     /// <summary>
     /// Optional marketplace source to register before installing the plugin.
     /// Required for any plugin that does not come from the built-in official marketplace.
     /// Accepts the same formats as <c>claude plugin marketplace add</c>:
-    /// a GitHub <c>owner/repo</c> shorthand (e.g. <c>affaan-m/everything-claude-code</c>),
+    /// a GitHub <c>owner/repo</c> shorthand (e.g. <c>xianix-team/plugins-official</c>),
     /// a full git URL, a local path, or a remote URL to a <c>marketplace.json</c> file.
     /// When omitted the official Anthropic marketplace is assumed.
     /// </summary>
@@ -61,7 +66,7 @@ public sealed class PluginEntry
 
     /// <summary>
     /// Optional environment variables to inject into the executor container before running the plugin.
-    /// Each entry's <c>value</c> may be a static string or a <c>{{env.VAR_NAME}}</c> reference that
+    /// Each entry's <c>value</c> may be a static string or an <c>env.VAR_NAME</c> reference that
     /// is resolved from the host process environment at container-start time.
     /// </summary>
     [JsonPropertyName("envs")]

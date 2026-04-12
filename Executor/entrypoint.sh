@@ -18,6 +18,12 @@ if [ -z "${REPOSITORY_URL}" ]; then
     exit 1
 fi
 
+# Azure DevOps URLs often include https://<user>@dev.azure.com/...; PAT url.insteadOf only
+# matches https://dev.azure.com/, so Git would otherwise prompt for a password (fails in CI).
+if [ "${PLATFORM}" = "azuredevops" ]; then
+    REPOSITORY_URL=$(printf '%s' "${REPOSITORY_URL}" | sed -E 's|^https://[^@/]+@|https://|')
+fi
+
 log "Repository:          ${REPOSITORY_URL}"
 log "Platform:            ${PLATFORM}"
 [ -n "${GIT_REF}" ] && log "Git ref:             ${GIT_REF}"
@@ -29,6 +35,10 @@ if [ -n "${GITHUB_TOKEN:-}" ]; then
 fi
 if [ "${PLATFORM}" = "azuredevops" ] && [ -n "${AZURE_DEVOPS_TOKEN:-}" ]; then
     git config --global url."https://pat:${AZURE_DEVOPS_TOKEN}@dev.azure.com/".insteadOf "https://dev.azure.com/" >&2 2>&1
+fi
+if [ "${PLATFORM}" = "azuredevops" ] && [ -z "${AZURE_DEVOPS_TOKEN:-}" ]; then
+    log "FATAL: AZURE_DEVOPS_TOKEN is required when platform=azuredevops (clone uses PAT via git url.insteadOf)."
+    exit 1
 fi
 
 # ── Bare repo (shared object store on the persistent volume) ─────────────────
@@ -64,21 +74,31 @@ fi
 cd "${WORK_DIR}"
 log "--- Worktree ready at ${WORK_DIR} ---"
 
-# ── Install Claude Code plugins ─────────────────────────────────────────────
-# Each entry is a JSON object: { name, github-source, marketplace? }
+# ── Install plugins ───────────────────────────────────────────────────────
+# Each entry is a JSON object: { "plugin-name", "marketplace"?, "envs"? }
 #
-#   github-source — plugin reference in `plugin-name@marketplace-name` format passed to
-#                   `claude plugin install` (e.g. `code-review@claude-plugins-official`)
-#   marketplace   — optional source for `claude plugin marketplace add` before installing.
-#                   Each unique marketplace is registered only once (deduplication).
+#   plugin-name — plugin reference in `plugin-name@marketplace-name` format passed to
+#                 `claude plugin install` (e.g. `pr-reviewer@xianix-plugins-official`)
+#   marketplace — optional source for `claude plugin marketplace add` before installing.
+#                 Each unique marketplace is registered only once (deduplication).
 #
 # Failures on individual plugins are non-fatal — the prompt may still succeed with
 # partial tooling.
+#
+# Only consider objects with a non-empty string plugin-name. Skip JSON null array
+# entries and malformed objects so we never run `claude plugin install null`.
+_plugin_entry='select(
+  (type == "object") and
+  (has("plugin-name")) and
+  (.["plugin-name"] | type == "string") and
+  (.["plugin-name"] | length > 0)
+)'
+
 if [ -n "${CLAUDE_CODE_PLUGINS:-}" ] && [ "${CLAUDE_CODE_PLUGINS}" != "[]" ]; then
     log "--- Installing Claude Code plugins ---"
 
-    # Pass 1: register each unique marketplace once
-    echo "${CLAUDE_CODE_PLUGINS}" | jq -r '.[].marketplace // empty' | sort -u | while IFS= read -r mkt; do
+    # Pass 1: register each unique marketplace once (only for valid plugin entries)
+    echo "${CLAUDE_CODE_PLUGINS}" | jq -r ".[] | ${_plugin_entry} | .marketplace // empty" | sort -u | while IFS= read -r mkt; do
         [ -z "${mkt}" ] && continue
         [ "${mkt}" = "anthropics/claude-plugins-official" ] && continue
         if claude plugin marketplace list 2>/dev/null | grep -qF "${mkt}"; then
@@ -90,10 +110,10 @@ if [ -n "${CLAUDE_CODE_PLUGINS:-}" ] && [ "${CLAUDE_CODE_PLUGINS}" != "[]" ]; th
         fi
     done
 
-    # Pass 2: install each plugin
-    echo "${CLAUDE_CODE_PLUGINS}" | jq -c '.[]' | while IFS= read -r plugin; do
-        name=$(echo "${plugin}" | jq -r '.name')
-        url=$(echo "${plugin}"  | jq -r '.["github-source"]')
+    # Pass 2: install each valid plugin
+    echo "${CLAUDE_CODE_PLUGINS}" | jq -c ".[] | ${_plugin_entry}" | while IFS= read -r plugin; do
+        name=$(echo "${plugin}" | jq -r '.["plugin-name"]' | cut -d@ -f1)
+        url=$(echo "${plugin}"  | jq -r '.["plugin-name"]')
 
         log "  Installing plugin '${name}' (${url})"
         claude plugin install "${url}" --scope project >&2 2>&1 || \

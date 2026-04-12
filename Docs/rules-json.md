@@ -1,54 +1,70 @@
 # Rules Configuration (`rules.json`)
 
-The rules file is the single configuration surface that controls **what the agent does** when a webhook arrives. Each entry in the JSON array is a self-contained rule set that maps a webhook event to a fully executable Claude Code session — complete with payload filtering, input extraction, plugin installation, and a templated prompt.
+The rules file is the single configuration surface that controls **what the agent does** when a webhook arrives. Each entry in the JSON array is a self-contained rule set that maps a webhook name to one or more **execution blocks** — each block defines payload filters, input extraction, plugin installation, and a templated prompt for a Claude Code session in the executor container.
 
 ```
 rules.json  →  WebhookRulesEvaluator  →  EventOrchestrator  →  ProcessingWorkflow  →  Executor Container
 ```
 
+In **this repository**, the default rules are embedded from [`TheAgent/Knowledge/rules.json`](../TheAgent/Knowledge/rules.json) and uploaded as Xians knowledge document **`Rules`** (`Constants.RulesKnowledgeName`).
+
 ---
 
-## File Structure
+## File structure
 
-`rules.json` is a JSON array of **rule set** objects. Each rule set targets one webhook name and is independent of the others.
+`rules.json` is a JSON array of **rule set** objects. Each rule set targets one **webhook** name (case-insensitive) and contains an **executions** array. Each execution is an independent pipeline: optional filters, inputs, plugins, and prompt.
 
 ```jsonc
 [
   {
-    "webhook-name": "...",       // 1. Which webhook to handle
-    "match": [ ... ],            // 2. When to act (optional filters)
-    "inputs": [ ... ],           // 3. What to extract from the payload
-    "claude-code-plugins": [...],// 4. Which plugins to install
-    "prompt": "..."              // 5. What to tell Claude Code
+    "webhook": "...",
+    "executions": [
+      {
+        "name": "...",
+        "match-any": [ ... ],
+        "use-inputs": [ ... ],
+        "use-plugins": [ ... ],
+        "execute-prompt": "..."
+      }
+    ]
   }
 ]
 ```
+
+| Field | Description |
+|-------|-------------|
+| `webhook` | Webhook name from Xians Agent Studio (must match incoming events) |
+| `executions` | One or more execution blocks |
+
+If **several** execution blocks in the same rule set match the same webhook payload, **each** match is scheduled separately: the integrator starts one activation / processing workflow per match (see `XianixAgent` webhook handler).
 
 ### Evaluation flow
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │  Incoming Webhook                                                    │
-│  name: "pull requests"   payload: { action: "opened", number: 42 }  │
+│  name: "Default"   payload: { "action": "opened", ... }              │
 └───────────────────────────────┬──────────────────────────────────────┘
                                 │
                     ┌───────────▼───────────┐
                     │  Find rule set where  │
-                    │  webhook-name matches │
+                    │  webhook matches      │
                     └───────────┬───────────┘
                                 │
                     ┌───────────▼───────────┐
-                    │  Evaluate match rules │──── No match? → skip
-                    │  (OR logic)           │
+                    │  For each execution:  │
+                    │  Evaluate match-any   │──── No match? → skip block
+                    │  (OR across entries)  │
                     └───────────┬───────────┘
-                                │ At least one passes
+                                │ At least one match-any passes
                     ┌───────────▼───────────┐
-                    │  Extract inputs from  │
-                    │  payload              │
+                    │  Extract use-inputs   │
+                    │  from payload         │
                     └───────────┬───────────┘
                                 │
                     ┌───────────▼───────────┐
-                    │  Interpolate prompt   │
+                    │  Interpolate          │
+                    │  execute-prompt       │
                     │  with {{input-name}}  │
                     └───────────┬───────────┘
                                 │
@@ -60,24 +76,24 @@ rules.json  →  WebhookRulesEvaluator  →  EventOrchestrator  →  ProcessingW
 
 ---
 
-## 1. `webhook-name`
+## 1. `webhook`
 
 Case-insensitive match against the webhook name configured in Xians Agent Studio.
 
 ```json
-"webhook-name": "pull requests"
+"webhook": "Default"
 ```
 
-Only one rule set per webhook name is used — the **first** match in the array wins.
+Only one rule set per webhook name is used — the **first** matching entry in the `rules.json` array wins.
 
 ---
 
-## 2. `match` — Payload Filtering
+## 2. `match-any` — Payload filtering
 
-An array of filter rules evaluated with **OR logic**: the webhook passes if **any** entry matches. If `match` is omitted or empty, the webhook passes unconditionally.
+Inside each execution block, `match-any` is an array of filter rules evaluated with **OR logic**: the block passes if **any** entry matches. If `match-any` is omitted or empty, the block passes unconditionally.
 
 ```json
-"match": [
+"match-any": [
   { "name": "pr-opened-event",       "rule": "action==opened" },
   { "name": "pr-synchronize-event",  "rule": "action==synchronize" }
 ]
@@ -85,12 +101,12 @@ An array of filter rules evaluated with **OR logic**: the webhook passes if **an
 
 | Field  | Description |
 |--------|-------------|
-| `name` | Human-readable label (for logging/debugging) |
+| `name` | Human-readable label (for logging and skip reasons) |
 | `rule` | A filter expression — see syntax below |
 
 ### Filter expression syntax
 
-Each rule is a simple comparison of a **JSON path** against a **literal value**:
+Each rule is a comparison of a **JSON path** against a **literal value**, optionally combined with `&&` (AND) and `||` (OR) operators:
 
 ```
 <json-path> <operator> <expected-value>
@@ -101,44 +117,98 @@ Each rule is a simple comparison of a **JSON path** against a **literal value**:
 | `==`     | Equals        | `false`              |
 | `!=`     | Not equals    | `true`               |
 
-**JSON paths** use dot-notation to traverse the payload. Given this payload:
+### Compound expressions
 
-```json
-{ "action": "opened", "pull_request": { "draft": false } }
+Multiple conditions can be combined in a single rule using `&&` (AND) and `||` (OR):
+
+| Operator | Meaning | Precedence |
+|----------|---------|------------|
+| `&&`     | AND — all conditions in the group must be true | Higher |
+| `||`     | OR — at least one group must be true           | Lower  |
+
+`||` has lower precedence than `&&`. The rule is split into OR-groups first, then each group is split into AND-conditions.
+
+```jsonc
+"rule": "eventType==workitem.updated&&status==Active"
+"rule": "action==opened||action==reopened"
+"rule": "eventType==created&&status==New||eventType==updated&&status==Active"
 ```
 
-| Expression                       | Result  |
-|----------------------------------|---------|
-| `action==opened`                 | `true`  |
-| `action!=closed`                 | `true`  |
-| `pull_request.draft==false`      | `true`  |
-| `action==closed`                 | `false` |
+### Quoted values
 
-Type coercion is handled automatically — strings, numbers, booleans, and `null` are all compared correctly against the literal on the right-hand side.
+If the expected value contains `&&` or `||` (or you want a single-quoted literal), wrap it in **single quotes**:
+
+```jsonc
+"rule": "assignee=='some-user <user@example.com>'"
+```
+
+### JSON paths
+
+JSON paths use dot notation to traverse the payload.
+
+| Expression                   | Notes |
+|-----------------------------|--------|
+| `pull_request.draft==false` | Nested objects |
+
+Type coercion is handled automatically — strings, numbers, booleans, and `null` are compared against the literal on the right-hand side.
+
+#### Property names that contain `.`
+
+If an object **key** contains a dot (common on Azure DevOps, e.g. `System.AssignedTo`), wrap **that segment** in **double quotes** so it is treated as a single property name:
+
+```
+resource.fields."System.AssignedTo".newValue
+resource.revision.fields."System.Title"
+```
+
+Inside a double-quoted segment, a **backslash** escapes the next character. This applies to **match** rules and to **`use-inputs`** paths.
+
+#### Arrays: numeric indices
+
+When the value at a path segment is a JSON **array**, a **numeric** segment selects the element at that index (zero-based):
+
+```
+items.0.id
+resource.reviewers.1.displayName
+```
+
+If the index is out of range, the path does not resolve (`==` fails; `!=` treats a missing path as not equal).
+
+#### Arrays: wildcard `*` (match rules only)
+
+For **filter rules** (`match-any`), a path segment `*` means “any element of the array at this point.” The prefix before `*` must resolve to an array.
+
+```
+resource.reviewers.*.displayName=='xianix-agent'
+```
+
+Only **one** `*` segment per path is supported. Wildcard `*` is **not** supported in **`use-inputs`** paths — use a fixed numeric index if you need a specific array element.
+
+**Implementation:** `TheAgent/Rules/WebhookRulesEvaluator.cs` (`SplitJsonPathSegments`, `TryGetElementAtPath`, wildcard handling in `EvaluatePathCompare`).
 
 ---
 
-## 3. `inputs` — Payload Extraction
+## 3. `use-inputs` — Payload extraction
 
-Extracts values from the webhook payload into named variables. These become available for prompt interpolation and are forwarded to the executor container as the `XIANIX_INPUTS` JSON blob.
+Extracts values from the webhook payload into named variables. They are used for `execute-prompt` interpolation and are forwarded to the executor (for example as `XIANIX_INPUTS`).
 
 ```json
-"inputs": [
+"use-inputs": [
   { "name": "pr-number",      "value": "number" },
-  { "name": "repository-url",  "value": "repository.clone_url" },
-  { "name": "platform",        "value": "github",  "constant": true }
+  { "name": "repository-url", "value": "repository.clone_url" },
+  { "name": "platform",       "value": "github", "constant": true }
 ]
 ```
 
 | Field      | Description |
 |------------|-------------|
-| `name`     | Key name in the extracted dictionary |
-| `value`    | Dot-separated JSON path into the payload, **or** a literal string when `constant` is `true` |
-| `constant` | *(optional, default `false`)* When `true`, `value` is used as-is instead of being resolved as a path |
+| `name`     | Key in the extracted dictionary |
+| `value`    | Dot-separated JSON path into the payload, **or** a literal when `constant` is `true` |
+| `constant` | *(optional, default `false`)* When `true`, `value` is used as-is instead of resolving a path |
 
 ### Path resolution examples
 
-Given this webhook payload:
+Given:
 
 ```json
 {
@@ -148,33 +218,27 @@ Given this webhook payload:
 }
 ```
 
-| Input definition | Resolved value |
-|---|---|
-| `"value": "number"` | `42` |
-| `"value": "repository.clone_url"` | `"https://github.com/acme/app.git"` |
-| `"value": "pull_request.head.ref"` | `"fix/auth"` |
-| `"value": "github", "constant": true` | `"github"` (literal) |
+| Input `value` | Resolved value |
+|---------------|----------------|
+| `number` | `42` |
+| `repository.clone_url` | `https://github.com/acme/app.git` |
+| `pull_request.head.ref` | `fix/auth` |
+| `github` with `"constant": true` | `github` (literal) |
 
-If a path doesn't resolve (the property is missing), the input is set to `null`.
+For Azure DevOps payloads, dotted field names use the same quoted-segment syntax as in filters, e.g. `resource.revision.fields."System.Title"`.
+
+If a path does not resolve (missing property), the input is set to `null`.
 
 ---
 
-## 4. `claude-code-plugins` — Plugin Installation
+## 4. `use-plugins` — Plugin installation
 
 Declares Claude Code marketplace plugins to install in the executor container before the prompt runs.
 
 ```json
-"claude-code-plugins": [
+"use-plugins": [
   {
-    "name": "github",
-    "description": "GitHub MCP server — typed GitHub API tools",
-    "url": "github@claude-plugins-official",
-    "marketplace": "anthropics/claude-plugins-official"
-  },
-  {
-    "name": "pr-reviewer",
-    "description": "Comprehensive PR review plugin",
-    "url": "pr-reviewer@xianix-plugins-official",
+    "plugin-name": "pr-reviewer@xianix-plugins-official",
     "marketplace": "xianix-team/plugins-official",
     "envs": [
       { "name": "GITHUB_PERSONAL_ACCESS_TOKEN", "value": "env.GITHUB_TOKEN" }
@@ -183,87 +247,82 @@ Declares Claude Code marketplace plugins to install in the executor container be
 ]
 ```
 
-| Field         | Required | Description |
-|---------------|----------|-------------|
-| `name`        | Yes | Human-readable plugin identifier |
-| `description` | No  | What the plugin provides (documentation only) |
-| `url`         | Yes | Plugin reference in `plugin-name@marketplace-name` format, passed to `claude plugin install` |
-| `marketplace` | No  | Marketplace source to register via `claude plugin marketplace add`. Accepts GitHub `owner/repo`, a git URL, a local path, or a URL to a `marketplace.json`. Omit for the built-in Anthropic marketplace. |
-| `envs`        | No  | Environment variables to inject into the container for this plugin |
+| Field           | Required | Description |
+|-----------------|----------|-------------|
+| `plugin-name`   | Yes | Plugin reference in `plugin-name@marketplace-name` form, passed to `claude plugin install` |
+| `marketplace`   | No  | Marketplace source (`owner/repo`, git URL, path, or `marketplace.json` URL). Omit for the built-in Anthropic marketplace. |
+| `envs`          | No  | Environment variables for this plugin |
 
 ### Plugin environment variables (`envs`)
 
-Each entry in the `envs` array injects an environment variable into the executor container.
-
-```json
-{ "name": "GITHUB_PERSONAL_ACCESS_TOKEN", "value": "env.GITHUB_TOKEN" }
-```
-
 | Field      | Description |
 |------------|-------------|
-| `name`     | The env var name set inside the container |
-| `value`    | By default, an `env.VAR_NAME` reference — the `env.` prefix is stripped and the variable is read from the **host** process environment. Set `"constant": true` to use the value as a static literal instead. |
-| `constant` | *(optional, default `false`)* Treat `value` as a literal string |
+| `name`     | Env var name inside the container |
+| `value`    | By default, `env.VAR_NAME` reads from the **host** environment. Use `"constant": true` for a literal string. |
+| `constant` | *(optional)* Treat `value` as a literal |
 
 ---
 
-## 5. `prompt` — Claude Code Prompt Template
+## 5. `execute-prompt` — Claude Code prompt template
 
-A string template executed as the Claude Code prompt after plugins are installed. Use `{{input-name}}` placeholders to inject extracted input values.
+A string template run as the Claude Code prompt after plugins are installed. Use `{{input-name}}` placeholders for resolved `use-inputs` values.
 
-```json
-"prompt": "You are reviewing PR #{{pr-number}} titled \"{{pr-title}}\" in {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review."
-```
-
-Placeholders are replaced at evaluation time (case-insensitive match). Any `{{name}}` that doesn't correspond to a resolved input is left as-is in the output.
+Placeholders are replaced case-insensitively. Any `{{name}}` with no matching input is left unchanged.
 
 ---
 
-## Complete Example
-
-Putting it all together — a rule set that reviews newly opened pull requests:
+## Complete example (GitHub PR opened)
 
 ```json
 [
   {
-    "webhook-name": "pull requests",
-    "match": [
-      { "name": "pr-opened-event", "rule": "action==opened" }
-    ],
-    "inputs": [
-      { "name": "pr-number",        "value": "number" },
-      { "name": "repository-url",   "value": "repository.clone_url" },
-      { "name": "repository-name",  "value": "repository.full_name" },
-      { "name": "pr-title",         "value": "pull_request.title" },
-      { "name": "pr-head-branch",   "value": "pull_request.head.ref" },
-      { "name": "platform",         "value": "github", "constant": true }
-    ],
-    "claude-code-plugins": [
+    "webhook": "Default",
+    "executions": [
       {
-        "name": "github",
-        "description": "GitHub MCP server",
-        "url": "github@claude-plugins-official",
-        "marketplace": "anthropics/claude-plugins-official"
-      },
-      {
-        "name": "pr-reviewer",
-        "description": "PR review plugin",
-        "url": "pr-reviewer@xianix-plugins-official",
-        "marketplace": "xianix-team/plugins-official",
-        "envs": [
-          { "name": "GITHUB_PERSONAL_ACCESS_TOKEN", "value": "env.GITHUB_TOKEN" }
-        ]
+        "name": "github-pull-request-review",
+        "match-any": [
+          { "name": "pr-opened-event", "rule": "action==opened" }
+        ],
+        "use-inputs": [
+          { "name": "pr-number",       "value": "number" },
+          { "name": "repository-url",  "value": "repository.clone_url" },
+          { "name": "repository-name", "value": "repository.full_name" },
+          { "name": "pr-title",        "value": "pull_request.title" },
+          { "name": "pr-head-branch",  "value": "pull_request.head.ref" },
+          { "name": "platform",        "value": "github", "constant": true }
+        ],
+        "use-plugins": [
+          {
+            "plugin-name": "pr-reviewer@xianix-plugins-official",
+            "marketplace": "xianix-team/plugins-official",
+            "envs": [
+              { "name": "GITHUB_PERSONAL_ACCESS_TOKEN", "value": "env.GITHUB_TOKEN" }
+            ]
+          }
+        ],
+        "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."
       }
-    ],
-    "prompt": "You are reviewing PR #{{pr-number}} titled \"{{pr-title}}\" in {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."
+    ]
   }
 ]
 ```
 
+### Azure DevOps: work item field with a dotted name
+
+```jsonc
+"rule": "eventType==workitem.updated&&resource.fields.\"System.AssignedTo\".newValue=='xianix-agent <xianix-agent@99x.io>'"
+```
+
+### Azure DevOps: PR updated with a specific reviewer
+
+```jsonc
+"rule": "eventType==git.pullrequest.updated&&resource.reviewers.*.displayName=='xianix-agent'"
+```
+
 ### What happens at runtime
 
-1. A **GitHub `pull_request` webhook** fires with `action: "opened"`
-2. The evaluator matches `webhook-name: "pull requests"` and the filter `action==opened` passes
-3. Six inputs are extracted (five from the payload, one constant)
-4. The prompt template is interpolated with the extracted values
-5. The executor container installs `github` and `pr-reviewer` plugins, injects `GITHUB_PERSONAL_ACCESS_TOKEN` from the host's `GITHUB_TOKEN`, and runs the final prompt
+1. Webhook payload arrives; orchestrator evaluates rules for the webhook name.
+2. For each execution block, if `match-any` is non-empty, at least one `rule` must pass.
+3. `use-inputs` are resolved from the payload.
+4. `execute-prompt` is interpolated.
+5. The executor installs `use-plugins`, applies `envs`, and runs the prompt.

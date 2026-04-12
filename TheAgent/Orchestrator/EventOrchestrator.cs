@@ -10,37 +10,65 @@ public sealed class EventOrchestrator : IEventOrchestrator
 
     public EventOrchestrator(IWebhookRulesEvaluator rulesEvaluator, ILogger<EventOrchestrator> logger)
     {
-        _rulesEvaluator = rulesEvaluator;
-        _logger = logger;
+        _rulesEvaluator = rulesEvaluator ?? throw new ArgumentNullException(nameof(rulesEvaluator));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task<OrchestrationResult> OrchestrateAsync(
+    public async Task<OrchestrateWebhookResult> OrchestrateAsync(
         string webhookName,
         object? payload,
         string tenantId,
         CancellationToken cancellationToken = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(webhookName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+
         _logger.LogDebug("Orchestrating event '{WebhookName}' for tenant '{TenantId}'.", webhookName, tenantId);
 
-        var outcome = await _rulesEvaluator.EvaluateAsync(webhookName, payload);
+        EvaluationOutcome outcome;
+        try
+        {
+            outcome = await _rulesEvaluator.EvaluateAsync(webhookName, payload);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex,
+                "Tenant {TenantId}: rules evaluation threw for webhook '{WebhookName}'.",
+                tenantId, webhookName);
+            return new OrchestrateWebhookResult
+            {
+                SkipReason = $"Rules evaluation failed: {ex.Message}"
+            };
+        }
 
         if (!outcome.Matched)
         {
             _logger.LogInformation(
-                "Webhook '{WebhookName}' skipped — {SkipReason}.",
-                webhookName, outcome.SkipReason ?? "no matching rule or filter failed");
-            return OrchestrationResult.Ignored(webhookName, tenantId, outcome.SkipReason);
+                "Tenant {TenantId}: webhook '{WebhookName}' — no execution (rules did not match or payload invalid).",
+                tenantId, webhookName);
+            _logger.LogDebug("Orchestration skip detail: {SkipReason}", outcome.SkipReason);
+            return new OrchestrateWebhookResult { SkipReason = outcome.SkipReason };
         }
 
-        var evaluation = outcome.Result!;
-        var execution = !string.IsNullOrWhiteSpace(evaluation.Prompt)
-            ? new ExecutionSpec(evaluation.Plugins, evaluation.Prompt)
-            : null;
+        var matches = new List<OrchestrationResult>();
+        foreach (var evaluation in outcome.Results!)
+        {
+            var execution = !string.IsNullOrWhiteSpace(evaluation.Prompt)
+                ? new ExecutionSpec(evaluation.Plugins, evaluation.Prompt)
+                : null;
+
+            matches.Add(OrchestrationResult.Matched(
+                webhookName,
+                tenantId,
+                evaluation.Inputs,
+                execution,
+                evaluation.ExecutionBlockName));
+        }
 
         _logger.LogInformation(
-            "Webhook '{WebhookName}' matched — {InputCount} input(s), {PluginCount} plugin(s), prompt={HasPrompt}.",
-            webhookName, evaluation.Inputs.Count, evaluation.Plugins.Count, execution is not null);
+            "Tenant {TenantId}: webhook '{WebhookName}' — {MatchCount} execution(s) will be scheduled.",
+            tenantId, webhookName, matches.Count);
 
-        return OrchestrationResult.Matched(webhookName, tenantId, evaluation.Inputs, execution);
+        return new OrchestrateWebhookResult { Matches = matches };
     }
 }

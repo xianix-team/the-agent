@@ -1,100 +1,143 @@
 [
     {
-        "webhook-name": "pull requests",
-        "match": [
+        "webhook": "Default",
+        "executions": [
             {
-                "name": "pr-opened-event",
-                "rule": "action==opened"
-            }
-        ],
-        "inputs": [
-            {
-                "name": "pr-number",
-                "value": "number"
-            },
-            {
-                "name": "repository-url",
-                "value": "repository.clone_url"
-            },
-            {
-                "name": "repository-name",
-                "value": "repository.full_name"
-            },
-            {
-                "name": "pr-title",
-                "value": "pull_request.title"
-            },
-            {
-                "name": "pr-head-branch",
-                "value": "pull_request.head.ref"
-            },
-            {
-                "name": "platform",
-                "value": "github",
-                "constant": true
-            }
-        ],
-        "claude-code-plugins": [
-            {
-                "name": "pr-reviewer",
-                "github-source": "pr-reviewer@xianix-plugins-official",
-                "marketplace": "xianix-team/plugins-official",
-                "envs": [
+                "name": "github-pull-request-review",
+                "match-any": [
                     {
-                        "name": "GITHUB_PERSONAL_ACCESS_TOKEN",
-                        "value": "env.GITHUB_TOKEN"
+                        "name": "github-pr-opened-event",
+                        "rule": "action==opened"
                     }
-                ]
+                ],
+                "use-inputs": [
+                    {
+                        "name": "pr-number",
+                        "value": "number"
+                    },
+                    {
+                        "name": "repository-url",
+                        "value": "repository.clone_url"
+                    },
+                    {
+                        "name": "repository-name",
+                        "value": "repository.full_name"
+                    },
+                    {
+                        "name": "pr-title",
+                        "value": "pull_request.title"
+                    },
+                    {
+                        "name": "pr-head-branch",
+                        "value": "pull_request.head.ref"
+                    },
+                    {
+                        "name": "platform",
+                        "value": "github",
+                        "constant": true
+                    }
+                ],
+                "use-plugins": [
+                    {
+                        "plugin-name": "pr-reviewer@xianix-plugins-official",
+                        "marketplace": "xianix-team/plugins-official",
+                        "envs": [
+                            {
+                                "name": "GITHUB_PERSONAL_ACCESS_TOKEN",
+                                "value": "env.GITHUB_TOKEN"
+                            }
+                        ]
+                    }
+                ],
+                "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."
+            },
+            {
+                "name": "azuredevops-pull-request-review",
+                "match-any": [
+                    {
+                        "name": "azuredevops-pr-updated-event",
+                        "rule": "eventType==git.pullrequest.updated&&resource.reviewers.*.displayName=='xianix-agent'"
+                    }
+                ],
+                "use-inputs": [
+                    {
+                        "name": "pr-number",
+                        "value": "resource.pullRequestId"
+                    },
+                    {
+                        "name": "repository-url",
+                        "value": "resource.repository.remoteUrl"
+                    },
+                    {
+                        "name": "repository-name",
+                        "value": "resource.repository.name"
+                    },
+                    {
+                        "name": "pr-title",
+                        "value": "resource.title"
+                    },
+                    {
+                        "name": "pr-head-branch",
+                        "value": "resource.sourceRefName"
+                    },
+                    {
+                        "name": "platform",
+                        "value": "azuredevops",
+                        "constant": true
+                    }
+                ],
+                "use-plugins": [
+                    {
+                        "plugin-name": "pr-reviewer@xianix-plugins-official",
+                        "marketplace": "xianix-team/plugins-official"
+                    }
+                ],
+                "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review. The `az` CLI is authenticated and available if you need it directly."
+            },
+            {
+                "name": "azuredevops-work-item-requirement-analysis",
+                "match-any": [
+                    {
+                        "name": "azuredevops-workitem-assigned-to-agent",
+                        "rule": "eventType==workitem.updated&&resource.fields.\"System.AssignedTo\".newValue=='xianix-agent <xianix-agent@99x.io>'"
+                    }
+                ],
+                "use-inputs": [
+                    {
+                        "name": "workitem-id",
+                        "value": "resource.workItemId"
+                    },
+                    {
+                        "name": "workitem-title",
+                        "value": "resource.revision.fields.\"System.Title\""
+                    },
+                    {
+                        "name": "workitem-type",
+                        "value": "resource.revision.fields.\"System.WorkItemType\""
+                    },
+                    {
+                        "name": "project-name",
+                        "value": "resource.revision.fields.\"System.TeamProject\""
+                    },
+                    {
+                        "name": "repository-url",
+                        "value": "https://HasithY@dev.azure.com/HasithY/Xianix-tests/_git/Xianix-tests",
+                        "constant": true
+                    },
+                    {
+                        "name": "platform",
+                        "value": "azuredevops",
+                        "constant": true
+                    }
+                ],
+                "use-plugins": [
+                    {
+                        "plugin-name": "req-analyst@xianix-plugins-official",
+                        "marketplace": "xianix-team/plugins-official"
+                    }
+                ],
+                "execute-prompt": "Work item ({{workitem-type}}) #{{workitem-id}} titled \"{{workitem-title}}\" in project {{project-name}} has been assigned to xianix-agent for requirement analysis.\n\nRun /requirement-analysis {{workitem-id}} to perform the automated requirement analysis and elaboration."
             }
-        ],
-        "prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."
-    },
-    {
-        "webhook-name": "azuredevops pull requests",
-        "match": [
-            {
-                "name": "pr-opened-event",
-                "rule": "eventType==git.pullrequest.created"
-            },
-            {
-                "name": "pr-updated-event",
-                "rule": "eventType==git.pullrequest.updated"
-            }
-        ],
-        "inputs": [
-            {
-                "name": "pr-number",
-                "value": "resource.pullRequestId"
-            },
-            {
-                "name": "repository-url",
-                "value": "resource.repository.remoteUrl"
-            },
-            {
-                "name": "repository-name",
-                "value": "resource.repository.name"
-            },
-            {
-                "name": "pr-title",
-                "value": "resource.title"
-            },
-            {
-                "name": "pr-head-branch",
-                "value": "resource.sourceRefName"
-            },
-            {
-                "name": "platform",
-                "value": "azuredevops",
-                "constant": true
-            }
-        ],
-        "claude-code-plugins": [
-            {
-                "name": "pr-reviewer",
-                "github-source": "pr-reviewer@xianix-plugins-official",
-                "marketplace": "xianix-team/plugins-official"
-            }
-        ],
-        "prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review. The `az` CLI is authenticated and available if you need it directly."
+        ]
     }
 ]

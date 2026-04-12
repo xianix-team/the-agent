@@ -1,22 +1,29 @@
 namespace Xianix.Rules;
 
 /// <summary>
-/// Combined result of a successful rules evaluation: the extracted input dictionary,
-/// the list of MCP plugins to install, and the fully-interpolated Claude Code prompt.
+/// Combined result of a successful rules evaluation for one execution block: extracted inputs,
+/// plugins, prompt, and optional block name from rules.json.
 /// </summary>
 public sealed record EvaluationResult(
     Dictionary<string, object?> Inputs,
     IReadOnlyList<PluginEntry> Plugins,
-    string Prompt);
+    string Prompt,
+    string? ExecutionBlockName = null);
 
 /// <summary>
-/// Outcome of a rules evaluation: either a successful match or a skip with a human-readable reason.
+/// Outcome of a rules evaluation: zero or more matching execution blocks, or a skip reason.
 /// </summary>
-public sealed record EvaluationOutcome(EvaluationResult? Result, string? SkipReason = null)
+public sealed record EvaluationOutcome(IReadOnlyList<EvaluationResult>? Results, string? SkipReason = null)
 {
-    public bool Matched => Result is not null;
+    public bool Matched => Results is { Count: > 0 };
 
-    public static EvaluationOutcome Match(EvaluationResult result) => new(result);
+    public static EvaluationOutcome Match(EvaluationResult result) => new([result]);
+
+    public static EvaluationOutcome MatchMany(IReadOnlyList<EvaluationResult> results) =>
+        results.Count == 0
+            ? Skip("no execution blocks matched")
+            : new(results);
+
     public static EvaluationOutcome Skip(string reason) => new(null, reason);
 }
 

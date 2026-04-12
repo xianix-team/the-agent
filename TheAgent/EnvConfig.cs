@@ -7,6 +7,23 @@ public static class EnvConfig
         DotNetEnv.Env.TraversePath().Load(envFileName);
     }
 
+    /// <summary>
+    /// Validates that all critical environment variables are present at startup.
+    /// Call once after <see cref="Load"/> to fail fast before any work begins.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">When one or more required variables are missing.</exception>
+    public static void ValidateRequiredVariables()
+    {
+        string[] requiredKeys = ["XIANS_SERVER_URL", "XIANS_API_KEY", "ANTHROPIC_API_KEY"];
+        var missing = requiredKeys
+            .Where(k => string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(k)))
+            .ToList();
+
+        if (missing.Count > 0)
+            throw new InvalidOperationException(
+                $"Missing required environment variable(s): {string.Join(", ", missing)}");
+    }
+
     public static string GetRequired(string key)
     {
         var value = Environment.GetEnvironmentVariable(key);

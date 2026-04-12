@@ -38,6 +38,8 @@ public class ProcessingWorkflow
     [WorkflowRun]
     public async Task WorkflowRun(OrchestrationResult orchestrationResult)
     {
+        ArgumentNullException.ThrowIfNull(orchestrationResult);
+
         try
         {
             if (orchestrationResult.Execution is null)
@@ -48,30 +50,7 @@ public class ProcessingWorkflow
                 return;
             }
 
-            var executionLabel = $"webhook={orchestrationResult.WebhookName}";
-            var repositoryUrl = OrchestrationResult.GetInputString(orchestrationResult.Inputs, "repository-url") ?? string.Empty;
-
-            Workflow.Logger.LogInformation(
-                "ProcessingWorkflow starting: tenant={TenantId}, repo={Repo}, plugins={PluginCount}.",
-                orchestrationResult.TenantId, repositoryUrl, orchestrationResult.Execution.Plugins.Count);
-
-            var input = BuildContainerInput(orchestrationResult);
-
-            var volumeName = await Workflow.ExecuteActivityAsync(
-                (ContainerActivities a) => a.EnsureWorkspaceVolumeAsync(orchestrationResult.TenantId, repositoryUrl),
-                ContainerActivityOptions);
-
-            input = input with { VolumeName = volumeName };
-
-            var containerId = await Workflow.ExecuteActivityAsync(
-                (ContainerActivities a) => a.StartContainerAsync(input),
-                ContainerActivityOptions);
-
-            var executionResult = await WaitAndCleanupAsync(containerId, orchestrationResult.TenantId, executionLabel);
-
-            ParseExecutorOutput(executionResult);
-            LogOutcome(executionResult, executionLabel, orchestrationResult.TenantId);
-            await ReportExecutionMetricsAsync(orchestrationResult, executionResult);
+            await ExecuteContainerPipelineAsync(orchestrationResult);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -81,16 +60,62 @@ public class ProcessingWorkflow
         }
     }
 
+    private static async Task ExecuteContainerPipelineAsync(OrchestrationResult orchestrationResult)
+    {
+        var block = string.IsNullOrWhiteSpace(orchestrationResult.ExecutionBlockName)
+            ? ""
+            : $", block={orchestrationResult.ExecutionBlockName}";
+        var executionLabel = $"webhook={orchestrationResult.WebhookName}{block}";
+        var repositoryUrl = OrchestrationResult.GetInputString(orchestrationResult.Inputs, "repository-url") ?? string.Empty;
+
+        Workflow.Logger.LogInformation(
+            "ProcessingWorkflow starting: tenant={TenantId}, repo={Repo}, block={Block}, plugins={PluginCount}.",
+            orchestrationResult.TenantId,
+            repositoryUrl,
+            orchestrationResult.ExecutionBlockName ?? "—",
+            orchestrationResult.Execution!.Plugins.Count);
+
+        var input = BuildContainerInput(orchestrationResult);
+
+        var volumeName = await Workflow.ExecuteActivityAsync(
+            (ContainerActivities a) => a.EnsureWorkspaceVolumeAsync(orchestrationResult.TenantId, repositoryUrl),
+            ContainerActivityOptions);
+
+        input = input with { VolumeName = volumeName };
+
+        var containerId = await Workflow.ExecuteActivityAsync(
+            (ContainerActivities a) => a.StartContainerAsync(input),
+            ContainerActivityOptions);
+
+        try
+        {
+            var executionResult = await Workflow.ExecuteActivityAsync(
+                (ContainerActivities a) => a.WaitAndCollectOutputAsync(
+                    containerId, orchestrationResult.TenantId, executionLabel, 1800),
+                WaitActivityOptions);
+
+            ParseExecutorOutput(executionResult);
+            LogOutcome(executionResult, executionLabel, orchestrationResult.TenantId);
+            await ReportExecutionMetricsAsync(orchestrationResult, executionResult);
+        }
+        finally
+        {
+            await Workflow.DelayAsync(TimeSpan.FromMinutes(2));
+            await Workflow.ExecuteActivityAsync(
+                (ContainerActivities a) => a.CleanupContainerAsync(containerId),
+                CleanupActivityOptions);
+        }
+    }
+
     // ── Pipeline steps ───────────────────────────────────────────────────────
 
     private static ContainerExecutionInput BuildContainerInput(OrchestrationResult result)
     {
         var inputsJson = JsonSerializer.Serialize(result.Inputs);
-        var claudeCodePlugins = JsonSerializer.Serialize(
+        var pluginsJson = JsonSerializer.Serialize(
             result.Execution!.Plugins.Select(p => new PluginSerializationDto
             {
-                Name        = p.Name,
-                GithubSource = p.GithubSource,
+                PluginName  = p.PluginName,
                 Marketplace = p.Marketplace,
                 Envs        = p.Envs.Select(e => new EnvSerializationDto { Name = e.Name, Value = e.Value }),
             }));
@@ -100,27 +125,9 @@ public class ProcessingWorkflow
             TenantId          = result.TenantId,
             ExecutionId       = Workflow.Random.Next().ToString("x8"),
             InputsJson        = inputsJson,
-            ClaudeCodePlugins = claudeCodePlugins,
+            ClaudeCodePlugins = pluginsJson,
             Prompt            = result.Execution.Prompt,
         };
-    }
-
-    private static async Task<ContainerExecutionResult> WaitAndCleanupAsync(
-        string containerId, string tenantId, string executionLabel)
-    {
-        try
-        {
-            return await Workflow.ExecuteActivityAsync(
-                (ContainerActivities a) => a.WaitAndCollectOutputAsync(
-                    containerId, tenantId, executionLabel, 1800),
-                WaitActivityOptions);
-        }
-        finally
-        {
-            await Workflow.ExecuteActivityAsync(
-                (ContainerActivities a) => a.CleanupContainerAsync(containerId),
-                CleanupActivityOptions);
-        }
     }
 
     private static void LogOutcome(
@@ -158,36 +165,46 @@ public class ProcessingWorkflow
         OrchestrationResult orchestrationResult,
         ContainerExecutionResult executionResult)
     {
-        var succeeded = executionResult.Succeeded ? 1 : 0;
-        var failed    = executionResult.Succeeded ? 0 : 1;
+        try
+        {
+            var succeeded = executionResult.Succeeded ? 1 : 0;
+            var failed    = executionResult.Succeeded ? 0 : 1;
 
-        var builder = XiansContext.Metrics
-            .ForModel("claude")
-            .WithCustomIdentifier(orchestrationResult.WebhookName)
-            .WithMetrics(
-                ("actions", "called",    1,         "count"),
-                ("actions", "succeeded", succeeded, "count"),
-                ("actions", "failed",    failed,    "count")
-            );
-        if (executionResult.CostUsd.HasValue)
-            builder = builder.WithMetric("actions", orchestrationResult.WebhookName, 1, "count");
+            var builder = XiansContext.Metrics
+                .ForModel("claude")
+                .WithCustomIdentifier(orchestrationResult.WebhookName)
+                .WithMetrics(
+                    ("actions", "called",    1,         "count"),
+                    ("actions", "succeeded", succeeded, "count"),
+                    ("actions", "failed",    failed,    "count")
+                );
 
-        if (executionResult.CostUsd.HasValue)
-            builder = builder.WithMetric("cost", "usd", executionResult.CostUsd.Value, "usd");
+            if (executionResult.CostUsd.HasValue)
+                builder = builder.WithMetric("actions", orchestrationResult.WebhookName, 1, "count");
 
-        if (executionResult.InputTokens.HasValue)
-            builder = builder.WithMetric("tokens", "input", executionResult.InputTokens.Value, "tokens");
+            if (executionResult.CostUsd.HasValue)
+                builder = builder.WithMetric("cost", "usd", executionResult.CostUsd.Value, "usd");
 
-        if (executionResult.OutputTokens.HasValue)
-            builder = builder.WithMetric("tokens", "output", executionResult.OutputTokens.Value, "tokens");
+            if (executionResult.InputTokens.HasValue)
+                builder = builder.WithMetric("tokens", "input", executionResult.InputTokens.Value, "tokens");
 
-        if (executionResult.CacheReadTokens.HasValue)
-            builder = builder.WithMetric("tokens", "cache_read", executionResult.CacheReadTokens.Value, "tokens");
+            if (executionResult.OutputTokens.HasValue)
+                builder = builder.WithMetric("tokens", "output", executionResult.OutputTokens.Value, "tokens");
 
-        if (executionResult.CacheCreationTokens.HasValue)
-            builder = builder.WithMetric("tokens", "cache_creation", executionResult.CacheCreationTokens.Value, "tokens");
+            if (executionResult.CacheReadTokens.HasValue)
+                builder = builder.WithMetric("tokens", "cache_read", executionResult.CacheReadTokens.Value, "tokens");
 
-        await builder.ReportAsync();
+            if (executionResult.CacheCreationTokens.HasValue)
+                builder = builder.WithMetric("tokens", "cache_creation", executionResult.CacheCreationTokens.Value, "tokens");
+
+            await builder.ReportAsync();
+        }
+        catch (Exception ex)
+        {
+            Workflow.Logger.LogWarning(ex,
+                "Failed to report execution metrics for webhook '{WebhookName}'. Metrics are non-critical.",
+                orchestrationResult.WebhookName);
+        }
     }
 
     // ── JSON helpers ─────────────────────────────────────────────────────────
@@ -241,17 +258,14 @@ public class ProcessingWorkflow
 }
 
 /// <summary>
-/// Serialization DTO for a Claude Code plugin entry passed to the executor container.
-/// Uses <c>github-source</c> as the JSON key so the executor script can read it with
-/// <c>jq -r '.["github-source"]'</c>.
+/// Serialization DTO for a plugin entry passed to the executor container.
+/// Uses <c>plugin-name</c> as the JSON key so the executor script can read it with
+/// <c>jq -r '.["plugin-name"]'</c>.
 /// </summary>
 file sealed record PluginSerializationDto
 {
-    [JsonPropertyName("name")]
-    public required string Name { get; init; }
-
-    [JsonPropertyName("github-source")]
-    public required string GithubSource { get; init; }
+    [JsonPropertyName("plugin-name")]
+    public required string PluginName { get; init; }
 
     [JsonPropertyName("marketplace")]
     public required string Marketplace { get; init; }

@@ -3,9 +3,9 @@ namespace Xianix.Orchestrator;
 public interface IEventOrchestrator
 {
     /// <summary>
-    /// Receives an external webhook event, evaluates rules, and returns the orchestration outcome.
+    /// Receives an external webhook event, evaluates rules, and returns one result per matched execution block.
     /// </summary>
-    Task<OrchestrationResult> OrchestrateAsync(
+    Task<OrchestrateWebhookResult> OrchestrateAsync(
         string webhookName,
         object? payload,
         string tenantId,
