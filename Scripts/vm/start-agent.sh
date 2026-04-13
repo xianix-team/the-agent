@@ -17,8 +17,7 @@ if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
 fi
 
 # ── List every secret in the vault and fetch its value ──
-# Secret names are passed as-is from Key Vault (e.g. ANTHROPIC-API-KEY).
-# The .NET app handles both dashes and underscores transparently.
+# Secret names use dashes (e.g. ANTHROPIC-API-KEY) and are passed as-is.
 SECRET_NAMES=$(curl -sf \
   "https://${VAULT_NAME}.vault.azure.net/secrets?api-version=7.4" \
   -H "Authorization: Bearer ${TOKEN}" | jq -r '.value[].id' | xargs -n1 basename)
