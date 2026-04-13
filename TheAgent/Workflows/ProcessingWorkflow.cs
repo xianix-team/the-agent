@@ -117,7 +117,7 @@ public class ProcessingWorkflow
             {
                 PluginName  = p.PluginName,
                 Marketplace = p.Marketplace,
-                Envs        = p.Envs.Select(e => new EnvSerializationDto { Name = e.Name, Value = e.Value }),
+                Envs        = p.Envs.Select(e => new EnvSerializationDto { Name = e.Name, Value = e.Value, Mandatory = e.Mandatory }),
             }));
 
         return new ContainerExecutionInput
@@ -285,4 +285,7 @@ file sealed record EnvSerializationDto
 
     [JsonPropertyName("value")]
     public required string Value { get; init; }
+
+    [JsonPropertyName("mandatory")]
+    public bool Mandatory { get; init; }
 }

@@ -4,6 +4,7 @@ using Docker.DotNet;
 using Docker.DotNet.Models;
 using Microsoft.Extensions.Logging;
 using Temporalio.Activities;
+using Temporalio.Exceptions;
 using TheAgent;
 
 namespace Xianix.Activities;
@@ -298,25 +299,57 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
         if (string.IsNullOrWhiteSpace(claudeCodePluginsJson))
             return;
 
+        var logger = ActivityExecutionContext.Current.Logger;
+
         try
         {
             using var pluginsDoc = System.Text.Json.JsonDocument.Parse(claudeCodePluginsJson);
             foreach (var plugin in pluginsDoc.RootElement.EnumerateArray())
             {
                 if (!plugin.TryGetProperty("envs", out var envsEl)) continue;
+
+                var pluginName = plugin.TryGetProperty("plugin-name", out var pn) ? pn.GetString() : "unknown";
+                var missingMandatory = new List<string>();
+
                 foreach (var entry in envsEl.EnumerateArray())
                 {
-                    var name     = entry.TryGetProperty("name",     out var n) ? n.GetString() : null;
-                    var value    = entry.TryGetProperty("value",    out var v) ? v.GetString() : null;
-                    var constant = entry.TryGetProperty("constant", out var c) && c.GetBoolean();
+                    var name      = entry.TryGetProperty("name",      out var n) ? n.GetString() : null;
+                    var value     = entry.TryGetProperty("value",     out var v) ? v.GetString() : null;
+                    var constant  = entry.TryGetProperty("constant",  out var c) && c.GetBoolean();
+                    var mandatory = entry.TryGetProperty("mandatory", out var m) && m.GetBoolean();
                     if (string.IsNullOrEmpty(name) || value is null) continue;
-                    env.Add($"{name}={ResolveEnvValue(value, constant, tenantId)}");
+
+                    var resolved = ResolveEnvValue(value, constant, tenantId);
+
+                    if (mandatory && string.IsNullOrWhiteSpace(resolved))
+                    {
+                        missingMandatory.Add(name);
+                        continue;
+                    }
+
+                    var prefix = $"{name}=";
+                    if (env.Any(e => e.StartsWith(prefix, StringComparison.Ordinal)))
+                        continue;
+
+                    env.Add($"{name}={resolved}");
+                }
+
+                if (missingMandatory.Count > 0)
+                {
+                    var names = string.Join(", ", missingMandatory);
+                    logger.LogError(
+                        "Plugin '{PluginName}' requires mandatory environment variable(s) [{MissingVars}] " +
+                        "but they are not set for tenant={TenantId}. Container start aborted.",
+                        pluginName, names, tenantId);
+                    throw new ApplicationFailureException(
+                        $"Missing mandatory environment variable(s) for plugin '{pluginName}': {names}. " +
+                        $"Ensure these are configured in the host environment or as tenant-scoped overrides.", nonRetryable: true);
                 }
             }
         }
         catch (System.Text.Json.JsonException ex)
         {
-            ActivityExecutionContext.Current.Logger.LogWarning(
+            logger.LogWarning(
                 ex, "Malformed CLAUDE_CODE_PLUGINS JSON — skipping per-plugin env injection.");
         }
     }

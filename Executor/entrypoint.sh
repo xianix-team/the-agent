@@ -4,9 +4,12 @@ set -euo pipefail
 # Re-export dashed env vars as underscored aliases (bash can't use dashes in
 # variable names). E.g. GITHUB-TOKEN → GITHUB_TOKEN. This lets the agent
 # pass Key Vault names as-is while keeping the rest of the script standard.
-while IFS='=' read -r key value; do
+# Use null-delimited env output to safely handle values with newlines or '='.
+while IFS= read -r -d '' entry; do
+  key="${entry%%=*}"
+  value="${entry#*=}"
   [[ "$key" == *-* ]] && export "${key//-/_}=${value}"
-done < <(env)
+done < <(env -0)
 
 log() { echo "$@" >&2; }
 

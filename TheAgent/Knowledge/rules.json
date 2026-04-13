@@ -48,7 +48,14 @@
                 "use-plugins": [
                     {
                         "plugin-name": "pr-reviewer@xianix-plugins-official",
-                        "marketplace": "xianix-team/plugins-official"
+                        "marketplace": "xianix-team/plugins-official",
+                        "envs": [
+                            {
+                                "name": "GITHUB-TOKEN",
+                                "value": "env.GITHUB-TOKEN",
+                                "mandatory": true
+                            }
+                        ]
                     }
                 ],
                 "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."
@@ -99,7 +106,14 @@
                 "use-plugins": [
                     {
                         "plugin-name": "pr-reviewer@xianix-plugins-official",
-                        "marketplace": "xianix-team/plugins-official"
+                        "marketplace": "xianix-team/plugins-official",
+                        "envs": [
+                            {
+                                "name": "AZURE-DEVOPS-TOKEN",
+                                "value": "env.AZURE-DEVOPS-TOKEN",
+                                "mandatory": true
+                            }
+                        ]
                     }
                 ],
                 "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review. The `az` CLI is authenticated and available if you need it directly."
@@ -122,7 +136,14 @@
                 "use-plugins": [
                   {
                     "plugin-name": "req-analyst@xianix-plugins-official",
-                    "marketplace": "xianix-team/plugins-official"
+                    "marketplace": "xianix-team/plugins-official",
+                    "envs": [
+                        {
+                            "name": "GITHUB-TOKEN",
+                            "value": "env.GITHUB-TOKEN",
+                            "mandatory": true
+                        }
+                    ]                    
                   }
                 ],
                 "execute-prompt": "Issue #{{issue-number}} titled \"{{issue-title}}\" in the repository {{repository-name}} has been assigned to xianix-agent for requirement analysis.\n\nRun /requirement-analysis {{issue-number}} to perform the automated requirement analysis and elaboration."
@@ -151,11 +172,6 @@
                     {
                         "name": "project-name",
                         "value": "resource.revision.fields.\"System.TeamProject\""
-                    },
-                    {
-                        "name": "repository-url",
-                        "value": "https://HasithY@dev.azure.com/HasithY/Xianix-tests/_git/Xianix-tests",
-                        "constant": true
                     },
                     {
                         "name": "platform",

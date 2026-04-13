@@ -92,6 +92,12 @@ public sealed class EnvEntry
     /// <summary>When true, <see cref="Value"/> is used as-is (not resolved as an env var reference).</summary>
     [JsonPropertyName("constant")]
     public bool Constant { get; init; }
+
+    /// <summary>
+    /// When true, the container will not start if this env var resolves to <c>null</c> or empty.
+    /// </summary>
+    [JsonPropertyName("mandatory")]
+    public bool Mandatory { get; init; }
 }
 
 public sealed class MatchEntry
