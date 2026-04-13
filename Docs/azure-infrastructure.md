@@ -277,3 +277,32 @@ az vm run-command invoke \
 Compare the output with the files in `Scripts/vm/` and update either side as needed.
 
 ---
+
+## Provisioned Resources
+
+| Resource | Value |
+|---|---|
+| Resource Group | `xianix-agent-rg` |
+| Location | `norwayeast` |
+| VM Name | `xianix-agent-vm` |
+| VM Size | `Standard_B2s` |
+| OS | Ubuntu 22.04 LTS |
+| Public IP | None (no inbound access) |
+| Admin User | `azureuser` |
+| Key Vault | `xianix-kv-agent` |
+| NAT Gateway | `xianix-agent-natgw` |
+| Bastion | `xianix-agent-bastion` (Developer SKU — free) |
+| NSG | `xianix-agent-vmNSG` (deny all inbound from Internet; allow port 22 from Azure platform) |
+
+---
+
+## Notes
+
+- The startup script and systemd service are version-controlled in [`Scripts/vm/`](../Scripts/vm/). Always update the repo copies when changing the live files, and vice versa.
+- The VM has no public IP and no open inbound ports. It is unreachable from the internet.
+- All outbound traffic (Docker Hub pulls, Xians platform webhooks, API calls) flows through the NAT Gateway.
+- To manage the VM, use **Azure Bastion** (`xianix-agent-bastion`) or `az vm run-command invoke` — SSH over the public internet is not possible by design.
+- The executor image (`99xio/xianix-executor:latest`) is **not** auto-pulled by the agent — it always uses the locally cached version. The image has been pre-pulled during setup; to update it, use `docker pull 99xio/xianix-executor:latest` on the VM explicitly.
+- No secrets are stored on disk. The `/etc/xianix/` directory holds only the startup script.
+- SSH keys were auto-generated during VM creation and stored in `~/.ssh/` on the machine that ran `az vm create`.
+- The `--restart unless-stopped` Docker flag and the systemd `Restart=on-failure` directive together ensure the agent survives container crashes and VM reboots.

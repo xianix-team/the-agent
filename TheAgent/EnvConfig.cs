@@ -59,18 +59,20 @@ public static class EnvConfig
     public static string AzureDevOpsToken   => Get("AZURE-DEVOPS-TOKEN");
 
     /// <summary>
-    /// Returns the GitHub token for the given tenant.
-    /// Checks <c>&lt;TENANTID_IN_CAPS&gt;_GITHUB-TOKEN</c> first; falls back to <c>GITHUB-TOKEN</c>.
+    /// Tenant-scoped lookup: checks <c>&lt;TENANTID&gt;-&lt;key&gt;</c> first, then
+    /// falls back to the global <paramref name="key"/>.
     /// </summary>
-    public static string GetGithubToken(string tenantId)
-        => Get(TenantKey(tenantId, "GITHUB-TOKEN"), Get("GITHUB-TOKEN"));
+    public static string GetForTenant(string tenantId, string key, string defaultValue = "")
+        => Get(TenantKey(tenantId, key), Get(key, defaultValue));
 
-    /// <summary>
-    /// Returns the Azure DevOps token for the given tenant.
-    /// Checks <c>&lt;TENANTID_IN_CAPS&gt;_AZURE-DEVOPS-TOKEN</c> first; falls back to <c>AZURE-DEVOPS-TOKEN</c>.
-    /// </summary>
+    public static string GetGithubToken(string tenantId)
+        => GetForTenant(tenantId, "GITHUB-TOKEN");
+
     public static string GetAzureDevOpsToken(string tenantId)
-        => Get(TenantKey(tenantId, "AZURE-DEVOPS-TOKEN"), Get("AZURE-DEVOPS-TOKEN"));
+        => GetForTenant(tenantId, "AZURE-DEVOPS-TOKEN");
+
+    public static string GetAnthropicApiKey(string tenantId)
+        => GetForTenant(tenantId, "ANTHROPIC-API-KEY", AnthropicApiKey);
 
     /// <summary>
     /// Builds a tenant-scoped env-var key: upper-cases the tenant ID, replaces
@@ -92,4 +94,5 @@ public static class EnvConfig
     public static double ContainerCpuCount =>
         double.TryParse(Get("CONTAINER-CPU-COUNT", "1"), System.Globalization.NumberStyles.Any,
             System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 1.0;
+
 }

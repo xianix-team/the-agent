@@ -273,7 +273,7 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
             $"XIANIX-INPUTS={input.InputsJson}",
             $"CLAUDE-CODE-PLUGINS={input.ClaudeCodePlugins}",
             $"PROMPT={input.Prompt}",
-            $"ANTHROPIC-API-KEY={EnvConfig.AnthropicApiKey}",
+            $"ANTHROPIC-API-KEY={EnvConfig.GetAnthropicApiKey(input.TenantId)}",
         };
 
         var githubToken = EnvConfig.GetGithubToken(input.TenantId);
@@ -284,7 +284,7 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
         if (!string.IsNullOrEmpty(azureDevOpsToken))
             env.Add($"AZURE-DEVOPS-TOKEN={azureDevOpsToken}");
 
-        InjectPluginEnvVars(input.ClaudeCodePlugins, env);
+        InjectPluginEnvVars(input.ClaudeCodePlugins, env, input.TenantId);
 
         return env;
     }
@@ -293,7 +293,7 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
     /// Injects per-plugin env vars declared in rules.json.
     /// Values may be static strings or <c>env.VAR_NAME</c> references resolved from the host.
     /// </summary>
-    private static void InjectPluginEnvVars(string claudeCodePluginsJson, List<string> env)
+    private static void InjectPluginEnvVars(string claudeCodePluginsJson, List<string> env, string tenantId)
     {
         if (string.IsNullOrWhiteSpace(claudeCodePluginsJson))
             return;
@@ -310,7 +310,7 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
                     var value    = entry.TryGetProperty("value",    out var v) ? v.GetString() : null;
                     var constant = entry.TryGetProperty("constant", out var c) && c.GetBoolean();
                     if (string.IsNullOrEmpty(name) || value is null) continue;
-                    env.Add($"{name}={ResolveEnvValue(value, constant)}");
+                    env.Add($"{name}={ResolveEnvValue(value, constant, tenantId)}");
                 }
             }
         }
@@ -324,14 +324,14 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
     /// <summary>
     /// Resolves an env value from rules.json.
     /// By default <c>value</c> is treated as <c>env.VAR_NAME</c> — the prefix is stripped
-    /// and the named variable is read from the host process environment.
+    /// and the named variable is read from the host process environment with tenant-scoped fallback.
     /// When <paramref name="constant"/> is true the value is returned as-is.
     /// </summary>
-    private static string ResolveEnvValue(string value, bool constant)
+    private static string ResolveEnvValue(string value, bool constant, string tenantId)
     {
         if (constant) return value;
         var varName = value.StartsWith("env.", StringComparison.Ordinal) ? value[4..] : value;
-        return EnvConfig.Get(varName);
+        return EnvConfig.GetForTenant(tenantId, varName);
     }
 
     private async Task TryKillContainerAsync(string containerId)
