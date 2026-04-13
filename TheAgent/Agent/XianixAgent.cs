@@ -105,13 +105,8 @@ public class XianixAgent(IEventOrchestrator orchestrator, ILogger<XianixAgent> l
         var xiansAgent = xiansPlatform.Agents.Register(new()
         {
             Name = Constants.AgentName,
-            Description = "An agent that can review Pull Requests and discuss the codebase",
-            Summary = "An agent that can review Pull Requests and discuss the codebase",
-            SamplePrompts =
-            [
-                "I want to review a Pull Request",
-                "Let's discuss the codebase",
-            ],
+            Description = "A versatile automation agent that listens for incoming webhooks from your tools and services, then triggers intelligent AI-powered workflows using Claude Code plugins — helping your team automate code reviews, respond to events, and streamline everyday development tasks without lifting a finger.",
+            Summary = "AI automation agent that turns webhook events into smart, plugin-driven actions.",
             IsTemplate = true
         });
 

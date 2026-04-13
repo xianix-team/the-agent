@@ -110,4 +110,11 @@ public sealed class InputRuleEntry
     /// <summary>When true, <see cref="Value"/> is returned as-is (not resolved as a JSON path).</summary>
     [JsonPropertyName("constant")]
     public bool Constant { get; init; }
+
+    /// <summary>
+    /// When true, the execution block is skipped if this input resolves to <c>null</c>,
+    /// an empty string, or a whitespace-only string.
+    /// </summary>
+    [JsonPropertyName("mandatory")]
+    public bool Mandatory { get; init; }
 }

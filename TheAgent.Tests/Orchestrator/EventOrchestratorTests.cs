@@ -47,13 +47,17 @@ public class EventOrchestratorTests
     }
 
     [Fact]
-    public async Task OrchestrateAsync_WhenEvaluatorThrows_PropagatesException()
+    public async Task OrchestrateAsync_WhenEvaluatorThrows_ReturnsSkipWithErrorMessage()
     {
         _evaluator.EvaluateAsync(Arg.Any<string>(), Arg.Any<object?>())
                   .Returns<Task<EvaluationOutcome>>(_ => throw new InvalidOperationException("No rules knowledge document found."));
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            _sut.OrchestrateAsync("github-pr", new { }, "tenant-1"));
+        var batch = await _sut.OrchestrateAsync("github-pr", new { }, "tenant-1");
+
+        Assert.False(batch.Handled);
+        Assert.Empty(batch.Matches);
+        Assert.NotNull(batch.SkipReason);
+        Assert.Contains("No rules knowledge document found.", batch.SkipReason);
     }
 
     [Fact]

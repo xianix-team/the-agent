@@ -7,7 +7,15 @@
                 "match-any": [
                     {
                         "name": "github-pr-opened-event",
-                        "rule": "action==opened"
+                        "rule": "action==opened&&pull_request.requested_reviewers.*.login=='xianix-agent'"
+                    },
+                    {
+                        "name": "github-pr-synchronize-event",
+                        "rule": "action==synchronize&&pull_request.requested_reviewers.*.login=='xianix-agent'"
+                    },
+                    {
+                        "name": "github-pr-review-requested-event",
+                        "rule": "action==review_requested&&requested_reviewer.login=='xianix-agent'"
                     }
                 ],
                 "use-inputs": [
@@ -55,6 +63,10 @@
                 "name": "azuredevops-pull-request-review",
                 "match-any": [
                     {
+                        "name": "azuredevops-pr-created",
+                        "rule": "eventType==git.pullrequest.created&&resource.reviewers.*.displayName=='xianix-agent'"
+                    },
+                    {
                         "name": "azuredevops-pr-source-branch-updated",
                         "rule": "eventType==git.pullrequest.updated&&resource.reviewers.*.displayName=='xianix-agent'&&message.text*='updated the source branch'"
                     },
@@ -99,11 +111,34 @@
                 "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review. The `az` CLI is authenticated and available if you need it directly."
             },
             {
+                "name": "github-issue-requirement-analysis",
+                "match-any": [
+                  {
+                    "name": "github-issue-assigned-to-agent",
+                    "rule": "action==assigned&&assignee.login=='xianix-agent'"
+                  }
+                ],
+                "use-inputs": [
+                  { "name": "issue-number",    "value": "issue.number" },
+                  { "name": "repository-url",  "value": "repository.clone_url" },
+                  { "name": "repository-name", "value": "repository.full_name" },
+                  { "name": "issue-title",     "value": "issue.title" },
+                  { "name": "platform",        "value": "github", "constant": true }
+                ],
+                "use-plugins": [
+                  {
+                    "plugin-name": "req-analyst@xianix-plugins-official",
+                    "marketplace": "xianix-team/plugins-official"
+                  }
+                ],
+                "execute-prompt": "Issue #{{issue-number}} titled \"{{issue-title}}\" in the repository {{repository-name}} has been assigned to xianix-agent for requirement analysis.\n\nRun /requirement-analysis {{issue-number}} to perform the automated requirement analysis and elaboration."
+            },
+            {
                 "name": "azuredevops-work-item-requirement-analysis",
                 "match-any": [
                     {
                         "name": "azuredevops-workitem-assigned-to-agent",
-                        "rule": "eventType==workitem.updated&&resource.fields.\"System.AssignedTo\".newValue=='xianix-agent <xianix-agent@99x.io>'"
+                        "rule": "eventType==workitem.updated&&resource.fields.\"System.AssignedTo\".newValue=='xianix-agent <xianix-agent@99x.io>'&&resource.revision.fields.\"System.State\"=='To Do'"
                     }
                 ],
                 "use-inputs": [

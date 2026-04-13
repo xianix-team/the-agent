@@ -9,7 +9,7 @@ namespace Xianix.Rules;
 /// Evaluates webhook rule sets against a JSON payload: at least one <c>match</c> entry must pass (OR);
 /// then inputs are resolved into a dictionary (JSON paths and optional constant literals).
 /// Atomic match operators include <c>==</c>, <c>!=</c>, <c>^=</c> / <c>!^=</c> (string prefix),
-/// and <c>*=</c> / <c>!*=</c> (substring contains).
+/// <c>*=</c> / <c>!*=</c> (substring contains), and unary <c>?</c> / <c>!?</c> (exists / not-exists).
 /// Returns null if no matching webhook, no match entry passes, or the payload is not valid JSON.
 /// </summary>
 public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
@@ -129,6 +129,7 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             }
 
             var dict = new Dictionary<string, object?>(StringComparer.Ordinal);
+            var missingMandatory = new List<string>();
             foreach (var input in execution.InputRules)
             {
                 if (string.IsNullOrEmpty(input.Name))
@@ -137,6 +138,8 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
                 if (input.Constant)
                 {
                     dict[input.Name] = input.Value;
+                    if (input.Mandatory && string.IsNullOrWhiteSpace(input.Value))
+                        missingMandatory.Add(input.Name);
                     continue;
                 }
 
@@ -144,6 +147,26 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
                     dict[input.Name] = null;
                 else
                     dict[input.Name] = JsonElementToObject(el);
+
+                if (input.Mandatory && IsInputNullOrEmpty(dict[input.Name]))
+                    missingMandatory.Add(input.Name);
+            }
+
+            if (missingMandatory.Count > 0)
+            {
+                failedExecutionOrdinal++;
+                var blockTitle = !string.IsNullOrWhiteSpace(execution.Name)
+                    ? execution.Name.Trim()
+                    : $"Execution block {failedExecutionOrdinal}";
+                var names = string.Join(", ", missingMandatory.Select(n => $"'{n}'"));
+                var section =
+                    $"[{blockTitle}] Skipped — mandatory input(s) resolved to null or empty: {names}.\n"
+                    + $"Check that the webhook payload contains valid values at the configured paths for: {names}.";
+                _logger.LogError(
+                    "Execution '{ExecutionBlock}' for webhook '{WebhookName}' skipped: mandatory input(s) missing or empty: {MissingInputs}.",
+                    blockTitle, webhookName, names);
+                failedExecutionSections.Add(section);
+                continue;
             }
 
             var prompt = InterpolatePrompt(execution.Prompt, dict);
@@ -235,10 +258,26 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             return "(empty condition — always passes)";
 
         if (!TryParseAtomicCondition(condition, out var path, out var expected, out var opKind))
-            return $"'{condition}' (malformed — expected one of ==, !=, ^=, !^=, *=, !*=)";
+            return $"'{condition}' (malformed — expected one of ==, !=, ^=, !^=, *=, !*=, ?, !?)";
 
         switch (opKind)
         {
+            case AtomicOpKind.Exists:
+            case AtomicOpKind.NotExists:
+                var negatedEx = opKind == AtomicOpKind.NotExists;
+                if (PathContainsWildcardSegment(path))
+                    return GetWildcardPathExistsDiagnostic(path, root, negated: negatedEx);
+
+                if (TryGetElementAtPath(root, path, out var actualEx))
+                {
+                    var isNull = actualEx.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined;
+                    var desc = isNull ? "null" : actualEx.GetRawText().Trim('"');
+                    var pass = negatedEx ? isNull : !isNull;
+                    return
+                        $"'{condition}' (path exists, value: '{desc}'; condition {(pass ? "passes" : "fails")})";
+                }
+
+                return $"'{condition}' (path '{path}' not found in payload)";
             case AtomicOpKind.Equal:
             case AtomicOpKind.NotEqual:
                 var negatedEq = opKind == AtomicOpKind.NotEqual;
@@ -321,6 +360,40 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
         }
 
         return $"'{path}' (no array element whose value contains '{needle}')";
+    }
+
+    private static string GetWildcardPathExistsDiagnostic(string path, JsonElement root, bool negated)
+    {
+        if (!TrySplitWildcardPath(path, out var prefixPath, out var suffixPath))
+            return $"'{path}' (invalid path — '*' must have a suffix segment)";
+
+        JsonElement arr;
+        if (string.IsNullOrEmpty(prefixPath))
+            arr = root;
+        else if (!TryGetElementAtPath(root, prefixPath, out arr))
+            return $"'{path}' (prefix '{prefixPath}' not found in payload)";
+
+        if (arr.ValueKind != JsonValueKind.Array)
+            return $"'{path}' (prefix is not an array — actual kind: {arr.ValueKind})";
+
+        var i = 0;
+        foreach (var item in arr.EnumerateArray())
+        {
+            if (TryGetElementAtPath(item, suffixPath, out var actual)
+                && actual.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
+            {
+                var op = negated ? "!?" : "?";
+                var s = actual.ValueKind == JsonValueKind.String
+                    ? actual.GetString() ?? ""
+                    : actual.GetRawText().Trim('"');
+                return
+                    $"'{path}{op}' (matched array index {i}: exists — value: '{s}')";
+            }
+
+            i++;
+        }
+
+        return $"'{path}' (no array element where path exists and is not null)";
     }
 
     private static string GetWildcardPathDiagnostic(string path, string expected, JsonElement root, bool negated)
@@ -439,7 +512,8 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
 
     /// <summary>
     /// Evaluates a compound filter rule supporting <c>&&</c> (AND) and <c>||</c> (OR) operators.
-    /// Atomic comparisons: <c>==</c>, <c>!=</c>, <c>^=</c> / <c>!^=</c> (prefix), <c>*=</c> / <c>!*=</c> (contains).
+    /// Atomic comparisons: <c>==</c>, <c>!=</c>, <c>^=</c> / <c>!^=</c> (prefix), <c>*=</c> / <c>!*=</c> (contains),
+    /// and unary <c>?</c> / <c>!?</c> (exists / not-exists).
     /// <c>||</c> has lower precedence: the rule is split into OR-groups first, then each group
     /// is split into AND-conditions. The rule passes if any OR-group passes (i.e. all its
     /// AND-conditions are true).
@@ -474,6 +548,8 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             AtomicOpKind.NotStartsWith => EvaluatePathStartsWith(root, path, expected, negated: true),
             AtomicOpKind.Contains => EvaluatePathContains(root, path, expected, negated: false),
             AtomicOpKind.NotContains => EvaluatePathContains(root, path, expected, negated: true),
+            AtomicOpKind.Exists => EvaluatePathExists(root, path, negated: false),
+            AtomicOpKind.NotExists => EvaluatePathExists(root, path, negated: true),
             _ => false,
         };
     }
@@ -486,11 +562,15 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
         NotStartsWith,
         Contains,
         NotContains,
+        Exists,
+        NotExists,
     }
 
     /// <summary>
-    /// Parses equality, prefix (<c>^=</c> / <c>!^=</c>), and substring (<c>*=</c> / <c>!*=</c>) comparisons.
-    /// The leftmost operator wins; three-character operators (<c>!*=</c>, <c>!^=</c>) are checked before two-character ones.
+    /// Parses equality, prefix (<c>^=</c> / <c>!^=</c>), substring (<c>*=</c> / <c>!*=</c>),
+    /// and unary existence (<c>?</c> / <c>!?</c>) conditions.
+    /// Binary operators are scanned left-to-right (three-char before two-char).
+    /// If no binary operator is found, the condition is checked for a trailing <c>!?</c> or <c>?</c> suffix.
     /// </summary>
     private static bool TryParseAtomicCondition(
         string condition,
@@ -561,7 +641,65 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             }
         }
 
+        // Unary operators: !? (not-exists) checked before ? (exists).
+        if (condition.EndsWith("!?"))
+        {
+            path = condition[..^2].Trim();
+            expected = "";
+            opKind = AtomicOpKind.NotExists;
+            return path.Length > 0;
+        }
+
+        if (condition.EndsWith('?'))
+        {
+            path = condition[..^1].Trim();
+            expected = "";
+            opKind = AtomicOpKind.Exists;
+            return path.Length > 0;
+        }
+
         return false;
+    }
+
+    /// <summary>
+    /// Checks whether the value at <paramref name="path"/> exists and is not <c>null</c>.
+    /// A missing path or a JSON <c>null</c> value is treated as "does not exist".
+    /// Supports wildcard <c>*</c> segments the same way as the binary operators.
+    /// </summary>
+    private static bool EvaluatePathExists(JsonElement root, string path, bool negated)
+    {
+        if (PathContainsWildcardSegment(path))
+            return EvaluateWildcardPathExists(root, path, negated);
+
+        if (!TryGetElementAtPath(root, path, out var actual))
+            return negated;
+
+        var exists = actual.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined;
+        return negated ? !exists : exists;
+    }
+
+    private static bool EvaluateWildcardPathExists(JsonElement root, string path, bool negated)
+    {
+        if (!TrySplitWildcardPath(path, out var prefixPath, out var suffixPath))
+            return false;
+
+        JsonElement arr;
+        if (string.IsNullOrEmpty(prefixPath))
+            arr = root;
+        else if (!TryGetElementAtPath(root, prefixPath, out arr))
+            return negated;
+
+        if (arr.ValueKind != JsonValueKind.Array)
+            return negated;
+
+        foreach (var item in arr.EnumerateArray())
+        {
+            if (TryGetElementAtPath(item, suffixPath, out var actual)
+                && actual.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
+                return !negated;
+        }
+
+        return negated;
     }
 
     /// <summary>
@@ -891,4 +1029,7 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
         JsonValueKind.Object => el.GetRawText(),
         _ => null,
     };
+
+    private static bool IsInputNullOrEmpty(object? value) =>
+        value is null || (value is string s && string.IsNullOrWhiteSpace(s));
 }

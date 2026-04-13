@@ -218,4 +218,328 @@ public class WebhookRulesEvaluatorTests
 
         Assert.False(outcome.Matched);
     }
+
+    [Fact]
+    public void EvaluateWithRules_ExistsOperator_MatchesWhenPathPresent()
+    {
+        using var doc = JsonDocument.Parse("""{ "action": "opened", "pull_request": { "title": "Fix bug" } }""");
+        var ruleSets = _sut.ParseRules(BuildRulesJson("pull_request.title?"));
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.True(outcome.Matched);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_ExistsOperator_FailsWhenPathMissing()
+    {
+        using var doc = JsonDocument.Parse("""{ "action": "opened" }""");
+        var ruleSets = _sut.ParseRules(BuildRulesJson("pull_request.title?"));
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.False(outcome.Matched);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_ExistsOperator_FailsWhenValueIsNull()
+    {
+        using var doc = JsonDocument.Parse("""{ "pull_request": { "title": null } }""");
+        var ruleSets = _sut.ParseRules(BuildRulesJson("pull_request.title?"));
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.False(outcome.Matched);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_NotExistsOperator_MatchesWhenPathMissing()
+    {
+        using var doc = JsonDocument.Parse("""{ "action": "opened" }""");
+        var ruleSets = _sut.ParseRules(BuildRulesJson("pull_request.title!?"));
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.True(outcome.Matched);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_NotExistsOperator_MatchesWhenValueIsNull()
+    {
+        using var doc = JsonDocument.Parse("""{ "pull_request": { "title": null } }""");
+        var ruleSets = _sut.ParseRules(BuildRulesJson("pull_request.title!?"));
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.True(outcome.Matched);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_NotExistsOperator_FailsWhenPathPresent()
+    {
+        using var doc = JsonDocument.Parse("""{ "pull_request": { "title": "Fix bug" } }""");
+        var ruleSets = _sut.ParseRules(BuildRulesJson("pull_request.title!?"));
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.False(outcome.Matched);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_ExistsOperator_WorksInCompoundRule()
+    {
+        using var doc = JsonDocument.Parse("""{ "action": "opened", "pull_request": { "draft": false } }""");
+        var ruleSets = _sut.ParseRules(BuildRulesJson("action==opened&&pull_request.draft?"));
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.True(outcome.Matched);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_ExistsOperator_WildcardMatchesWhenAnyElementHasField()
+    {
+        using var doc = JsonDocument.Parse(
+            """
+            {
+              "items": [
+                { "name": "alpha" },
+                { "name": "beta", "tag": "important" }
+              ]
+            }
+            """);
+        var ruleSets = _sut.ParseRules(BuildRulesJson("items.*.tag?"));
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.True(outcome.Matched);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_ExistsOperator_WildcardFailsWhenNoElementHasField()
+    {
+        using var doc = JsonDocument.Parse(
+            """
+            {
+              "items": [
+                { "name": "alpha" },
+                { "name": "beta" }
+              ]
+            }
+            """);
+        var ruleSets = _sut.ParseRules(BuildRulesJson("items.*.tag?"));
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.False(outcome.Matched);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_MandatoryInput_MatchesWhenPresent()
+    {
+        using var doc = JsonDocument.Parse("""{ "action": "opened", "number": 42 }""");
+        var ruleSets = _sut.ParseRules(
+            """
+            [
+              {
+                "webhook": "Default",
+                "executions": [
+                  {
+                    "name": "test-block",
+                    "match-any": [],
+                    "use-inputs": [
+                      { "name": "pr-number", "value": "number", "mandatory": true }
+                    ],
+                    "use-plugins": [],
+                    "execute-prompt": "ok"
+                  }
+                ]
+              }
+            ]
+            """);
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.True(outcome.Matched);
+        Assert.Equal(42L, outcome.Results![0].Inputs["pr-number"]);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_MandatoryInput_SkipsBlockWhenPathMissing()
+    {
+        using var doc = JsonDocument.Parse("""{ "action": "opened" }""");
+        var ruleSets = _sut.ParseRules(
+            """
+            [
+              {
+                "webhook": "Default",
+                "executions": [
+                  {
+                    "name": "test-block",
+                    "match-any": [],
+                    "use-inputs": [
+                      { "name": "pr-number", "value": "number", "mandatory": true }
+                    ],
+                    "use-plugins": [],
+                    "execute-prompt": "ok"
+                  }
+                ]
+              }
+            ]
+            """);
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.False(outcome.Matched);
+        Assert.Contains("pr-number", outcome.SkipReason);
+        Assert.Contains("mandatory", outcome.SkipReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_MandatoryInput_SkipsBlockWhenValueIsNull()
+    {
+        using var doc = JsonDocument.Parse("""{ "number": null }""");
+        var ruleSets = _sut.ParseRules(
+            """
+            [
+              {
+                "webhook": "Default",
+                "executions": [
+                  {
+                    "name": "test-block",
+                    "match-any": [],
+                    "use-inputs": [
+                      { "name": "pr-number", "value": "number", "mandatory": true }
+                    ],
+                    "use-plugins": [],
+                    "execute-prompt": "ok"
+                  }
+                ]
+              }
+            ]
+            """);
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.False(outcome.Matched);
+        Assert.Contains("pr-number", outcome.SkipReason);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_MandatoryInput_SkipsBlockWhenValueIsEmptyString()
+    {
+        using var doc = JsonDocument.Parse("""{ "title": "" }""");
+        var ruleSets = _sut.ParseRules(
+            """
+            [
+              {
+                "webhook": "Default",
+                "executions": [
+                  {
+                    "name": "test-block",
+                    "match-any": [],
+                    "use-inputs": [
+                      { "name": "pr-title", "value": "title", "mandatory": true }
+                    ],
+                    "use-plugins": [],
+                    "execute-prompt": "ok"
+                  }
+                ]
+              }
+            ]
+            """);
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.False(outcome.Matched);
+        Assert.Contains("pr-title", outcome.SkipReason);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_MandatoryInput_ReportsAllMissingInputsInSkipReason()
+    {
+        using var doc = JsonDocument.Parse("""{ "action": "opened" }""");
+        var ruleSets = _sut.ParseRules(
+            """
+            [
+              {
+                "webhook": "Default",
+                "executions": [
+                  {
+                    "name": "test-block",
+                    "match-any": [],
+                    "use-inputs": [
+                      { "name": "pr-number", "value": "number",         "mandatory": true },
+                      { "name": "pr-title",  "value": "pull_request.title", "mandatory": true },
+                      { "name": "action",    "value": "action" }
+                    ],
+                    "use-plugins": [],
+                    "execute-prompt": "ok"
+                  }
+                ]
+              }
+            ]
+            """);
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.False(outcome.Matched);
+        Assert.Contains("pr-number", outcome.SkipReason);
+        Assert.Contains("pr-title", outcome.SkipReason);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_NonMandatoryInput_MatchesEvenWhenNull()
+    {
+        using var doc = JsonDocument.Parse("""{ "action": "opened" }""");
+        var ruleSets = _sut.ParseRules(
+            """
+            [
+              {
+                "webhook": "Default",
+                "executions": [
+                  {
+                    "name": "test-block",
+                    "match-any": [],
+                    "use-inputs": [
+                      { "name": "pr-number", "value": "number" },
+                      { "name": "action",    "value": "action" }
+                    ],
+                    "use-plugins": [],
+                    "execute-prompt": "ok"
+                  }
+                ]
+              }
+            ]
+            """);
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.True(outcome.Matched);
+        Assert.Null(outcome.Results![0].Inputs["pr-number"]);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_MandatoryInput_OtherExecutionBlocksStillMatch()
+    {
+        using var doc = JsonDocument.Parse("""{ "action": "opened" }""");
+        var ruleSets = _sut.ParseRules(
+            """
+            [
+              {
+                "webhook": "Default",
+                "executions": [
+                  {
+                    "name": "block-with-mandatory",
+                    "match-any": [],
+                    "use-inputs": [
+                      { "name": "pr-number", "value": "number", "mandatory": true }
+                    ],
+                    "use-plugins": [],
+                    "execute-prompt": "review"
+                  },
+                  {
+                    "name": "block-without-mandatory",
+                    "match-any": [],
+                    "use-inputs": [
+                      { "name": "action", "value": "action" }
+                    ],
+                    "use-plugins": [],
+                    "execute-prompt": "log"
+                  }
+                ]
+              }
+            ]
+            """);
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.True(outcome.Matched);
+        Assert.Single(outcome.Results!);
+        Assert.Equal("opened", outcome.Results![0].Inputs["action"]);
+    }
 }
