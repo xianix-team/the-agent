@@ -1,0 +1,14 @@
+[Unit]
+Description=Xianix Agent (Docker)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/etc/xianix/start-agent.sh
+ExecStop=/usr/bin/docker stop xianix-agent
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

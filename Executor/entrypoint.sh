@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Re-export dashed env vars as underscored aliases (bash can't use dashes in
+# variable names). E.g. GITHUB-TOKEN → GITHUB_TOKEN. This lets the agent
+# pass Key Vault names as-is while keeping the rest of the script standard.
+while IFS='=' read -r key value; do
+  [[ "$key" == *-* ]] && export "${key//-/_}=${value}"
+done < <(env)
+
 log() { echo "$@" >&2; }
 
 log "=== Xianix Executor ==="

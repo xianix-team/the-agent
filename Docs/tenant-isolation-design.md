@@ -370,9 +370,9 @@ Secrets are **shared across all tenants** — there are no per-tenant vaults or 
 ┌──────────────────────────────────┐       ┌───────────────────────────────┐
 │  Agent Host Environment (.env)    │       │  Container Environment         │
 │                                   │       │                                │
-│  LLM_API_KEY=...                  │──────▶│  LLM_API_KEY=...              │
-│  GITHUB_TOKEN=...                 │       │  GITHUB_TOKEN=...  (if GitHub) │
-│  AZURE_DEVOPS_TOKEN=...           │       │  AZURE_DEVOPS_TOKEN=... (if AzDO)│
+│  ANTHROPIC-API-KEY=...             │──────▶│  ANTHROPIC_API_KEY=...        │
+│  GITHUB-TOKEN=...                 │       │  GITHUB_TOKEN=...  (if GitHub) │
+│  AZURE-DEVOPS-TOKEN=...           │       │  AZURE_DEVOPS_TOKEN=... (if AzDO)│
 │                                   │       │  PLATFORM=github|azuredevops   │
 │  (loaded via EnvConfig)           │       │                                │
 │                                   │       │  stdout → JSON result           │
@@ -384,9 +384,9 @@ Secrets are **shared across all tenants** — there are no per-tenant vaults or 
 
 | Secret | Purpose | When Injected |
 |--------|---------|---------------|
-| `LLM_API_KEY` | Claude / LLM API access for the Claude Code SDK | Always |
-| `GITHUB_TOKEN` | GitHub API access (clone private repos, post PR comments, update checks) | When `platform == "github"` |
-| `AZURE_DEVOPS_TOKEN` | Azure DevOps API access (clone repos, post PR comments, update work items) | When `platform == "azuredevops"` |
+| `ANTHROPIC-API-KEY` | Claude / LLM API access for the Claude Code SDK | Always |
+| `GITHUB-TOKEN` | GitHub API access (clone private repos, post PR comments, update checks) | When `platform == "github"` |
+| `AZURE-DEVOPS-TOKEN` | Azure DevOps API access (clone repos, post PR comments, update work items) | When `platform == "azuredevops"` |
 | `PLATFORM` | Identifies which CM platform this execution targets | Always (derived from webhook inputs) |
 
 ### 7.3 Platform Selection Flow
@@ -408,7 +408,7 @@ ContainerActivities.StartContainerAsync:
     1. Read shared secrets from host environment (EnvConfig)
     2. Read "platform" from OrchestrationResult.Inputs
     3. Build env var map:
-       - Always: LLM_API_KEY, PLATFORM, TENANT_ID, REPOSITORY_URL, PLUGIN_NAME, PLUGIN_COMMAND
+       - Always: ANTHROPIC_API_KEY, PLATFORM, TENANT_ID, REPOSITORY_URL, PLUGIN_NAME, PLUGIN_COMMAND
        - If platform == "github":      GITHUB_TOKEN
        - If platform == "azuredevops": AZURE_DEVOPS_TOKEN
     4. Pass as Docker container env vars at creation time
@@ -434,13 +434,13 @@ The host `.env` file (and `EnvConfig.cs`) needs these additions:
 
 ```env
 # Existing
-XIANS_SERVER_URL=...
-XIANS_API_KEY=...
-LLM_API_KEY=...
+XIANS-SERVER-URL=...
+XIANS-API-KEY=...
+ANTHROPIC-API-KEY=...
 
-# New: Platform tokens (shared across all tenants)
-GITHUB_TOKEN=ghp_...
-AZURE_DEVOPS_TOKEN=...
+# Platform tokens (shared across all tenants)
+GITHUB-TOKEN=ghp_...
+AZURE-DEVOPS-TOKEN=...
 ```
 
 ## 8. Security Boundaries
@@ -711,7 +711,7 @@ Warm containers have the base image ready but no tenant data. On assignment, sec
 | `WebhookRulesEvaluator` | **Include** matched plugins in evaluation output. |
 | `rules.json` | **No change** — plugin structure already defined. |
 | `Program.cs` | **Register** `ContainerActivities` + Docker client in DI. |
-| `EnvConfig` | **Add** `GITHUB_TOKEN`, `AZURE_DEVOPS_TOKEN`, Docker host URL, container resource limits. |
+| `EnvConfig` | **Add** `GITHUB-TOKEN`, `AZURE-DEVOPS-TOKEN`, Docker host URL, container resource limits. |
 
 ## 15. Technology Stack
 

@@ -1,22 +1,10 @@
 # Deploying Xianix Agent on an Azure VM
 
-This guide documents how the `xianix-agent` Docker image is deployed on an Azure Linux VM. The VM has **no public IP and no inbound ports open** — all internet traffic is outbound-only via a NAT Gateway. 
+This guide documents how the `xianix-agent` Docker image is deployed on an Azure Linux VM. The VM has **no public IP and no inbound ports open** — all internet traffic is outbound-only via a NAT Gateway.
 
 Secrets are stored in **Azure Key Vault** and retrieved at runtime via the VM's **system-assigned managed identity** — no plain-text `.env` file is kept on disk. 
 
 The agent connects to the Docker socket and automatically pulls and manages `xianix-executor` containers.
-
-## How It Works at Runtime
-
-The VM runs `/etc/xianix/start-agent.sh` as a systemd service on boot. The script:
-
-1. Requests a short-lived bearer token from the **Azure Instance Metadata Service (IMDS)** using the VM's managed identity — no stored credentials needed.
-2. Calls the Key Vault REST API to fetch each secret.
-3. Passes the secrets as environment variables directly to `docker run`.
-
-The script is installed at `/etc/xianix/start-agent.sh` and the service at `/etc/systemd/system/xianix-agent.service`.
-
----
 
 ## Operations Reference
 
@@ -57,12 +45,6 @@ az vm run-command invoke \
 ```
 
 ### Check Status and Logs
-
-```bash
-sudo systemctl status xianix-agent --no-pager
-docker ps
-docker logs --tail 50 xianix-agent 2>&1
-```
 
 ```bash
 docker logs -f xianix-agent
@@ -140,17 +122,28 @@ az keyvault secret set --vault-name xianix-kv-agent --name CONTAINER-MEMORY-MB  
 az keyvault secret set --vault-name xianix-kv-agent --name CONTAINER-CPU-COUNT  --value "1"
 ```
 
-To see the KeyVault secrets
+### Working with KeyVault secrets
 
 ```bash
-# To see keys
+# List all secret names
 az keyvault secret list --vault-name xianix-kv-agent --query "[].name" -o table
 
-# To see the value
+# Read a secret value
 az keyvault secret show --vault-name xianix-kv-agent --name AZURE-DEVOPS-TOKEN --query "value" -o tsv
 
-# To remove a secret
+# Add or update a secret
+az keyvault secret set --vault-name xianix-kv-agent --name MY-NEW-SECRET --value "<value>"
+
+# Delete a secret
 az keyvault secret delete --vault-name xianix-kv-agent --name AZURE-DEVOPS-TOKEN
+```
+
+Secret names use **dashes** (e.g. `MY-NEW-SECRET`) because Azure Key Vault doesn't allow underscores. The startup script passes them as-is and the agent resolves both forms transparently (e.g. `MY-NEW-SECRET` and `MY_NEW_SECRET` both work). Any new secret added to the vault is picked up on the next restart — no script changes needed.
+
+After adding or changing a secret, restart the agent:
+
+```bash
+sudo systemctl restart xianix-agent
 ```
 
 ### Via Azure Portal
@@ -185,6 +178,7 @@ sudo systemctl restart xianix-agent
 
 ## Notes
 
+- The startup script and systemd service are version-controlled in [`Scripts/vm/`](../Scripts/vm/). Always update the repo copies when changing the live files, and vice versa.
 - The VM has no public IP and no open inbound ports. It is unreachable from the internet.
 - All outbound traffic (Docker Hub pulls, Xians platform webhooks, API calls) flows through the NAT Gateway.
 - To manage the VM, use **Azure Bastion** (`xianix-agent-bastion`) or `az vm run-command invoke` — SSH over the public internet is not possible by design.

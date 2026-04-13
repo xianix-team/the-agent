@@ -268,21 +268,21 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
     {
         var env = new List<string>
         {
-            $"TENANT_ID={input.TenantId}",
-            $"EXECUTION_ID={input.ExecutionId}",
-            $"XIANIX_INPUTS={input.InputsJson}",
-            $"CLAUDE_CODE_PLUGINS={input.ClaudeCodePlugins}",
+            $"TENANT-ID={input.TenantId}",
+            $"EXECUTION-ID={input.ExecutionId}",
+            $"XIANIX-INPUTS={input.InputsJson}",
+            $"CLAUDE-CODE-PLUGINS={input.ClaudeCodePlugins}",
             $"PROMPT={input.Prompt}",
-            $"ANTHROPIC_API_KEY={EnvConfig.AnthropicApiKey}",
+            $"ANTHROPIC-API-KEY={EnvConfig.AnthropicApiKey}",
         };
 
         var githubToken = EnvConfig.GetGithubToken(input.TenantId);
         if (!string.IsNullOrEmpty(githubToken))
-            env.Add($"GITHUB_TOKEN={githubToken}");
+            env.Add($"GITHUB-TOKEN={githubToken}");
 
         var azureDevOpsToken = EnvConfig.GetAzureDevOpsToken(input.TenantId);
         if (!string.IsNullOrEmpty(azureDevOpsToken))
-            env.Add($"AZURE_DEVOPS_TOKEN={azureDevOpsToken}");
+            env.Add($"AZURE-DEVOPS-TOKEN={azureDevOpsToken}");
 
         InjectPluginEnvVars(input.ClaudeCodePlugins, env);
 
@@ -331,7 +331,7 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
     {
         if (constant) return value;
         var varName = value.StartsWith("env.", StringComparison.Ordinal) ? value[4..] : value;
-        return Environment.GetEnvironmentVariable(varName) ?? "";
+        return EnvConfig.Get(varName);
     }
 
     private async Task TryKillContainerAsync(string containerId)

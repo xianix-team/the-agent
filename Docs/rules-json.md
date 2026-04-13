@@ -296,7 +296,7 @@ Placeholders are replaced case-insensitively. Any `{{name}}` with no matching in
             "plugin-name": "pr-reviewer@xianix-plugins-official",
             "marketplace": "xianix-team/plugins-official",
             "envs": [
-              { "name": "GITHUB_PERSONAL_ACCESS_TOKEN", "value": "env.GITHUB_TOKEN" }
+              { "name": "GITHUB_PERSONAL_ACCESS_TOKEN", "value": "env.GITHUB-TOKEN" }
             ]
           }
         ],

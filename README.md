@@ -36,7 +36,7 @@ flowchart LR
 cp .env.example .env
 ```
 
-Key variables to set: `XIANS_SERVER_URL`, `XIANS_API_KEY`, `LLM_API_KEY`, and at least one platform token (`GITHUB_TOKEN` or `AZURE_DEVOPS_TOKEN`). See `.env.example` for the full list.
+Key variables to set: `XIANS-SERVER-URL`, `XIANS-API-KEY`, `ANTHROPIC-API-KEY`, and at least one platform token (`GITHUB-TOKEN` or `AZURE-DEVOPS-TOKEN`). See `.env.example` for the full list.
 
 ### Environment-specific config
 

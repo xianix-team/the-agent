@@ -23,7 +23,7 @@ az vm create \
   --generate-ssh-keys
 ```
 
-### 3. Install Docker
+### 3. Install Docker and jq
 
 ```bash
 az vm run-command invoke \
@@ -31,6 +31,8 @@ az vm run-command invoke \
   --name xianix-agent-vm \
   --command-id RunShellScript \
   --scripts "
+    apt-get update -qq
+    apt-get install -y -qq jq
     curl -fsSL https://get.docker.com | sh
     usermod -aG docker azureuser
     systemctl enable docker
@@ -160,3 +162,118 @@ az network public-ip delete \
   --resource-group xianix-agent-rg \
   --name xianix-agent-vmPublicIP
 ```
+
+## How It Works at Runtime
+
+The VM runs `/etc/xianix/start-agent.sh` as a systemd service on boot. The script:
+
+1. Requests a short-lived bearer token from the **Azure Instance Metadata Service (IMDS)** using the VM's managed identity — no stored credentials needed.
+2. Calls the Key Vault REST API to fetch each secret.
+3. Passes the secrets as environment variables directly to `docker run`.
+
+The script is installed at `/etc/xianix/start-agent.sh` and the service at `/etc/systemd/system/xianix-agent.service`.
+
+Both files are version-controlled in this repository under [`Scripts/vm/`](../Scripts/vm/).
+
+---
+
+## Installing the Startup Scripts on a New VM
+
+After the infrastructure is provisioned (see [azure-infrastructure.md](azure-infrastructure.md)), Docker is installed, and the Key Vault secrets are populated, install the startup script and systemd service on the VM.
+
+### Option A — Via Azure Bastion
+
+SSH into the VM through Bastion and run:
+
+```bash
+# Create the script directory
+sudo mkdir -p /etc/xianix
+
+# Copy the startup script (paste contents or scp via Bastion)
+sudo tee /etc/xianix/start-agent.sh < start-agent.sh > /dev/null
+sudo chmod +x /etc/xianix/start-agent.sh
+
+# Copy the systemd unit
+sudo tee /etc/systemd/system/xianix-agent.service < xianix-agent.service > /dev/null
+
+# Enable the service so it starts on boot
+sudo systemctl daemon-reload
+sudo systemctl enable xianix-agent
+```
+
+### Option B — Via `az vm run-command invoke`
+
+Use the Azure CLI to push the files remotely. Replace the heredoc contents with the latest versions from `Scripts/vm/`.
+
+```bash
+# Install start-agent.sh
+az vm run-command invoke \
+  --resource-group xianix-agent-rg \
+  --name xianix-agent-vm \
+  --command-id RunShellScript \
+  --scripts "
+    mkdir -p /etc/xianix
+    cat > /etc/xianix/start-agent.sh << 'SCRIPT_EOF'
+$(cat Scripts/vm/start-agent.sh)
+SCRIPT_EOF
+    chmod +x /etc/xianix/start-agent.sh
+  "
+
+# Install xianix-agent.service
+az vm run-command invoke \
+  --resource-group xianix-agent-rg \
+  --name xianix-agent-vm \
+  --command-id RunShellScript \
+  --scripts "
+    cat > /etc/systemd/system/xianix-agent.service << 'UNIT_EOF'
+$(cat Scripts/vm/xianix-agent.service)
+UNIT_EOF
+    systemctl daemon-reload
+    systemctl enable xianix-agent
+  "
+```
+
+### Verify installation
+
+```bash
+az vm run-command invoke \
+  --resource-group xianix-agent-rg \
+  --name xianix-agent-vm \
+  --command-id RunShellScript \
+  --scripts "
+    echo '--- start-agent.sh ---'
+    cat /etc/xianix/start-agent.sh
+    echo ''
+    echo '--- xianix-agent.service ---'
+    cat /etc/systemd/system/xianix-agent.service
+    echo ''
+    echo '--- systemd status ---'
+    systemctl is-enabled xianix-agent
+  "
+```
+
+---
+
+## Retrieving Scripts from an Existing VM
+
+If you need to capture the live scripts from the current VM (to verify or update the repo copies):
+
+```bash
+# Dump start-agent.sh
+az vm run-command invoke \
+  --resource-group xianix-agent-rg \
+  --name xianix-agent-vm \
+  --command-id RunShellScript \
+  --scripts "cat /etc/xianix/start-agent.sh"
+
+# Dump xianix-agent.service
+az vm run-command invoke \
+  --resource-group xianix-agent-rg \
+  --name xianix-agent-vm \
+  --command-id RunShellScript \
+  --scripts "cat /etc/systemd/system/xianix-agent.service"
+```
+
+Compare the output with the files in `Scripts/vm/` and update either side as needed.
+
+---

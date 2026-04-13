@@ -25,13 +25,13 @@ The image expects all configuration via environment variables:
 
 ```bash
 docker run --rm \
-  -e TENANT_ID=local-test \
-  -e EXECUTION_ID=test-001 \
-  -e 'XIANIX_INPUTS={"repository-url":"https://github.com/your-org/your-repo","platform":"github","pr-head-branch":"feature/foo"}' \
-  -e CLAUDE_CODE_PLUGINS='[{"name":"github","url":"github@claude-plugins-official","marketplace":"anthropics/claude-plugins-official"}]' \
+  -e TENANT-ID=local-test \
+  -e EXECUTION-ID=test-001 \
+  -e 'XIANIX-INPUTS={"repository-url":"https://github.com/your-org/your-repo","platform":"github","pr-head-branch":"feature/foo"}' \
+  -e CLAUDE-CODE-PLUGINS='[{"name":"github","url":"github@claude-plugins-official","marketplace":"anthropics/claude-plugins-official"}]' \
   -e PROMPT="Review this repository and summarize the architecture." \
-  -e ANTHROPIC_API_KEY=sk-ant-... \
-  -e GITHUB_TOKEN=ghp_... \
+  -e ANTHROPIC-API-KEY=sk-ant-... \
+  -e GITHUB-TOKEN=ghp_... \
   -v xianix-test-vol:/workspace/repo \
   xianix-executor:latest
 ```
@@ -65,14 +65,16 @@ cat progress.log  # git + plugin + executor progress messages
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `TENANT_ID` | Yes | Identifies the tenant for logging and isolation |
-| `EXECUTION_ID` | Yes | Unique per-execution ID, used as the git worktree name |
-| `XIANIX_INPUTS` | Yes | JSON object with dynamic inputs (must include `repository-url`) |
-| `CLAUDE_CODE_PLUGINS` | Yes | JSON array of `{ name, url, marketplace?, envs? }` plugin descriptors |
+| `TENANT-ID` | Yes | Identifies the tenant for logging and isolation |
+| `EXECUTION-ID` | Yes | Unique per-execution ID, used as the git worktree name |
+| `XIANIX-INPUTS` | Yes | JSON object with dynamic inputs (must include `repository-url`) |
+| `CLAUDE-CODE-PLUGINS` | Yes | JSON array of `{ name, url, marketplace?, envs? }` plugin descriptors |
 | `PROMPT` | Yes | Fully interpolated Claude Code prompt to execute |
-| `ANTHROPIC_API_KEY` | Yes | Anthropic API key (read by the Claude Code SDK) |
-| `GITHUB_TOKEN` | Conditional | GitHub PAT — always injected when available (clones, marketplace repos, `gh` CLI) |
-| `AZURE_DEVOPS_TOKEN` | Conditional | Azure DevOps PAT — injected when `platform=azuredevops` |
+| `ANTHROPIC-API-KEY` | Yes | Anthropic API key (read by the Claude Code SDK) |
+| `GITHUB-TOKEN` | Conditional | GitHub PAT — always injected when available (clones, marketplace repos, `gh` CLI) |
+| `AZURE-DEVOPS-TOKEN` | Conditional | Azure DevOps PAT — injected when `platform=azuredevops` |
+
+> **Note:** The entrypoint automatically re-exports dashed env vars as underscored aliases (e.g. `GITHUB-TOKEN` → `GITHUB_TOKEN`) for bash compatibility.
 
 ### Inputs extracted from `XIANIX_INPUTS`
 
@@ -162,4 +164,4 @@ docker buildx build \
 docker pull 99xio/xianix-executor:latest
 ```
 
-The control plane defaults to `99xio/xianix-executor:latest` (configurable via the `EXECUTOR_IMAGE` environment variable).
+The control plane defaults to `99xio/xianix-executor:latest` (configurable via the `EXECUTOR-IMAGE` environment variable).

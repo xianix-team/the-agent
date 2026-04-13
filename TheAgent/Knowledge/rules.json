@@ -48,13 +48,7 @@
                 "use-plugins": [
                     {
                         "plugin-name": "pr-reviewer@xianix-plugins-official",
-                        "marketplace": "xianix-team/plugins-official",
-                        "envs": [
-                            {
-                                "name": "GITHUB_PERSONAL_ACCESS_TOKEN",
-                                "value": "env.GITHUB_TOKEN"
-                            }
-                        ]
+                        "marketplace": "xianix-team/plugins-official"
                     }
                 ],
                 "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."
