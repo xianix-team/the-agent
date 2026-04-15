@@ -195,13 +195,20 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             return EvaluationOutcome.Skip(reason);
         }
 
+        _logger.LogInformation(
+            "Rules evaluation for webhook '{WebhookName}' skipped: No execution matched the webhook payload. "
+            + "None of the match-any conditions passed in any rule block ({FailedCount} rule block(s) evaluated).",
+            webhookName, failedExecutionSections.Count);
+        foreach (var section in failedExecutionSections)
+        {
+            _logger.LogInformation(
+                "Webhook '{WebhookName}' rule evaluation detail: {RuleDetail}",
+                webhookName, section);
+        }
+
         var fullReason =
             "No execution matched the webhook payload. None of the match-any conditions passed in any rule block.\n\n"
             + string.Join("\n\n---\n\n", failedExecutionSections);
-        var logReason = fullReason.Length > 1200 ? fullReason[..1197] + "..." : fullReason;
-        _logger.LogInformation(
-            "Rules evaluation for webhook '{WebhookName}' skipped: {SkipReason}.",
-            webhookName, logReason);
         return EvaluationOutcome.Skip(fullReason);
     }
 

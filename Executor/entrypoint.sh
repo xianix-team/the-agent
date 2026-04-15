@@ -45,10 +45,17 @@ configure_credentials() {
                 log "FATAL: AZURE_DEVOPS_TOKEN is required when platform=azuredevops."
                 exit 1
             fi
-            # Azure DevOps URLs often include https://<user>@dev.azure.com/...
-            # PAT url.insteadOf only matches https://dev.azure.com/, so strip the embedded user.
+            # Azure DevOps URLs may use either https://dev.azure.com/ or the legacy
+            # https://<org>.visualstudio.com/ domain. Handle both, and strip any
+            # embedded user (e.g. https://user@dev.azure.com/...).
             REPOSITORY_URL=$(printf '%s' "${REPOSITORY_URL}" | sed -E 's|^https://[^@/]+@|https://|')
             git config --global url."https://pat:${AZURE_DEVOPS_TOKEN}@dev.azure.com/".insteadOf "https://dev.azure.com/" >&2
+
+            # Legacy visualstudio.com: extract the org name and set up a matching insteadOf rule.
+            if [[ "${REPOSITORY_URL}" =~ ^https://([^./]+)\.visualstudio\.com ]]; then
+                local vs_org="${BASH_REMATCH[1]}"
+                git config --global url."https://pat:${AZURE_DEVOPS_TOKEN}@${vs_org}.visualstudio.com/".insteadOf "https://${vs_org}.visualstudio.com/" >&2
+            fi
             ;;
         *)
             log "WARNING: Unknown platform '${PLATFORM}' — no credentials configured."

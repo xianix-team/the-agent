@@ -25,7 +25,7 @@ az vm run-command invoke \
   --resource-group xianix-agent-rg \
   --name xianix-agent-vm \
   --command-id RunShellScript \
-  --scripts "sudo systemctl start xianix-agent"
+  --scripts "sudo systemctl restart xianix-agent"
 ```
 
 ### Azure Bastion
@@ -71,9 +71,25 @@ The agent starts automatically on boot via the systemd service — no manual int
 
 ---
 
-## Adding a Tenant specific Token
+## Tenant-Scoped Secrets
 
+The agent supports per-tenant secrets so that each tenant can use its own platform token (e.g. GitHub PAT, Azure DevOps PAT). At runtime the agent looks up the tenant-scoped key first and falls back to the global key if no override exists.
 
+### Naming Convention
+
+The tenant-scoped key is built by upper-casing the tenant ID, replacing every non-alphanumeric character with a dash, then appending the base secret name:
+
+```
+<TENANT-ID>-<SECRET-NAME>
+```
+
+| Tenant ID     | Base Secret        | Key Vault Secret Name       |
+|---------------|--------------------|-----------------------------|
+| `happyinc`    | `GITHUB-TOKEN`     | `HAPPYINC-GITHUB-TOKEN`     |
+| `happy_inc`   | `GITHUB-TOKEN`     | `HAPPY-INC-GITHUB-TOKEN`    |
+| `Acme.Corp`   | `AZURE-DEVOPS-TOKEN` | `ACME-CORP-AZURE-DEVOPS-TOKEN` |
+
+If no tenant-scoped secret is found, the agent falls back to the global secret (e.g. `GITHUB-TOKEN`).
 
 ### Working with KeyVault secrets
 
