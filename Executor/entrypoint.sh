@@ -32,11 +32,15 @@ log "Platform:            ${PLATFORM:-<none>}"
 [ -n "${GIT_REF}" ] && log "Git ref:             ${GIT_REF}"
 
 # ── Platform-specific credential & URL setup ─────────────────────────────────
+GIT_CRED_FILE="/tmp/.git-credentials"
+
 configure_credentials() {
+    : > "${GIT_CRED_FILE}"
+
     case "${PLATFORM}" in
         github)
             if [ -n "${GITHUB_TOKEN:-}" ]; then
-                git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/" >&2
+                printf 'https://x-access-token:%s@github.com\n' "${GITHUB_TOKEN}" >> "${GIT_CRED_FILE}"
                 export GH_TOKEN="${GITHUB_TOKEN}"
             fi
             ;;
@@ -45,22 +49,22 @@ configure_credentials() {
                 log "FATAL: AZURE_DEVOPS_TOKEN is required when platform=azuredevops."
                 exit 1
             fi
-            # Azure DevOps URLs may use either https://dev.azure.com/ or the legacy
-            # https://<org>.visualstudio.com/ domain. Handle both, and strip any
-            # embedded user (e.g. https://user@dev.azure.com/...).
             REPOSITORY_URL=$(printf '%s' "${REPOSITORY_URL}" | sed -E 's|^https://[^@/]+@|https://|')
-            git config --global url."https://pat:${AZURE_DEVOPS_TOKEN}@dev.azure.com/".insteadOf "https://dev.azure.com/" >&2
+            printf 'https://pat:%s@dev.azure.com\n' "${AZURE_DEVOPS_TOKEN}" >> "${GIT_CRED_FILE}"
 
-            # Legacy visualstudio.com: extract the org name and set up a matching insteadOf rule.
             if [[ "${REPOSITORY_URL}" =~ ^https://([^./]+)\.visualstudio\.com ]]; then
-                local vs_org="${BASH_REMATCH[1]}"
-                git config --global url."https://pat:${AZURE_DEVOPS_TOKEN}@${vs_org}.visualstudio.com/".insteadOf "https://${vs_org}.visualstudio.com/" >&2
+                printf 'https://pat:%s@%s.visualstudio.com\n' "${AZURE_DEVOPS_TOKEN}" "${BASH_REMATCH[1]}" >> "${GIT_CRED_FILE}"
             fi
             ;;
         *)
             log "WARNING: Unknown platform '${PLATFORM}' — no credentials configured."
             ;;
     esac
+
+    if [ -s "${GIT_CRED_FILE}" ]; then
+        chmod 600 "${GIT_CRED_FILE}"
+        git config --global credential.helper "store --file=${GIT_CRED_FILE}"
+    fi
 }
 
 # ── Prepare workspace ────────────────────────────────────────────────────────
@@ -157,8 +161,24 @@ if [ -n "${CLAUDE_CODE_PLUGINS:-}" ] && [ "${CLAUDE_CODE_PLUGINS}" != "[]" ]; th
         url=$(echo "${plugin}"  | jq -r '.["plugin-name"]')
 
         log "  Installing plugin '${name}' (${url})"
-        claude plugin install "${url}" --scope project >&2 || \
+        if claude plugin install "${url}" --scope project >&2; then
+            installed_info=$(claude plugin list --json 2>/dev/null \
+                | jq -r --arg id "${url}" '
+                    .[]
+                    | select(.id == $id)
+                    | "\(.version // "unknown")\t\(.installPath // "")"
+                  ' \
+                | head -n1)
+            if [ -n "${installed_info}" ]; then
+                installed_version="${installed_info%%$'\t'*}"
+                installed_path="${installed_info#*$'\t'}"
+                log "  Installed '${name}' version ${installed_version}${installed_path:+ (path: ${installed_path})}"
+            else
+                log "  Installed '${name}' (version unavailable from 'claude plugin list')"
+            fi
+        else
             log "  WARNING: failed to install plugin '${name}' — continuing"
+        fi
     done
     log "--- Plugin installation complete ---"
 fi

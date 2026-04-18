@@ -95,4 +95,11 @@ public static class EnvConfig
         double.TryParse(Get("CONTAINER-CPU-COUNT", "1"), System.Globalization.NumberStyles.Any,
             System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 1.0;
 
+    /// <summary>
+    /// Hard wall-clock cap on a single container execution. The container is killed
+    /// and the activity returns a failure result once this elapses.
+    /// Defaults to 1800 seconds (30 minutes).
+    /// </summary>
+    public static int ContainerExecutionTimeoutSeconds =>
+        int.TryParse(Get("CONTAINER-EXECUTION-TIMEOUT-SECONDS", "900"), out var v) && v > 0 ? v : 1800;
 }

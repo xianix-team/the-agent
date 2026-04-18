@@ -14,16 +14,16 @@ public class XianixAgent(IEventOrchestrator orchestrator, ILogger<XianixAgent> l
 {
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
-        logger.LogInformation("Initializing Xians platform connection.");
+        logger.LogDebug("Initializing Xians platform connection.");
         var xiansAgent = await CreateAndRegisterAgentAsync(cancellationToken);
 
-        logger.LogInformation("Uploading knowledge resources.");
+        logger.LogDebug("Uploading knowledge resources.");
         await UploadKnowledgeAsync(xiansAgent);
 
         ConfigureCustomWorkflows(xiansAgent);
         ConfigureWebhookWorkflow(xiansAgent, cancellationToken);
 
-        logger.LogInformation("All workflows configured. Starting agent.");
+        logger.LogDebug("All workflows configured. Starting agent.");
         await xiansAgent.RunAllAsync(cancellationToken);
     }
 

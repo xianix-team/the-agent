@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Temporalio.Exceptions;
 using Temporalio.Workflows;
+using TheAgent;
 using Xianix.Activities;
 using Xianix.Orchestrator;
 using Xians.Lib.Agents.Core;
@@ -12,6 +13,20 @@ namespace Xianix.Workflows;
 [Workflow(Constants.AgentName + ":Processing Workflow")]
 public class ProcessingWorkflow
 {
+    /// <summary>
+    /// Wall-clock cap enforced inside <see cref="ContainerActivities.WaitAndCollectOutputAsync"/>:
+    /// the container is killed and the activity returns a failure result once this elapses.
+    /// </summary>
+    private static readonly TimeSpan ContainerExecutionTimeout =
+        TimeSpan.FromSeconds(EnvConfig.ContainerExecutionTimeoutSeconds);
+
+    /// <summary>
+    /// Buffer added on top of <see cref="ContainerExecutionTimeout"/> so the activity
+    /// has a chance to kill the container and return a result before Temporal's
+    /// StartToCloseTimeout fires and orphans the container.
+    /// </summary>
+    private static readonly TimeSpan ActivityTimeoutBuffer = TimeSpan.FromMinutes(2);
+
     private static readonly ActivityOptions ContainerActivityOptions = new()
     {
         StartToCloseTimeout = TimeSpan.FromMinutes(20),
@@ -25,7 +40,7 @@ public class ProcessingWorkflow
 
     private static readonly ActivityOptions WaitActivityOptions = new()
     {
-        StartToCloseTimeout = TimeSpan.FromMinutes(35),
+        StartToCloseTimeout = ContainerExecutionTimeout + ActivityTimeoutBuffer,
         RetryPolicy = new() { MaximumAttempts = 1 },
     };
 
@@ -91,7 +106,10 @@ public class ProcessingWorkflow
         {
             var executionResult = await Workflow.ExecuteActivityAsync(
                 (ContainerActivities a) => a.WaitAndCollectOutputAsync(
-                    containerId, orchestrationResult.TenantId, executionLabel, 1800),
+                    containerId,
+                    orchestrationResult.TenantId,
+                    executionLabel,
+                    (int)ContainerExecutionTimeout.TotalSeconds),
                 WaitActivityOptions);
 
             ParseExecutorOutput(executionResult);

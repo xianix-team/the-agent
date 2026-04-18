@@ -107,7 +107,14 @@ def process_assistant_message(
     message: AssistantMessage,
     text_blocks: list[str],
     tool_uses: list[dict],
+    models_seen: set[str] | None = None,
 ) -> None:
+    model = getattr(message, "model", None)
+    if model:
+        log(f"  model: {model}")
+        if models_seen is not None:
+            models_seen.add(model)
+
     for block in message.content:
         block_type = type(block).__name__
 
@@ -166,11 +173,17 @@ def process_user_message(message: UserMessage) -> None:
 
 
 def process_system_message(message: SystemMessage) -> None:
-    session_id = getattr(message, "session_id", None)
+    data = getattr(message, "data", None) or {}
+
+    session_id = getattr(message, "session_id", None) or data.get("session_id")
     if session_id:
         log(f"  session: {session_id}")
 
-    mcp_servers = getattr(message, "mcp_servers", None)
+    model = getattr(message, "model", None) or data.get("model")
+    if model:
+        log(f"  model: {model}")
+
+    mcp_servers = getattr(message, "mcp_servers", None) or data.get("mcp_servers")
     if mcp_servers:
         log(f"  mcp_servers: {mcp_servers}")
 
@@ -192,6 +205,11 @@ def process_result_message(message: ResultMessage) -> None:
         f"cache_create={usage.get('cache_creation_input_tokens', 0)})"
     )
 
+    model_usage = getattr(message, "model_usage", None) or getattr(message, "modelUsage", None)
+    if isinstance(model_usage, dict) and model_usage:
+        for model_name, stats in model_usage.items():
+            log(f"  model_usage[{model_name}]: {stats}")
+
 
 # ── Output ───────────────────────────────────────────────────────────────────
 
@@ -209,6 +227,7 @@ def build_output(
     usage: dict | None = None,
     error: str | None = None,
     error_traceback: str | None = None,
+    models: list[str] | None = None,
 ) -> dict:
     """
     Consistent JSON envelope for both success and error cases.
@@ -226,6 +245,7 @@ def build_output(
         "duration_seconds": round(duration_seconds, 2) if duration_seconds else None,
         "cost_usd": cost_usd,
         "session_id": session_id,
+        "models": models,
         "input_tokens": usage.get("input_tokens"),
         "output_tokens": usage.get("output_tokens"),
         "cache_read_tokens": usage.get("cache_read_input_tokens"),
@@ -259,6 +279,7 @@ async def main() -> None:
 
     text_blocks: list[str] = []
     tool_uses: list[dict] = []
+    models_seen: set[str] = set()
     result_message: ResultMessage | None = None
     turn_count = 0
 
@@ -273,7 +294,7 @@ async def main() -> None:
         if isinstance(message, AssistantMessage):
             turn_count += 1
             log(f"[turn {turn_count}] assistant")
-            process_assistant_message(message, text_blocks, tool_uses)
+            process_assistant_message(message, text_blocks, tool_uses, models_seen)
 
         elif isinstance(message, UserMessage):
             log(f"[turn {turn_count}] tool_result")
@@ -293,6 +314,8 @@ async def main() -> None:
 
     log_separator("Summary")
     log(f"turns={turn_count} text_blocks={len(text_blocks)} tool_uses={len(tool_uses)} duration={duration:.1f}s")
+    if models_seen:
+        log(f"models={sorted(models_seen)}")
 
     emit(build_output(
         tenant_id=tenant_id,
@@ -305,6 +328,7 @@ async def main() -> None:
         cost_usd=getattr(result_message, "total_cost_usd", None),
         session_id=getattr(result_message, "session_id", None),
         usage=usage,
+        models=sorted(models_seen) if models_seen else None,
     ))
 
 

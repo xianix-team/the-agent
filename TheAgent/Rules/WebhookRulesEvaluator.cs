@@ -23,6 +23,11 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
         AllowTrailingCommas = true,
     };
 
+    private static readonly JsonSerializerOptions RulesDumpJsonOptions = new()
+    {
+        WriteIndented = true,
+    };
+
     public WebhookRulesEvaluator(ILoggerFactory loggerFactory)
     {
         ArgumentNullException.ThrowIfNull(loggerFactory);
@@ -205,6 +210,20 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
                 "Webhook '{WebhookName}' rule evaluation detail: {RuleDetail}",
                 webhookName, section);
         }
+
+        string rulesDump;
+        try
+        {
+            rulesDump = JsonSerializer.Serialize(ruleSets, RulesDumpJsonOptions);
+        }
+        catch (NotSupportedException ex)
+        {
+            rulesDump = $"<failed to serialize rule sets: {ex.Message}>";
+        }
+
+        _logger.LogDebug(
+            "Webhook '{WebhookName}' rule file (no match) — {RuleSetCount} rule set(s):\n{RulesJson}",
+            webhookName, ruleSets.Count, rulesDump);
 
         var fullReason =
             "No execution matched the webhook payload. None of the match-any conditions passed in any rule block.\n\n"
