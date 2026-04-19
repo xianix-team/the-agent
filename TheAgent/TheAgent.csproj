@@ -16,7 +16,7 @@
     <PackageReference Include="Microsoft.Agents.AI.Anthropic" Version="1.0.0-rc5" />
     <PackageReference Include="Microsoft.Agents.AI.Foundry" Version="1.1.0" />
     <PackageReference Include="Microsoft.Agents.AI.OpenAI" Version="1.0.0-rc5" />
-    <PackageReference Include="Xians.Lib" Version="3.22.0" />
+    <PackageReference Include="Xians.Lib" Version="3.23.0" />
 
   </ItemGroup>
 
