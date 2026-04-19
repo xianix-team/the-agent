@@ -52,7 +52,8 @@ public static class EnvConfig
     public static string XiansApiKey    => GetRequired("XIANS-API-KEY");
 
     // LLM / Anthropic
-    public static string AnthropicApiKey    => GetRequired("ANTHROPIC-API-KEY");
+    public static string AnthropicApiKey         => GetRequired("ANTHROPIC-API-KEY");
+    public static string AnthropicDeploymentName => Get("ANTHROPIC-DEPLOYMENT-NAME", "claude-haiku-4-5");
 
     // CM Platform tokens (shared across all tenants)
     public static string GithubToken        => Get("GITHUB-TOKEN");

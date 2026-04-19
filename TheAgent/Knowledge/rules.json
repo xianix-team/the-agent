@@ -121,10 +121,14 @@
             {
                 "name": "github-issue-requirement-analysis",
                 "match-any": [
-                  {
-                    "name": "github-issue-assigned-to-agent",
-                    "rule": "action==assigned&&assignee.login=='xianix-agent'"
-                  }
+                    {
+                    "name": "github-issue-tag-applied",
+                    "rule": "action==labeled&&label.name=='ai-dlc/issue/analyze'"
+                    },
+                    {
+                    "name": "github-issue-opened-with-tag",
+                    "rule": "action==opened&&issue.labels.*.name=='ai-dlc/issue/analyze'"
+                    }
                 ],
                 "use-inputs": [
                   { "name": "issue-number",    "value": "issue.number" },

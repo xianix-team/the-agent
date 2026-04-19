@@ -22,9 +22,39 @@ public class XianixAgent(IEventOrchestrator orchestrator, ILogger<XianixAgent> l
 
         ConfigureCustomWorkflows(xiansAgent);
         ConfigureWebhookWorkflow(xiansAgent, cancellationToken);
+        ConfigureConversationWorkflow(xiansAgent, cancellationToken);
 
         logger.LogDebug("All workflows configured. Starting agent.");
         await xiansAgent.RunAllAsync(cancellationToken);
+    }
+
+    private void ConfigureConversationWorkflow(XiansAgent xiansAgent, CancellationToken cancellationToken)
+    {
+        var conversationWorkflow = xiansAgent.Workflows.DefineSupervisor();
+
+        var subagent = new SupervisorSubagent(
+            EnvConfig.AnthropicApiKey,
+            EnvConfig.AnthropicDeploymentName);
+
+        conversationWorkflow.OnUserChatMessage(async (context) =>
+        {
+            try
+            {
+                var reply = await subagent.RunAsync(context, cancellationToken);
+                await context.ReplyAsync(reply);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex,
+                    "SupervisorSubagent failed for tenant '{TenantId}', participant '{ParticipantId}'.",
+                    context.Message.TenantId, context.Message.ParticipantId);
+                await context.ReplyAsync("Sorry — I hit an error handling that message.");
+            }
+        });
     }
 
     private static void ConfigureCustomWorkflows(XiansAgent xiansAgent)
