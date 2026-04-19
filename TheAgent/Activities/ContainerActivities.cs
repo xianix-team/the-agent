@@ -27,8 +27,16 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// Creates a named Docker volume for the tenant+repo pair if it does not already exist.
-    /// Volume name is deterministic: <c>xianix-{tenantId}-{sha256(repoUrl)[..12]}</c>.
+    /// Creates a named Docker volume for the tenant+repo pair if it does not already exist,
+    /// and backfills the tenant/repository labels on pre-existing un-labelled volumes by
+    /// recreating them in place. Volume name is deterministic:
+    /// <c>xianix-{tenantId}-{sha256(repoUrl)[..12]}</c>.
+    ///
+    /// Backfill is safe because <c>Executor/entrypoint.sh</c>'s <c>prepare_repo_workspace</c>
+    /// re-clones into an empty volume; the cost is one extra clone per pre-existing volume on
+    /// its next run. If the volume can't be recreated (e.g. another container is using it),
+    /// we log a warning and continue without labels — the chat tool will skip that repo until
+    /// the next clean run.
     /// </summary>
     [Activity]
     public async Task<string> EnsureWorkspaceVolumeAsync(string tenantId, string repositoryUrl)
@@ -41,19 +49,38 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
         var logger = ActivityExecutionContext.Current.Logger;
         logger.LogInformation("Ensuring workspace volume '{VolumeName}' for tenant={TenantId}.", volumeName, tenantId);
 
+        var hasRepoUrl = !string.IsNullOrWhiteSpace(repositoryUrl);
+        var labels = BuildVolumeLabels(tenantId, hasRepoUrl ? repositoryUrl : null);
+
+        VolumeResponse? existing = null;
         try
         {
-            var volumes = await _docker.Volumes.ListAsync();
-            var exists = volumes.Volumes?.Any(v => v.Name == volumeName) ?? false;
+            existing = await _docker.Volumes.InspectAsync(volumeName);
+        }
+        catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // Volume does not exist yet — fall through to create.
+        }
+        catch (DockerApiException ex)
+        {
+            logger.LogError(ex, "Docker API error while inspecting volume '{VolumeName}'.", volumeName);
+            throw;
+        }
 
-            if (!exists)
+        try
+        {
+            if (existing is null)
             {
-                await _docker.Volumes.CreateAsync(new VolumesCreateParameters { Name = volumeName });
-                logger.LogInformation("Created volume '{VolumeName}'.", volumeName);
+                await _docker.Volumes.CreateAsync(new VolumesCreateParameters { Name = volumeName, Labels = labels });
+                logger.LogInformation("Created volume '{VolumeName}' with labels.", volumeName);
+            }
+            else if (hasRepoUrl && !HasRequiredRepositoryLabel(existing, repositoryUrl))
+            {
+                await BackfillVolumeLabelsAsync(volumeName, labels, logger);
             }
             else
             {
-                logger.LogDebug("Volume '{VolumeName}' already exists.", volumeName);
+                logger.LogDebug("Volume '{VolumeName}' already exists with required labels.", volumeName);
             }
         }
         catch (DockerApiException ex)
@@ -63,6 +90,80 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
         }
 
         return volumeName;
+    }
+
+    private static Dictionary<string, string> BuildVolumeLabels(string tenantId, string? repositoryUrl)
+    {
+        var labels = new Dictionary<string, string>
+        {
+            ["xianix.tenant"]  = tenantId,
+            ["xianix.managed"] = "true",
+        };
+        if (!string.IsNullOrWhiteSpace(repositoryUrl))
+            labels["xianix.repository"] = repositoryUrl;
+        return labels;
+    }
+
+    private static bool HasRequiredRepositoryLabel(VolumeResponse volume, string repositoryUrl)
+        => volume.Labels != null
+           && volume.Labels.TryGetValue("xianix.repository", out var existingRepo)
+           && existingRepo == repositoryUrl;
+
+    /// <summary>
+    /// Recreates an un-labelled volume in place so that subsequent listings can discover it.
+    /// Best-effort: if the delete fails (typically because another container is still using
+    /// the volume) we log and continue, leaving the un-labelled volume untouched.
+    /// </summary>
+    private async Task BackfillVolumeLabelsAsync(string volumeName, Dictionary<string, string> labels, ILogger logger)
+    {
+        logger.LogWarning(
+            "Volume '{VolumeName}' is missing the xianix.repository label — backfilling by recreating it. " +
+            "The repository will be re-cloned by the executor on the next run.", volumeName);
+
+        try
+        {
+            await _docker.Volumes.RemoveAsync(volumeName);
+            await _docker.Volumes.CreateAsync(new VolumesCreateParameters { Name = volumeName, Labels = labels });
+            logger.LogInformation("Backfilled labels on volume '{VolumeName}'.", volumeName);
+        }
+        catch (DockerApiException ex)
+        {
+            logger.LogWarning(ex,
+                "Could not relabel volume '{VolumeName}' (likely in use by another container). " +
+                "Continuing without labels — chat tool listing will skip this repo until the next clean run.",
+                volumeName);
+        }
+    }
+
+    /// <summary>
+    /// Lists every repository belonging to <paramref name="tenantId"/> by enumerating Docker volumes
+    /// labelled <c>xianix.tenant=&lt;tenantId&gt;</c> and reading their <c>xianix.repository</c> label.
+    /// Volumes created before label support was added (or that lack a repository label) are skipped.
+    /// </summary>
+    [Activity]
+    public async Task<IReadOnlyList<TenantRepository>> ListTenantRepositoriesAsync(string tenantId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+
+        var logger = ActivityExecutionContext.Current.Logger;
+        var volumes = await _docker.Volumes.ListAsync();
+        var repos = (volumes.Volumes ?? Enumerable.Empty<VolumeResponse>())
+            .Where(v => v.Labels != null
+                        && v.Labels.TryGetValue("xianix.tenant", out var t)
+                        && t == tenantId
+                        && v.Labels.TryGetValue("xianix.repository", out var r)
+                        && !string.IsNullOrWhiteSpace(r))
+            .Select(v =>
+            {
+                _ = DateTime.TryParse(v.CreatedAt, out var created);
+                return new TenantRepository(v.Labels["xianix.repository"], created);
+            })
+            .OrderByDescending(r => r.CreatedAt)
+            .ToList();
+
+        logger.LogInformation(
+            "Listed {Count} repository volume(s) for tenant={TenantId}.", repos.Count, tenantId);
+        return repos;
     }
 
     /// <summary>

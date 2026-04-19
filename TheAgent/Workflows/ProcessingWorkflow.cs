@@ -1,10 +1,10 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Temporalio.Exceptions;
 using Temporalio.Workflows;
 using TheAgent;
 using Xianix.Activities;
+using Xianix.Containers;
 using Xianix.Orchestrator;
 using Xians.Lib.Agents.Core;
 
@@ -13,42 +13,6 @@ namespace Xianix.Workflows;
 [Workflow(Constants.AgentName + ":Processing Workflow")]
 public class ProcessingWorkflow
 {
-    /// <summary>
-    /// Wall-clock cap enforced inside <see cref="ContainerActivities.WaitAndCollectOutputAsync"/>:
-    /// the container is killed and the activity returns a failure result once this elapses.
-    /// </summary>
-    private static readonly TimeSpan ContainerExecutionTimeout =
-        TimeSpan.FromSeconds(EnvConfig.ContainerExecutionTimeoutSeconds);
-
-    /// <summary>
-    /// Buffer added on top of <see cref="ContainerExecutionTimeout"/> so the activity
-    /// has a chance to kill the container and return a result before Temporal's
-    /// StartToCloseTimeout fires and orphans the container.
-    /// </summary>
-    private static readonly TimeSpan ActivityTimeoutBuffer = TimeSpan.FromMinutes(2);
-
-    private static readonly ActivityOptions ContainerActivityOptions = new()
-    {
-        StartToCloseTimeout = TimeSpan.FromMinutes(20),
-        RetryPolicy = new()
-        {
-            MaximumAttempts = 3,
-            InitialInterval = TimeSpan.FromSeconds(3),
-            BackoffCoefficient = 2,
-        },
-    };
-
-    private static readonly ActivityOptions WaitActivityOptions = new()
-    {
-        StartToCloseTimeout = ContainerExecutionTimeout + ActivityTimeoutBuffer,
-        RetryPolicy = new() { MaximumAttempts = 1 },
-    };
-
-    private static readonly ActivityOptions CleanupActivityOptions = new()
-    {
-        StartToCloseTimeout = TimeSpan.FromMinutes(2),
-        RetryPolicy = new() { MaximumAttempts = 1 },
-    };
 
     [WorkflowRun]
     public async Task WorkflowRun(OrchestrationResult orchestrationResult)
@@ -94,13 +58,13 @@ public class ProcessingWorkflow
 
         var volumeName = await Workflow.ExecuteActivityAsync(
             (ContainerActivities a) => a.EnsureWorkspaceVolumeAsync(orchestrationResult.TenantId, repositoryUrl),
-            ContainerActivityOptions);
+            ContainerWorkflowOptions.Standard);
 
         input = input with { VolumeName = volumeName };
 
         var containerId = await Workflow.ExecuteActivityAsync(
             (ContainerActivities a) => a.StartContainerAsync(input),
-            ContainerActivityOptions);
+            ContainerWorkflowOptions.Standard);
 
         try
         {
@@ -109,10 +73,10 @@ public class ProcessingWorkflow
                     containerId,
                     orchestrationResult.TenantId,
                     executionLabel,
-                    (int)ContainerExecutionTimeout.TotalSeconds),
-                WaitActivityOptions);
+                    (int)ContainerWorkflowOptions.ContainerExecutionTimeout.TotalSeconds),
+                ContainerWorkflowOptions.Wait);
 
-            ParseExecutorOutput(executionResult);
+            ContainerOutputParser.Parse(executionResult);
             LogOutcome(executionResult, executionLabel, orchestrationResult.TenantId);
             await ReportExecutionMetricsAsync(orchestrationResult, executionResult);
         }
@@ -121,7 +85,7 @@ public class ProcessingWorkflow
             await Workflow.DelayAsync(TimeSpan.FromMinutes(2));
             await Workflow.ExecuteActivityAsync(
                 (ContainerActivities a) => a.CleanupContainerAsync(containerId),
-                CleanupActivityOptions);
+                ContainerWorkflowOptions.Cleanup);
         }
     }
 
@@ -130,13 +94,7 @@ public class ProcessingWorkflow
     private static ContainerExecutionInput BuildContainerInput(OrchestrationResult result)
     {
         var inputsJson = JsonSerializer.Serialize(result.Inputs);
-        var pluginsJson = JsonSerializer.Serialize(
-            result.Execution!.Plugins.Select(p => new PluginSerializationDto
-            {
-                PluginName  = p.PluginName,
-                Marketplace = p.Marketplace,
-                Envs        = p.Envs.Select(e => new EnvSerializationDto { Name = e.Name, Value = e.Value, Mandatory = e.Mandatory }),
-            }));
+        var pluginsJson = ContainerPluginSerialization.Serialize(result.Execution!.Plugins);
 
         return new ContainerExecutionInput
         {
@@ -153,7 +111,7 @@ public class ProcessingWorkflow
     {
         if (executionResult.Succeeded)
         {
-            var reviewText = TryExtractField(executionResult.StdOut, "result");
+            var reviewText = ContainerOutputParser.ExtractField(executionResult.StdOut, "result");
             Workflow.Logger.LogInformation(
                 "Execution '{Label}' completed for tenant={TenantId}. " +
                 "Duration={Duration:F1}s, Cost=${CostUsd:F4}, tokens(in={InputTokens}, out={OutputTokens}, " +
@@ -170,7 +128,7 @@ public class ProcessingWorkflow
         }
         else
         {
-            var errorDetail = TryExtractField(executionResult.StdOut, "error") ?? executionResult.StdErr;
+            var errorDetail = ContainerOutputParser.ExtractField(executionResult.StdOut, "error") ?? executionResult.StdErr;
             Workflow.Logger.LogError(
                 "Execution '{Label}' failed (exit={ExitCode}) for tenant={TenantId}. " +
                 "Duration={Duration:F1}s, Cost=${CostUsd:F4}.\nError: {Error}",
@@ -228,82 +186,4 @@ public class ProcessingWorkflow
         }
     }
 
-    // ── JSON helpers ─────────────────────────────────────────────────────────
-
-    private static void ParseExecutorOutput(ContainerExecutionResult result)
-    {
-        if (string.IsNullOrWhiteSpace(result.StdOut))
-            return;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(result.StdOut);
-            var root = doc.RootElement;
-
-            result.CostUsd             = GetDouble(root, "cost_usd");
-            result.InputTokens         = GetLong(root, "input_tokens");
-            result.OutputTokens        = GetLong(root, "output_tokens");
-            result.CacheReadTokens     = GetLong(root, "cache_read_tokens");
-            result.CacheCreationTokens = GetLong(root, "cache_creation_tokens");
-            result.SessionId           = GetString(root, "session_id");
-            result.DurationSeconds     = GetDouble(root, "duration_seconds");
-        }
-        catch (JsonException ex)
-        {
-            Workflow.Logger.LogDebug(ex, "Failed to parse executor JSON output; cost/usage will be unavailable.");
-        }
-    }
-
-    private static string? TryExtractField(string stdout, string field)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(stdout);
-            if (doc.RootElement.TryGetProperty(field, out var prop))
-                return prop.GetString() ?? stdout;
-        }
-        catch (JsonException) { }
-        return stdout;
-    }
-
-    private static double? GetDouble(JsonElement root, string prop)
-        => root.TryGetProperty(prop, out var el) && el.ValueKind == JsonValueKind.Number
-            ? el.GetDouble() : null;
-
-    private static long? GetLong(JsonElement root, string prop)
-        => root.TryGetProperty(prop, out var el) && el.ValueKind == JsonValueKind.Number
-            ? el.GetInt64() : null;
-
-    private static string? GetString(JsonElement root, string prop)
-        => root.TryGetProperty(prop, out var el) && el.ValueKind == JsonValueKind.String
-            ? el.GetString() : null;
-}
-
-/// <summary>
-/// Serialization DTO for a plugin entry passed to the executor container.
-/// Uses <c>plugin-name</c> as the JSON key so the executor script can read it with
-/// <c>jq -r '.["plugin-name"]'</c>.
-/// </summary>
-file sealed record PluginSerializationDto
-{
-    [JsonPropertyName("plugin-name")]
-    public required string PluginName { get; init; }
-
-    [JsonPropertyName("marketplace")]
-    public required string Marketplace { get; init; }
-
-    [JsonPropertyName("envs")]
-    public required IEnumerable<EnvSerializationDto> Envs { get; init; }
-}
-
-file sealed record EnvSerializationDto
-{
-    [JsonPropertyName("name")]
-    public required string Name { get; init; }
-
-    [JsonPropertyName("value")]
-    public required string Value { get; init; }
-
-    [JsonPropertyName("mandatory")]
-    public bool Mandatory { get; init; }
 }

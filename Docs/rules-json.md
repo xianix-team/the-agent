@@ -194,17 +194,18 @@ Extracts values from the webhook payload into named variables. They are used for
 
 ```json
 "use-inputs": [
-  { "name": "pr-number",      "value": "number" },
-  { "name": "repository-url", "value": "repository.clone_url" },
+  { "name": "pr-number",      "value": "number",                "mandatory": true },
+  { "name": "repository-url", "value": "repository.clone_url",  "mandatory": true },
   { "name": "platform",       "value": "github", "constant": true }
 ]
 ```
 
-| Field      | Description |
-|------------|-------------|
-| `name`     | Key in the extracted dictionary |
-| `value`    | Dot-separated JSON path into the payload, **or** a literal when `constant` is `true` |
-| `constant` | *(optional, default `false`)* When `true`, `value` is used as-is instead of resolving a path |
+| Field       | Description |
+|-------------|-------------|
+| `name`      | Key in the extracted dictionary |
+| `value`     | Dot-separated JSON path into the payload, **or** a literal when `constant` is `true` |
+| `constant`  | *(optional, default `false`)* When `true`, `value` is used as-is instead of resolving a path |
+| `mandatory` | *(optional, default `false`)* When `true`, the execution block is **skipped before any container is started** if this input resolves to `null`, an empty string, or whitespace. Use this to fail fast when the webhook payload is missing data the prompt depends on. |
 
 ### Path resolution examples
 
@@ -227,7 +228,7 @@ Given:
 
 For Azure DevOps payloads, dotted field names use the same quoted-segment syntax as in filters, e.g. `resource.revision.fields."System.Title"`.
 
-If a path does not resolve (missing property), the input is set to `null`.
+If a path does not resolve (missing property), the input is set to `null`. If the input is also marked `"mandatory": true`, the execution block is skipped (with an explicit error logged) and **no executor container is started** for that block — other matching blocks are unaffected.
 
 ---
 
@@ -241,7 +242,7 @@ Declares Claude Code marketplace plugins to install in the executor container be
     "plugin-name": "pr-reviewer@xianix-plugins-official",
     "marketplace": "xianix-team/plugins-official",
     "envs": [
-      { "name": "GITHUB_PERSONAL_ACCESS_TOKEN", "value": "env.GITHUB_TOKEN" }
+      { "name": "GITHUB_PERSONAL_ACCESS_TOKEN", "value": "env.GITHUB_TOKEN", "mandatory": true }
     ]
   }
 ]
@@ -255,11 +256,12 @@ Declares Claude Code marketplace plugins to install in the executor container be
 
 ### Plugin environment variables (`envs`)
 
-| Field      | Description |
-|------------|-------------|
-| `name`     | Env var name inside the container |
-| `value`    | By default, `env.VAR_NAME` reads from the **host** environment. Use `"constant": true` for a literal string. |
-| `constant` | *(optional)* Treat `value` as a literal |
+| Field       | Description |
+|-------------|-------------|
+| `name`      | Env var name inside the container |
+| `value`     | By default, `env.VAR_NAME` reads from the **host** environment. Use `"constant": true` for a literal string. |
+| `constant`  | *(optional)* Treat `value` as a literal |
+| `mandatory` | *(optional, default `false`)* When `true`, the executor container **fails to start** (non-retryable) if this env resolves to `null` or empty. Use for credentials the plugin cannot run without. |
 
 ---
 

@@ -131,8 +131,8 @@
                     }
                 ],
                 "use-inputs": [
-                  { "name": "issue-number",    "value": "issue.number" },
-                  { "name": "repository-url",  "value": "repository.clone_url" },
+                  { "name": "issue-number",    "value": "issue.number",        "mandatory": true },
+                  { "name": "repository-url",  "value": "repository.clone_url", "mandatory": true },
                   { "name": "repository-name", "value": "repository.full_name" },
                   { "name": "issue-title",     "value": "issue.title" },
                   { "name": "platform",        "value": "github", "constant": true }

@@ -10,7 +10,12 @@ using Xians.Lib.Common.Caching;
 
 namespace Xianix.Agent;
 
-public class XianixAgent(IEventOrchestrator orchestrator, ILogger<XianixAgent> logger)
+public class XianixAgent(
+    IEventOrchestrator orchestrator,
+    ILogger<XianixAgent> logger,
+    ILogger<SupervisorSubagent> supervisorLogger,
+    ILogger<SupervisorSubagentTools> supervisorToolsLogger,
+    ILoggerFactory loggerFactory)
 {
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
@@ -34,13 +39,29 @@ public class XianixAgent(IEventOrchestrator orchestrator, ILogger<XianixAgent> l
 
         var subagent = new SupervisorSubagent(
             EnvConfig.AnthropicApiKey,
-            EnvConfig.AnthropicDeploymentName);
+            EnvConfig.AnthropicDeploymentName,
+            supervisorLogger,
+            supervisorToolsLogger,
+            loggerFactory);
 
         conversationWorkflow.OnUserChatMessage(async (context) =>
         {
             try
             {
                 var reply = await subagent.RunAsync(context, cancellationToken);
+
+                // Defence-in-depth: SupervisorSubagent already substitutes a fallback
+                // message for empty model output, but guard here too so we never publish
+                // an empty bubble to the user even if that contract regresses.
+                if (string.IsNullOrWhiteSpace(reply))
+                {
+                    logger.LogWarning(
+                        "Supervisor returned empty reply for tenant '{TenantId}', participant '{ParticipantId}'. " +
+                        "Sending generic retry prompt instead.",
+                        context.Message.TenantId, context.Message.ParticipantId);
+                    reply = SupervisorSubagent.EmptyResponseFallback;
+                }
+
                 await context.ReplyAsync(reply);
             }
             catch (OperationCanceledException)
@@ -61,6 +82,10 @@ public class XianixAgent(IEventOrchestrator orchestrator, ILogger<XianixAgent> l
     {
         xiansAgent.Workflows
             .DefineCustom<ProcessingWorkflow>(new WorkflowOptions { Activable = false })
+            .AddActivity<ContainerActivities>();
+
+        xiansAgent.Workflows
+            .DefineCustom<ClaudeCodeChatWorkflow>(new WorkflowOptions { Activable = false })
             .AddActivity<ContainerActivities>();
     }
 
@@ -149,6 +174,12 @@ public class XianixAgent(IEventOrchestrator orchestrator, ILogger<XianixAgent> l
             resourcePath: "Knowledge/rules.json",
             knowledgeName: Constants.RulesKnowledgeName,
             knowledgeType: "json"
+        );
+
+        await xiansAgent.Knowledge.UploadEmbeddedResourceAsync(
+            resourcePath: "Knowledge/system-prompt.md",
+            knowledgeName: Constants.SystemPromptKnowledgeName,
+            knowledgeType: "markdown"
         );
     }
 }

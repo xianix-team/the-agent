@@ -274,8 +274,15 @@ async def main() -> None:
     log(f"tenant={tenant_id} execution={execution_id}")
     log(f"work_dir={work_dir}")
     log(f"plugins={plugin_names(plugins)}")
-    log(f"prompt_length={len(prompt)} first_120_chars={prompt[:120]}")
     log(f"ANTHROPIC_API_KEY={'set' if os.environ.get('ANTHROPIC_API_KEY') else 'MISSING'}")
+
+    log_separator("Prompt")
+    log(f"prompt_length={len(prompt)} chars, {len(prompt.splitlines())} lines")
+    print("┌──────────────────────── PROMPT ────────────────────────", file=sys.stderr)
+    for line in prompt.splitlines() or [""]:
+        print(f"│ {line}", file=sys.stderr)
+    print("└────────────────────────────────────────────────────────", file=sys.stderr)
+    sys.stderr.flush()
 
     text_blocks: list[str] = []
     tool_uses: list[dict] = []

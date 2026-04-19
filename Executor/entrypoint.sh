@@ -185,6 +185,17 @@ fi
 
 # ── Execute the Claude Code prompt ──────────────────────────────────────────
 log "--- Executing prompt ---"
+log "Working directory:   ${WORK_DIR}"
+if [ -n "${PROMPT:-}" ]; then
+    log "Prompt (${#PROMPT} chars) on ${REPOSITORY_URL:-<no repo>}${GIT_REF:+@${GIT_REF}}:"
+    log "┌──────────────────────── PROMPT ────────────────────────"
+    while IFS= read -r _line; do
+        log "│ ${_line}"
+    done <<< "${PROMPT}"
+    log "└────────────────────────────────────────────────────────"
+else
+    log "WARNING: PROMPT env var is empty"
+fi
 export WORK_DIR
 python3 /workspace/execute_plugin.py
 
