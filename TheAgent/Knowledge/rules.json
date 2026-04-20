@@ -6,16 +6,16 @@
                 "name": "github-pull-request-review",
                 "match-any": [
                     {
-                        "name": "github-pr-opened-event",
-                        "rule": "action==opened&&pull_request.requested_reviewers.*.login=='xianix-agent'"
+                    "name": "github-pr-tag-applied",
+                    "rule": "action==labeled&&label.name=='ai-dlc/pr/pr-review'"
                     },
                     {
-                        "name": "github-pr-synchronize-event",
-                        "rule": "action==synchronize&&pull_request.requested_reviewers.*.login=='xianix-agent'"
+                    "name": "github-pr-opened-with-tag",
+                    "rule": "action==opened&&pull_request.labels.*.name=='ai-dlc/pr/pr-review'"
                     },
                     {
-                        "name": "github-pr-review-requested-event",
-                        "rule": "action==review_requested&&requested_reviewer.login=='xianix-agent'"
+                    "name": "github-pr-synchronize-with-tag",
+                    "rule": "action==synchronize&&pull_request.labels.*.name=='ai-dlc/pr/pr-review'"
                     }
                 ],
                 "use-inputs": [
