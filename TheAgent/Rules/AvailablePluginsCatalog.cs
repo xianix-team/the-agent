@@ -10,9 +10,10 @@ namespace Xianix.Rules;
 /// Used by the SupervisorSubagent's <c>ListAvailablePlugins</c> tool so the chat model can
 /// discover which plugins exist, which usage examples they expose, and what inputs each
 /// example needs from the caller; and by <c>RunClaudeCodeOnRepository</c> to resolve a
-/// plugin name back to its full <see cref="PluginEntry"/> (with envs) and validate that all
-/// mandatory inputs have been supplied — this is the chat-side equivalent of the input
-/// validation <see cref="WebhookRulesEvaluator"/> performs for the webhook path.
+/// plugin name back to its full <see cref="PluginEntry"/> (and the <c>with-envs</c> declared
+/// alongside it on each containing execution) and validate that all mandatory inputs have
+/// been supplied — this is the chat-side equivalent of the input validation
+/// <see cref="WebhookRulesEvaluator"/> performs for the webhook path.
 /// </summary>
 internal static class AvailablePluginsCatalog
 {
@@ -143,6 +144,10 @@ internal static class AvailablePluginsCatalog
         private readonly PluginEntry _source;
         private readonly List<CatalogUsageExample> _usages = [];
 
+        // Aggregated across every execution that references this plugin. Dedup is by env
+        // name (first-wins); two executions that both declare GITHUB-TOKEN keep one entry.
+        private readonly Dictionary<string, EnvEntry> _envs = new(StringComparer.Ordinal);
+
         public CatalogPluginBuilder(PluginEntry source)
         {
             _source = source;
@@ -159,6 +164,12 @@ internal static class AvailablePluginsCatalog
                 ExecutionName: execution.Name?.Trim() ?? "",
                 ExecutePrompt: execution.Prompt?.Trim() ?? "",
                 Inputs:        inputs));
+
+            foreach (var env in execution.WithEnvs)
+            {
+                if (string.IsNullOrWhiteSpace(env.Name)) continue;
+                _envs.TryAdd(env.Name, env);
+            }
         }
 
         private static CatalogInputRequirement BuildInputRequirement(InputRuleEntry input)
@@ -190,10 +201,10 @@ internal static class AvailablePluginsCatalog
         public CatalogPlugin Build() => new(
             PluginName:    _source.PluginName,
             Marketplace:   _source.Marketplace,
-            RequiredEnvs:  _source.Envs
-                .Where(e => !string.IsNullOrWhiteSpace(e.Name))
+            RequiredEnvs:  _envs.Values
                 .Select(e => new CatalogEnvRequirement(e.Name, e.Mandatory))
                 .ToList(),
+            ResolvedEnvs:  _envs.Values.ToList(),
             UsageExamples: _usages,
             Source:        _source);
     }
@@ -203,13 +214,21 @@ internal static class AvailablePluginsCatalog
 /// Public, model-facing description of a plugin available to the tenant. Field names are
 /// camelCase-friendly so the JSON the chat tool emits is easy for the LLM to read.
 /// </summary>
+/// <param name="RequiredEnvs">Names + mandatory flags of every env declared on at least one
+/// execution that uses this plugin. Surfaced to the model so it knows which envs the tenant
+/// must have configured (typically via <c>secrets.*</c>).</param>
+/// <param name="ResolvedEnvs">The full <see cref="EnvEntry"/> records (with values like
+/// <c>secrets.GITHUB-TOKEN</c>) that <c>RunClaudeCodeOnRepository</c> forwards into
+/// <c>ClaudeCodeChatRequest.WithEnvs</c>. Deduplicated by name across all executions that
+/// reference this plugin. Not surfaced to the model.</param>
 /// <param name="Source">The original <see cref="PluginEntry"/> from <c>rules.json</c>; used
-/// internally by <c>RunClaudeCodeOnRepository</c> to resolve a chosen plugin back to its
-/// full env spec. Not surfaced to the model.</param>
+/// internally by <c>RunClaudeCodeOnRepository</c> to forward the plugin spec to the
+/// container. Not surfaced to the model.</param>
 internal sealed record CatalogPlugin(
     string PluginName,
     string Marketplace,
     IReadOnlyList<CatalogEnvRequirement> RequiredEnvs,
+    IReadOnlyList<EnvEntry> ResolvedEnvs,
     IReadOnlyList<CatalogUsageExample> UsageExamples,
     PluginEntry Source);
 

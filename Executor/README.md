@@ -28,7 +28,7 @@ docker run --rm \
   -e TENANT-ID=local-test \
   -e EXECUTION-ID=test-001 \
   -e 'XIANIX-INPUTS={"repository-url":"https://github.com/your-org/your-repo","platform":"github","pr-head-branch":"feature/foo"}' \
-  -e CLAUDE-CODE-PLUGINS='[{"name":"github","url":"github@claude-plugins-official","marketplace":"anthropics/claude-plugins-official"}]' \
+  -e CLAUDE-CODE-PLUGINS='[{"plugin-name":"github@claude-plugins-official","marketplace":"anthropics/claude-plugins-official"}]' \
   -e PROMPT="Review this repository and summarize the architecture." \
   -e ANTHROPIC-API-KEY=sk-ant-... \
   -e GITHUB-TOKEN=ghp_... \
@@ -68,13 +68,15 @@ cat progress.log  # git + plugin + executor progress messages
 | `TENANT-ID` | Yes | Identifies the tenant for logging and isolation |
 | `EXECUTION-ID` | Yes | Unique per-execution ID, used as the git worktree name |
 | `XIANIX-INPUTS` | Yes | JSON object with dynamic inputs (must include `repository-url`) |
-| `CLAUDE-CODE-PLUGINS` | Yes | JSON array of `{ name, url, marketplace?, envs? }` plugin descriptors |
+| `CLAUDE-CODE-PLUGINS` | Yes | JSON array of `{ "plugin-name", "marketplace"? }` plugin descriptors. Env vars used by the plugins are injected separately by the agent via the execution-level `with-envs` in `rules.json` and never appear in this payload. |
 | `PROMPT` | Yes | Fully interpolated Claude Code prompt to execute |
 | `ANTHROPIC-API-KEY` | Yes | Anthropic API key (read by the Claude Code SDK) |
-| `GITHUB-TOKEN` | Conditional | GitHub PAT — always injected when available (clones, marketplace repos, `gh` CLI) |
-| `AZURE-DEVOPS-TOKEN` | Conditional | Azure DevOps PAT — injected when `platform=azuredevops` |
+| `GITHUB-TOKEN` | Conditional | GitHub PAT — required for GitHub workflows (clones, marketplace repos, `gh` CLI). Injected from the **tenant Secret Vault** via `"value": "secrets.GITHUB-TOKEN"` in `rules.json`; never read from the agent host. |
+| `AZURE-DEVOPS-TOKEN` | Conditional | Azure DevOps PAT — required when `platform=azuredevops`. Injected from the **tenant Secret Vault** via `"value": "secrets.AZURE-DEVOPS-TOKEN"` in `rules.json`; never read from the agent host. |
 
 > **Note:** The entrypoint automatically re-exports dashed env vars as underscored aliases (e.g. `GITHUB-TOKEN` → `GITHUB_TOKEN`) for bash compatibility.
+
+> **Multi-tenant:** Platform tokens are scoped per tenant — there is no host-level fallback. A tenant whose `secrets.GITHUB-TOKEN` is missing will fail-fast with a non-retryable error (when the rule marks it `mandatory: true`) rather than silently borrow another tenant's credential.
 
 ### Inputs extracted from `XIANIX_INPUTS`
 

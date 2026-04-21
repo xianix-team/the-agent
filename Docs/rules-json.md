@@ -24,6 +24,7 @@ In **this repository**, the default rules are embedded from [`TheAgent/Knowledge
         "match-any": [ ... ],
         "use-inputs": [ ... ],
         "use-plugins": [ ... ],
+        "with-envs":   [ ... ],
         "execute-prompt": "..."
       }
     ]
@@ -240,10 +241,7 @@ Declares Claude Code marketplace plugins to install in the executor container be
 "use-plugins": [
   {
     "plugin-name": "pr-reviewer@xianix-plugins-official",
-    "marketplace": "xianix-team/plugins-official",
-    "envs": [
-      { "name": "GITHUB_PERSONAL_ACCESS_TOKEN", "value": "env.GITHUB_TOKEN", "mandatory": true }
-    ]
+    "marketplace": "xianix-team/plugins-official"
   }
 ]
 ```
@@ -252,20 +250,51 @@ Declares Claude Code marketplace plugins to install in the executor container be
 |-----------------|----------|-------------|
 | `plugin-name`   | Yes | Plugin reference in `plugin-name@marketplace-name` form, passed to `claude plugin install` |
 | `marketplace`   | No  | Marketplace source (`owner/repo`, git URL, path, or `marketplace.json` URL). Omit for the built-in Anthropic marketplace. |
-| `envs`          | No  | Environment variables for this plugin |
 
-### Plugin environment variables (`envs`)
+> **Note** — credentials the plugins need are no longer declared per-plugin. They live at the execution level in [`with-envs`](#5-with-envs--container-environment-variables) so a value like `GITHUB-TOKEN` only has to be written once even when several plugins consume it.
+
+---
+
+## 5. `with-envs` — Container environment variables
+
+Declares environment variables to inject into the executor container before the prompt runs. Sits at the **execution-block** level (sibling to `use-plugins`) — every variable is available to every plugin and to the prompt itself, regardless of how many plugins consume it.
+
+```json
+"with-envs": [
+  { "name": "GITHUB-TOKEN",       "value": "secrets.GITHUB-TOKEN", "mandatory": true },
+  { "name": "FEATURE-FLAG-MODE",  "value": "strict",               "constant": true }
+]
+```
 
 | Field       | Description |
 |-------------|-------------|
 | `name`      | Env var name inside the container |
-| `value`     | By default, `env.VAR_NAME` reads from the **host** environment. Use `"constant": true` for a literal string. |
+| `value`     | One of: `env.VAR_NAME` (read from the **host** environment), `secrets.SECRET-KEY` (fetched from the **tenant Secret Vault** via `XiansContext.CurrentAgent.Secrets.TenantScope().FetchByKeyAsync(...)` at container-start time), or a literal string when `"constant": true`. |
 | `constant`  | *(optional)* Treat `value` as a literal |
-| `mandatory` | *(optional, default `false`)* When `true`, the executor container **fails to start** (non-retryable) if this env resolves to `null` or empty. Use for credentials the plugin cannot run without. |
+| `mandatory` | *(optional, default `false`)* When `true`, the executor container **fails to start** (non-retryable) if this env resolves to `null` or empty. Use for credentials the prompt cannot run without. |
+
+### Resolution precedence
+
+Only `ANTHROPIC-API-KEY` is seeded into the container from the host `.env` (it's also required for the agent process itself). All CM platform credentials — `GITHUB-TOKEN`, `AZURE-DEVOPS-TOKEN`, anything else — are **not** read from the host: each tenant must store their own in the Xians Secret Vault and reference it from `rules.json` via `"value": "secrets.<KEY>"`. `with-envs` entries are layered on top of the host-derived defaults at container-start time, so any `secrets.*` or `env.*` entry in `rules.json` overrides whatever was seeded.
+
+### Resolving `secrets.*`
+
+```json
+{ "name": "GITHUB-TOKEN", "value": "secrets.GITHUB-TOKEN", "mandatory": true }
+```
+
+At container-start time the agent resolves `secrets.GITHUB-TOKEN` by calling:
+
+```csharp
+var vault = XiansContext.CurrentAgent.Secrets.TenantScope();
+var fetched = await vault.FetchByKeyAsync("GITHUB-TOKEN");
+```
+
+The decrypted value is injected as the named env var into the executor container, overriding any host-loaded value with the same name. If the secret is missing, the value resolves to an empty string — combine with `"mandatory": true` to fail-fast when the secret is required.
 
 ---
 
-## 5. `execute-prompt` — Claude Code prompt template
+## 6. `execute-prompt` — Claude Code prompt template
 
 A string template run as the Claude Code prompt after plugins are installed. Use `{{input-name}}` placeholders for resolved `use-inputs` values.
 
@@ -296,11 +325,11 @@ Placeholders are replaced case-insensitively. Any `{{name}}` with no matching in
         "use-plugins": [
           {
             "plugin-name": "pr-reviewer@xianix-plugins-official",
-            "marketplace": "xianix-team/plugins-official",
-            "envs": [
-              { "name": "GITHUB_PERSONAL_ACCESS_TOKEN", "value": "env.GITHUB-TOKEN" }
-            ]
+            "marketplace": "xianix-team/plugins-official"
           }
+        ],
+        "with-envs": [
+          { "name": "GITHUB-TOKEN", "value": "secrets.GITHUB-TOKEN", "mandatory": true }
         ],
         "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."
       }
@@ -327,4 +356,5 @@ Placeholders are replaced case-insensitively. Any `{{name}}` with no matching in
 2. For each execution block, if `match-any` is non-empty, at least one `rule` must pass.
 3. `use-inputs` are resolved from the payload.
 4. `execute-prompt` is interpolated.
-5. The executor installs `use-plugins`, applies `envs`, and runs the prompt.
+5. The agent resolves `with-envs` (literals, `env.*`, `secrets.*`) and injects them into the executor container alongside the runtime values it manages itself.
+6. The executor installs `use-plugins` and runs the prompt.

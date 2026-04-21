@@ -178,9 +178,9 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             var hasPrompt = !string.IsNullOrWhiteSpace(prompt);
             var blockName = string.IsNullOrWhiteSpace(execution.Name) ? null : execution.Name.Trim();
             _logger.LogInformation(
-                "Rules matched execution '{ExecutionBlock}' for webhook '{WebhookName}': {InputCount} input(s), {PluginCount} plugin(s), executePrompt={HasPrompt}.",
-                blockName ?? "(unnamed)", webhookName, dict.Count, execution.Plugins.Count, hasPrompt);
-            matches.Add(new EvaluationResult(dict, execution.Plugins, prompt, blockName));
+                "Rules matched execution '{ExecutionBlock}' for webhook '{WebhookName}': {InputCount} input(s), {PluginCount} plugin(s), {WithEnvsCount} with-envs entry/entries, executePrompt={HasPrompt}.",
+                blockName ?? "(unnamed)", webhookName, dict.Count, execution.Plugins.Count, execution.WithEnvs.Count, hasPrompt);
+            matches.Add(new EvaluationResult(dict, execution.Plugins, prompt, blockName, execution.WithEnvs));
         }
 
         if (matches.Count > 0)

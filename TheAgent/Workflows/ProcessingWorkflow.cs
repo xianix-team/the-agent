@@ -93,8 +93,9 @@ public class ProcessingWorkflow
 
     private static ContainerExecutionInput BuildContainerInput(OrchestrationResult result)
     {
-        var inputsJson = JsonSerializer.Serialize(result.Inputs);
+        var inputsJson  = JsonSerializer.Serialize(result.Inputs);
         var pluginsJson = ContainerPluginSerialization.Serialize(result.Execution!.Plugins);
+        var envsJson    = ContainerEnvSerialization.Serialize(result.Execution.WithEnvs);
 
         return new ContainerExecutionInput
         {
@@ -102,6 +103,7 @@ public class ProcessingWorkflow
             ExecutionId       = Workflow.Random.Next().ToString("x8"),
             InputsJson        = inputsJson,
             ClaudeCodePlugins = pluginsJson,
+            WithEnvsJson      = envsJson,
             Prompt            = result.Execution.Prompt,
         };
     }

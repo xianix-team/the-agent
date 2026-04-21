@@ -122,7 +122,7 @@ cd "${WORK_DIR}"
 log "--- Workspace ready at ${WORK_DIR} ---"
 
 # ── Install plugins ──────────────────────────────────────────────────────────
-# Each entry is a JSON object: { "plugin-name", "marketplace"?, "envs"? }
+# Each entry is a JSON object: { "plugin-name", "marketplace"? }
 #
 #   plugin-name — plugin reference in `plugin-name@marketplace-name` format passed to
 #                 `claude plugin install` (e.g. `pr-reviewer@xianix-plugins-official`)

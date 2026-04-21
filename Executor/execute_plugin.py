@@ -6,7 +6,7 @@ Reads configuration from environment variables injected by the control plane:
   TENANT_ID            - identifies the tenant
   EXECUTION_ID         - unique ID for this execution
   WORK_DIR             - absolute path to the workspace (repo worktree or empty directory)
-  CLAUDE_CODE_PLUGINS  - JSON array of {"plugin-name", "marketplace"?, "envs"?} descriptors
+  CLAUDE_CODE_PLUGINS  - JSON array of {"plugin-name", "marketplace"?} descriptors
   PROMPT               - fully-interpolated Claude Code prompt to execute
   ANTHROPIC_API_KEY    - Anthropic API key (read automatically by the SDK)
 

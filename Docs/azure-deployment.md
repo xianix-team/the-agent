@@ -71,25 +71,17 @@ The agent starts automatically on boot via the systemd service — no manual int
 
 ---
 
-## Tenant-Scoped Secrets
+## Per-Tenant Secrets
 
-The agent supports per-tenant secrets so that each tenant can use its own platform token (e.g. GitHub PAT, Azure DevOps PAT). At runtime the agent looks up the tenant-scoped key first and falls back to the global key if no override exists.
+Tenant CM credentials (GitHub PAT, Azure DevOps PAT, …) are **not** read from the agent host or Azure Key Vault. They live in the **Xians Secret Vault** and are referenced from `rules.json`:
 
-### Naming Convention
-
-The tenant-scoped key is built by upper-casing the tenant ID, replacing every non-alphanumeric character with a dash, then appending the base secret name:
-
-```
-<TENANT-ID>-<SECRET-NAME>
+```json
+{ "name": "GITHUB-TOKEN", "value": "secrets.GITHUB-TOKEN", "mandatory": true }
 ```
 
-| Tenant ID     | Base Secret        | Key Vault Secret Name       |
-|---------------|--------------------|-----------------------------|
-| `happyinc`    | `GITHUB-TOKEN`     | `HAPPYINC-GITHUB-TOKEN`     |
-| `happy_inc`   | `GITHUB-TOKEN`     | `HAPPY-INC-GITHUB-TOKEN`    |
-| `Acme.Corp`   | `AZURE-DEVOPS-TOKEN` | `ACME-CORP-AZURE-DEVOPS-TOKEN` |
+At container-start time the agent calls `XiansContext.CurrentAgent.Secrets.TenantScope().FetchByKeyAsync("GITHUB-TOKEN")` for the active tenant. If the secret is missing and the entry is `mandatory: true`, the executor container fails to start with a non-retryable error — there is no host-level fallback that would silently let one tenant borrow another's credential.
 
-If no tenant-scoped secret is found, the agent falls back to the global secret (e.g. `GITHUB-TOKEN`).
+Use the Key Vault entries described below only for genuinely host-wide settings (`ANTHROPIC-API-KEY`, `XIANS-API-KEY`, `XIANS-SERVER-URL`, deployment knobs). See [`Docs/rules-json.md`](./rules-json.md#5-with-envs--container-environment-variables) for full resolution rules.
 
 ### Working with KeyVault secrets
 

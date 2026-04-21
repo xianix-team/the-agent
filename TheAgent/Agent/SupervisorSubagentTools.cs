@@ -177,6 +177,15 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
 
         var effectiveInputs = ((ResolutionResult.Success)resolution).Inputs;
 
+        // Union execution-level with-envs across every chosen plugin (dedup by name) so a
+        // value like `secrets.GITHUB-TOKEN` only ends up in the container once even when two
+        // plugins both need it.
+        var withEnvs = resolvedPlugins
+            .SelectMany(p => p.ResolvedEnvs)
+            .GroupBy(e => e.Name, StringComparer.Ordinal)
+            .Select(g => g.First())
+            .ToList();
+
         var req = new ClaudeCodeChatRequest
         {
             TenantId       = tenantId,
@@ -185,6 +194,7 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
             RepositoryName = repoName,
             Prompt         = prompt,
             Plugins        = resolvedPlugins.Select(p => p.Source).ToList(),
+            WithEnvs       = withEnvs,
             Inputs         = effectiveInputs,
             Scope          = scope,
         };

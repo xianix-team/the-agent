@@ -98,13 +98,25 @@ public sealed record OrchestrateWebhookResult
 public sealed class ExecutionSpec
 {
     public List<PluginEntry> Plugins { get; init; } = [];
+
+    /// <summary>
+    /// Execution-level <c>with-envs</c> from rules.json — env vars to inject into the
+    /// executor container before the prompt runs. Resolved by the agent at container-start
+    /// time (supports literal, <c>env.VAR</c>, and <c>secrets.KEY</c> values).
+    /// </summary>
+    public List<EnvEntry> WithEnvs { get; init; } = [];
+
     public string Prompt { get; init; } = string.Empty;
 
     public ExecutionSpec() { }
 
-    public ExecutionSpec(IReadOnlyList<PluginEntry> plugins, string prompt)
+    public ExecutionSpec(
+        IReadOnlyList<PluginEntry> plugins,
+        string prompt,
+        IReadOnlyList<EnvEntry>? withEnvs = null)
     {
-        Plugins = [.. plugins];
-        Prompt  = prompt;
+        Plugins  = [.. plugins];
+        WithEnvs = withEnvs is null ? [] : [.. withEnvs];
+        Prompt   = prompt;
     }
 }

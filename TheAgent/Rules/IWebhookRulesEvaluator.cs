@@ -8,7 +8,8 @@ public sealed record EvaluationResult(
     Dictionary<string, object?> Inputs,
     IReadOnlyList<PluginEntry> Plugins,
     string Prompt,
-    string? ExecutionBlockName = null);
+    string? ExecutionBlockName = null,
+    IReadOnlyList<EnvEntry>? WithEnvs = null);
 
 /// <summary>
 /// Outcome of a rules evaluation: zero or more matching execution blocks, or a skip reason.

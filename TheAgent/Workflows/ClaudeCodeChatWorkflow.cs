@@ -63,6 +63,7 @@ public class ClaudeCodeChatWorkflow
             ExecutionId       = Workflow.NewGuid().ToString("N")[..8],
             InputsJson        = JsonSerializer.Serialize(req.Inputs),
             ClaudeCodePlugins = ContainerPluginSerialization.Serialize(req.Plugins),
+            WithEnvsJson      = ContainerEnvSerialization.Serialize(req.WithEnvs),
             Prompt            = req.Prompt,
             VolumeName        = volumeName,
         };

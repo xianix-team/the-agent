@@ -20,10 +20,18 @@ public sealed record ContainerExecutionInput
     public required string InputsJson { get; init; }
 
     /// <summary>
-    /// JSON-serialized array of <c>{ "plugin-name", "marketplace", "envs" }</c> objects describing
+    /// JSON-serialized array of <c>{ "plugin-name", "marketplace" }</c> objects describing
     /// the plugins to install before running the prompt.
     /// </summary>
     public required string ClaudeCodePlugins { get; init; }
+
+    /// <summary>
+    /// JSON-serialized array of <c>{ "name", "value", "constant"?, "mandatory"? }</c> entries
+    /// declared at the execution level (<c>with-envs</c>) in <c>rules.json</c>. Resolved by the
+    /// agent at container-start time and injected as Docker env vars; never read by the executor
+    /// container scripts directly. Defaults to <c>"[]"</c> when no entries are declared.
+    /// </summary>
+    public string WithEnvsJson { get; init; } = "[]";
 
     /// <summary>
     /// Fully-interpolated Claude Code prompt to execute after all plugins are installed.

@@ -27,6 +27,17 @@ public sealed class WebhookExecution
     public List<PluginEntry> Plugins { get; init; } = [];
 
     /// <summary>
+    /// Environment variables injected into the executor container before the prompt runs.
+    /// Applies to the whole execution (not a single plugin) — declared at the execution
+    /// level so a value like <c>secrets.GITHUB-TOKEN</c> only has to be written once even
+    /// when several plugins consume it. Each entry's <c>value</c> may be a literal
+    /// (<c>"constant": true</c>), an <c>env.VAR_NAME</c> host reference, or a
+    /// <c>secrets.SECRET-KEY</c> reference resolved from the tenant Xians Secret Vault.
+    /// </summary>
+    [JsonPropertyName("with-envs")]
+    public List<EnvEntry> WithEnvs { get; init; } = [];
+
+    /// <summary>
     /// Prompt template to execute after all plugins are installed.
     /// Supports <c>{{input-name}}</c> placeholders that are replaced with resolved input values.
     /// </summary>
@@ -63,19 +74,12 @@ public sealed class PluginEntry
     /// </summary>
     [JsonPropertyName("marketplace")]
     public string Marketplace { get; init; } = "";
-
-    /// <summary>
-    /// Optional environment variables to inject into the executor container before running the plugin.
-    /// Each entry's <c>value</c> may be a static string or an <c>env.VAR_NAME</c> reference that
-    /// is resolved from the host process environment at container-start time.
-    /// </summary>
-    [JsonPropertyName("envs")]
-    public List<EnvEntry> Envs { get; init; } = [];
 }
 
 /// <summary>
 /// A named environment variable to inject into the executor container.
 /// By default <c>value</c> is an <c>env.VAR_NAME</c> reference resolved from the host process environment.
+/// Use a <c>secrets.SECRET-KEY</c> prefix to fetch the value from the tenant-scoped Xians Secret Vault.
 /// Set <c>"constant": true</c> to use <c>value</c> as a static literal string instead.
 /// </summary>
 public sealed class EnvEntry
@@ -84,7 +88,12 @@ public sealed class EnvEntry
     public string Name { get; init; } = "";
 
     /// <summary>
-    /// <c>env.VAR_NAME</c> to read from the host environment, or a literal string when <see cref="Constant"/> is true.
+    /// One of:
+    /// <list type="bullet">
+    ///   <item><description><c>env.VAR_NAME</c> — read from the host process environment.</description></item>
+    ///   <item><description><c>secrets.SECRET-KEY</c> — fetched from the tenant Secret Vault at container-start time.</description></item>
+    ///   <item><description>A literal string when <see cref="Constant"/> is <c>true</c>.</description></item>
+    /// </list>
     /// </summary>
     [JsonPropertyName("value")]
     public string Value { get; init; } = "";

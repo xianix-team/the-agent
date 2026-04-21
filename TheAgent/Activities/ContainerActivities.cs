@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Temporalio.Activities;
 using Temporalio.Exceptions;
 using TheAgent;
+using Xians.Lib.Agents.Core;
 
 namespace Xianix.Activities;
 
@@ -182,7 +183,7 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
             "Starting container for tenant={TenantId}, image={Image}.",
             input.TenantId, image);
 
-        var env = BuildEnvVars(input);
+        var env = await BuildEnvVarsAsync(input);
 
         var containerParams = new CreateContainerParameters
         {
@@ -366,106 +367,265 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
     private static string SanitizeTenantId(string tenantId) =>
         new(tenantId.Select(c => char.IsLetterOrDigit(c) ? c : '-').Take(40).ToArray());
 
-    private static List<string> BuildEnvVars(ContainerExecutionInput input)
+    private static async Task<List<string>> BuildEnvVarsAsync(ContainerExecutionInput input)
     {
-        var env = new List<string>
-        {
-            $"TENANT-ID={input.TenantId}",
-            $"EXECUTION-ID={input.ExecutionId}",
-            $"XIANIX-INPUTS={input.InputsJson}",
-            $"CLAUDE-CODE-PLUGINS={input.ClaudeCodePlugins}",
-            $"PROMPT={input.Prompt}",
-            $"ANTHROPIC-API-KEY={EnvConfig.GetAnthropicApiKey(input.TenantId)}",
-        };
+        // Only platform-agnostic runtime values + the agent-wide ANTHROPIC-API-KEY are seeded
+        // from the host. CM platform tokens (GITHUB-TOKEN, AZURE-DEVOPS-TOKEN, ...) are
+        // intentionally NOT injected here: tenants must supply their own via the Xians Secret
+        // Vault and reference them from rules.json as `secrets.<KEY>` so that no two tenants
+        // ever share the same platform credential.
+        var env       = new Dictionary<string, string>(StringComparer.Ordinal);
+        var prov      = new Dictionary<string, EnvProvenance>(StringComparer.Ordinal);
+        var anthropic = EnvConfig.AnthropicApiKey;
 
-        var githubToken = EnvConfig.GetGithubToken(input.TenantId);
-        if (!string.IsNullOrEmpty(githubToken))
-            env.Add($"GITHUB-TOKEN={githubToken}");
+        SetRuntime(env, prov, "TENANT-ID",            input.TenantId);
+        SetRuntime(env, prov, "EXECUTION-ID",         input.ExecutionId);
+        SetRuntime(env, prov, "XIANIX-INPUTS",        input.InputsJson);
+        SetRuntime(env, prov, "CLAUDE-CODE-PLUGINS",  input.ClaudeCodePlugins);
+        SetRuntime(env, prov, "PROMPT",               input.Prompt);
 
-        var azureDevOpsToken = EnvConfig.GetAzureDevOpsToken(input.TenantId);
-        if (!string.IsNullOrEmpty(azureDevOpsToken))
-            env.Add($"AZURE-DEVOPS-TOKEN={azureDevOpsToken}");
+        env["ANTHROPIC-API-KEY"]  = anthropic;
+        prov["ANTHROPIC-API-KEY"] = new EnvProvenance(
+            EnvSource.HostEnv, Detail: "ANTHROPIC-API-KEY", Resolved: !string.IsNullOrEmpty(anthropic),
+            Length: anthropic.Length, Mandatory: false, Override: false);
 
-        InjectPluginEnvVars(input.ClaudeCodePlugins, env, input.TenantId);
+        await InjectExecutionEnvVarsAsync(input.WithEnvsJson, env, prov, input.TenantId);
 
-        return env;
+        LogEnvProvenance(input, prov);
+
+        return [.. env.Select(kv => $"{kv.Key}={kv.Value}")];
+    }
+
+    private static void SetRuntime(
+        Dictionary<string, string> env,
+        Dictionary<string, EnvProvenance> prov,
+        string name,
+        string value)
+    {
+        env[name]  = value;
+        prov[name] = new EnvProvenance(
+            EnvSource.Runtime, Detail: null, Resolved: !string.IsNullOrEmpty(value),
+            Length: value.Length, Mandatory: false, Override: false);
     }
 
     /// <summary>
-    /// Injects per-plugin env vars declared in rules.json.
-    /// Values may be static strings or <c>env.VAR_NAME</c> references resolved from the host.
+    /// Injects execution-level <c>with-envs</c> declared in rules.json.
+    /// Values may be static strings (<c>"constant": true</c>), <c>env.VAR_NAME</c> references
+    /// resolved from the host process environment, or <c>secrets.SECRET-KEY</c> references
+    /// fetched from the tenant-scoped Xians Secret Vault at container-start time.
+    /// rules.json entries always take precedence over host-derived defaults already in
+    /// <paramref name="env"/> — the rules.json declaration is the source of truth.
     /// </summary>
-    private static void InjectPluginEnvVars(string claudeCodePluginsJson, List<string> env, string tenantId)
+    private static async Task InjectExecutionEnvVarsAsync(
+        string withEnvsJson,
+        Dictionary<string, string> env,
+        Dictionary<string, EnvProvenance> prov,
+        string tenantId)
     {
-        if (string.IsNullOrWhiteSpace(claudeCodePluginsJson))
+        if (string.IsNullOrWhiteSpace(withEnvsJson))
             return;
 
         var logger = ActivityExecutionContext.Current.Logger;
 
+        List<System.Text.Json.JsonElement> entries;
         try
         {
-            using var pluginsDoc = System.Text.Json.JsonDocument.Parse(claudeCodePluginsJson);
-            foreach (var plugin in pluginsDoc.RootElement.EnumerateArray())
-            {
-                if (!plugin.TryGetProperty("envs", out var envsEl)) continue;
-
-                var pluginName = plugin.TryGetProperty("plugin-name", out var pn) ? pn.GetString() : "unknown";
-                var missingMandatory = new List<string>();
-
-                foreach (var entry in envsEl.EnumerateArray())
-                {
-                    var name      = entry.TryGetProperty("name",      out var n) ? n.GetString() : null;
-                    var value     = entry.TryGetProperty("value",     out var v) ? v.GetString() : null;
-                    var constant  = entry.TryGetProperty("constant",  out var c) && c.GetBoolean();
-                    var mandatory = entry.TryGetProperty("mandatory", out var m) && m.GetBoolean();
-                    if (string.IsNullOrEmpty(name) || value is null) continue;
-
-                    var resolved = ResolveEnvValue(value, constant, tenantId);
-
-                    if (mandatory && string.IsNullOrWhiteSpace(resolved))
-                    {
-                        missingMandatory.Add(name);
-                        continue;
-                    }
-
-                    var prefix = $"{name}=";
-                    if (env.Any(e => e.StartsWith(prefix, StringComparison.Ordinal)))
-                        continue;
-
-                    env.Add($"{name}={resolved}");
-                }
-
-                if (missingMandatory.Count > 0)
-                {
-                    var names = string.Join(", ", missingMandatory);
-                    logger.LogError(
-                        "Plugin '{PluginName}' requires mandatory environment variable(s) [{MissingVars}] " +
-                        "but they are not set for tenant={TenantId}. Container start aborted.",
-                        pluginName, names, tenantId);
-                    throw new ApplicationFailureException(
-                        $"Missing mandatory environment variable(s) for plugin '{pluginName}': {names}. " +
-                        $"Ensure these are configured in the host environment or as tenant-scoped overrides.", nonRetryable: true);
-                }
-            }
+            using var doc = System.Text.Json.JsonDocument.Parse(withEnvsJson);
+            entries = doc.RootElement.EnumerateArray().Select(e => e.Clone()).ToList();
         }
         catch (System.Text.Json.JsonException ex)
         {
             logger.LogWarning(
-                ex, "Malformed CLAUDE_CODE_PLUGINS JSON — skipping per-plugin env injection.");
+                ex, "Malformed with-envs JSON — skipping execution-level env injection.");
+            return;
+        }
+
+        var missingMandatory = new List<string>();
+
+        foreach (var entry in entries)
+        {
+            var name      = entry.TryGetProperty("name",      out var n) ? n.GetString() : null;
+            var value     = entry.TryGetProperty("value",     out var v) ? v.GetString() : null;
+            var constant  = entry.TryGetProperty("constant",  out var c) && c.GetBoolean();
+            var mandatory = entry.TryGetProperty("mandatory", out var m) && m.GetBoolean();
+            if (string.IsNullOrEmpty(name) || value is null) continue;
+
+            var (resolved, source, detail) = await ResolveEnvValueAsync(value, constant, name, logger);
+
+            if (mandatory && string.IsNullOrWhiteSpace(resolved))
+            {
+                missingMandatory.Add(name);
+                continue;
+            }
+
+            var isOverride = env.ContainsKey(name);
+            env[name] = resolved;
+            prov[name] = new EnvProvenance(
+                source, detail, Resolved: !string.IsNullOrEmpty(resolved),
+                Length: resolved.Length, Mandatory: mandatory, Override: isOverride);
+        }
+
+        if (missingMandatory.Count > 0)
+        {
+            var names = string.Join(", ", missingMandatory);
+            logger.LogError(
+                "Execution requires mandatory environment variable(s) [{MissingVars}] " +
+                "but they are not set for tenant={TenantId}. Container start aborted.",
+                names, tenantId);
+            throw new ApplicationFailureException(
+                $"Missing mandatory environment variable(s): {names}. " +
+                $"Ensure these are configured in the host environment, " +
+                $"or in the tenant Secret Vault (for 'secrets.*' references).", nonRetryable: true);
         }
     }
 
     /// <summary>
-    /// Resolves an env value from rules.json.
-    /// By default <c>value</c> is treated as <c>env.VAR_NAME</c> — the prefix is stripped
-    /// and the named variable is read from the host process environment with tenant-scoped fallback.
-    /// When <paramref name="constant"/> is true the value is returned as-is.
+    /// Resolves an env value from rules.json. Supports three forms:
+    /// <list type="bullet">
+    ///   <item><description><c>"constant": true</c> — <paramref name="value"/> is returned as-is.</description></item>
+    ///   <item><description><c>env.VAR_NAME</c> — read <c>VAR_NAME</c> from the host process environment.</description></item>
+    ///   <item><description><c>secrets.SECRET-KEY</c> — fetched from the tenant-scoped Xians Secret Vault via
+    ///     <c>XiansContext.CurrentAgent.Secrets.TenantScope().FetchByKeyAsync(...)</c>. Returns an empty
+    ///     string if the secret is not found or the fetch fails (mandatory check then handles it).</description></item>
+    /// </list>
+    /// Bare names with no prefix are treated as host env vars for backwards compatibility.
+    /// Returns the resolved value plus provenance metadata (source kind + the host var
+    /// name or secret key the value was looked up under) so the caller can log injection
+    /// outcomes without ever surfacing the value itself.
     /// </summary>
-    private static string ResolveEnvValue(string value, bool constant, string tenantId)
+    private static async Task<(string Value, EnvSource Source, string Detail)> ResolveEnvValueAsync(
+        string value,
+        bool constant,
+        string envName,
+        ILogger logger)
     {
-        if (constant) return value;
+        if (constant) return (value, EnvSource.Constant, Detail: string.Empty);
+
+        if (value.StartsWith("secrets.", StringComparison.Ordinal))
+        {
+            var secretKey = value[8..];
+            if (string.IsNullOrWhiteSpace(secretKey))
+            {
+                logger.LogWarning(
+                    "with-envs entry '{EnvName}' references an empty secret key ('secrets.').",
+                    envName);
+                return (string.Empty, EnvSource.Secret, Detail: "<empty-key>");
+            }
+
+            try
+            {
+                var vault = XiansContext.CurrentAgent.Secrets.TenantScope();
+                var fetched = await vault.FetchByKeyAsync(secretKey);
+                if (fetched is null || string.IsNullOrEmpty(fetched.Value))
+                {
+                    logger.LogWarning(
+                        "Secret '{SecretKey}' not found in tenant Secret Vault " +
+                        "(with-envs entry '{EnvName}').",
+                        secretKey, envName);
+                    return (string.Empty, EnvSource.Secret, Detail: secretKey);
+                }
+                return (fetched.Value, EnvSource.Secret, Detail: secretKey);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(
+                    ex,
+                    "Failed to fetch secret '{SecretKey}' from tenant Secret Vault " +
+                    "(with-envs entry '{EnvName}').",
+                    secretKey, envName);
+                return (string.Empty, EnvSource.Secret, Detail: secretKey);
+            }
+        }
+
         var varName = value.StartsWith("env.", StringComparison.Ordinal) ? value[4..] : value;
-        return EnvConfig.GetForTenant(tenantId, varName);
+        return (EnvConfig.Get(varName), EnvSource.HostEnv, Detail: varName);
+    }
+
+    /// <summary>
+    /// Emits one structured INFO line summarizing every env var injected into the executor
+    /// container, where it came from, and whether it resolved — never the value itself.
+    /// For credential sources (host env, secret vault) only resolved/empty is shown; for
+    /// runtime payloads and rules.json constants the length is included to help spot
+    /// truncated prompts or empty inputs.
+    /// </summary>
+    private static void LogEnvProvenance(
+        ContainerExecutionInput input,
+        Dictionary<string, EnvProvenance> prov)
+    {
+        var logger = ActivityExecutionContext.Current.Logger;
+
+        // Stable order: keep declaration order for runtime keys, then everything else
+        // sorted by name so the log is grep-friendly.
+        var runtimeOrder = new[]
+        {
+            "TENANT-ID", "EXECUTION-ID", "XIANIX-INPUTS",
+            "CLAUDE-CODE-PLUGINS", "PROMPT", "ANTHROPIC-API-KEY",
+        };
+        var ordered = prov
+            .OrderBy(kv => Array.IndexOf(runtimeOrder, kv.Key) is var idx && idx >= 0 ? idx : int.MaxValue)
+            .ThenBy(kv => kv.Key, StringComparer.Ordinal);
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append("Container env for tenant=").Append(input.TenantId)
+          .Append(" execution=").Append(input.ExecutionId)
+          .Append(" — ").Append(prov.Count).AppendLine(" var(s):");
+
+        foreach (var (name, p) in ordered)
+            sb.Append("  ").AppendLine(p.Format(name));
+
+        logger.LogInformation("{EnvSummary}", sb.ToString().TrimEnd());
+    }
+
+    private enum EnvSource { Runtime, Constant, HostEnv, Secret }
+
+    /// <summary>
+    /// Captured per-env metadata used only for logging; never holds the resolved value.
+    /// </summary>
+    /// <param name="Detail">Source identifier — host var name (for <see cref="EnvSource.HostEnv"/>),
+    /// secret key (for <see cref="EnvSource.Secret"/>), or null/empty for the others.</param>
+    /// <param name="Resolved">True when the value resolved to a non-empty string.</param>
+    /// <param name="Length">Character length of the resolved value. Logged only for non-credential
+    /// sources (<see cref="EnvSource.Runtime"/>, <see cref="EnvSource.Constant"/>) so we don't
+    /// fingerprint secrets via length.</param>
+    /// <param name="Override">True when a rules.json entry replaced a host-seeded default.</param>
+    private sealed record EnvProvenance(
+        EnvSource Source,
+        string? Detail,
+        bool Resolved,
+        int Length,
+        bool Mandatory,
+        bool Override)
+    {
+        public string Format(string name)
+        {
+            // Pad name column so columns line up in logs (longest expected key ~22 chars).
+            var paddedName = name.Length >= 22 ? name + " " : name.PadRight(22);
+
+            var sourceLabel = Source switch
+            {
+                EnvSource.Runtime  => "runtime",
+                EnvSource.Constant => "constant",
+                EnvSource.HostEnv  => $"host:{Detail}",
+                EnvSource.Secret   => $"secrets:{Detail}",
+                _                  => "unknown",
+            };
+
+            // For credential sources we deliberately don't log length — only resolved/empty —
+            // to avoid leaking length-based fingerprints of tenant secrets.
+            string status = Source switch
+            {
+                EnvSource.Runtime  => $"{Length} chars",
+                EnvSource.Constant => $"{Length} chars",
+                _                  => Resolved ? "set" : "EMPTY",
+            };
+
+            var flags = new List<string>();
+            if (Mandatory) flags.Add("mandatory");
+            if (Override)  flags.Add("override");
+            var flagSuffix = flags.Count == 0 ? "" : " [" + string.Join(",", flags) + "]";
+
+            return $"{paddedName} <- {sourceLabel,-32} ({status}){flagSuffix}";
+        }
     }
 
     private async Task TryKillContainerAsync(string containerId)

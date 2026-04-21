@@ -362,36 +362,40 @@ The `ActivationWorkflow` changes are minimal:
 
 ## 7. Credential & Secret Management
 
-Secrets are **shared across all tenants** — there are no per-tenant vaults or scoped credentials. The agent platform manages a single set of secrets that get injected into every container. The key distinction is **platform-specific tokens**: since the agent supports both GitHub and Azure DevOps, the appropriate platform token is selected based on the `platform` input extracted from the webhook event.
+Credentials split into two categories:
 
-### 7.1 Shared Secret Model
+- **Host-wide settings** (the only thing in the agent `.env`): `ANTHROPIC-API-KEY`, `XIANS-SERVER-URL`, `XIANS-API-KEY`, container/runtime knobs. These are shared and identical for every tenant the agent serves.
+- **Per-tenant CM credentials** (GitHub PAT, Azure DevOps PAT, …): stored in the **Xians Secret Vault** with tenant scope, fetched at container-start time. There is **no host-level fallback** for these — a tenant whose secret is missing fails fast rather than silently borrowing another tenant's PAT.
+
+### 7.1 Secret Flow
 
 ```
 ┌──────────────────────────────────┐       ┌───────────────────────────────┐
 │  Agent Host Environment (.env)    │       │  Container Environment         │
-│                                   │       │                                │
 │  ANTHROPIC-API-KEY=...             │──────▶│  ANTHROPIC_API_KEY=...        │
-│  GITHUB-TOKEN=...                 │       │  GITHUB_TOKEN=...  (if GitHub) │
-│  AZURE-DEVOPS-TOKEN=...           │       │  AZURE_DEVOPS_TOKEN=... (if AzDO)│
-│                                   │       │  PLATFORM=github|azuredevops   │
-│  (loaded via EnvConfig)           │       │                                │
-│                                   │       │  stdout → JSON result           │
-│                                   │       │  stderr → progress logs         │
+│  (shared, host-wide only)         │       │  PLATFORM=github|azuredevops   │
+└──────────────────────────────────┘       │                                │
+                                           │   GITHUB_TOKEN=... (if any)    │
+┌──────────────────────────────────┐       │   AZURE_DEVOPS_TOKEN=... (if)  │
+│  Xians Secret Vault (tenant)      │──────▶│   …other secrets.* entries…   │
+│  GITHUB-TOKEN=<tenant PAT>        │       │                                │
+│  AZURE-DEVOPS-TOKEN=<tenant PAT>  │       │  stdout → JSON result           │
+│  (resolved via secrets.*)         │       │  stderr → progress logs         │
 └──────────────────────────────────┘       └───────────────────────────────┘
 ```
 
 ### 7.2 Secret Inventory
 
-| Secret | Purpose | When Injected |
-|--------|---------|---------------|
-| `ANTHROPIC-API-KEY` | Claude / LLM API access for the Claude Code SDK | Always |
-| `GITHUB-TOKEN` | GitHub API access (clone private repos, post PR comments, update checks) | When `platform == "github"` |
-| `AZURE-DEVOPS-TOKEN` | Azure DevOps API access (clone repos, post PR comments, update work items) | When `platform == "azuredevops"` |
-| `PLATFORM` | Identifies which CM platform this execution targets | Always (derived from webhook inputs) |
+| Secret | Source | Purpose |
+|--------|--------|---------|
+| `ANTHROPIC-API-KEY` | Host `.env` | Claude / LLM API access for the Claude Code SDK |
+| `GITHUB-TOKEN` | Tenant Secret Vault (`secrets.GITHUB-TOKEN`) | GitHub API access for that tenant only |
+| `AZURE-DEVOPS-TOKEN` | Tenant Secret Vault (`secrets.AZURE-DEVOPS-TOKEN`) | Azure DevOps API access for that tenant only |
+| `PLATFORM` | `rules.json` input | Identifies which CM platform the rule targets |
 
 ### 7.3 Platform Selection Flow
 
-The `platform` value comes from the `rules.json` input rules — it's already defined as a constant input:
+The `platform` value comes from `rules.json` as a constant input:
 
 ```json
 {
@@ -401,18 +405,32 @@ The `platform` value comes from the `rules.json` input rules — it's already de
 }
 ```
 
-The control plane uses this to decide which platform token to inject:
+The matching execution block then declares which platform token to fetch from the vault for that tenant. Env vars sit at the **execution-block level** (`with-envs`), not nested under each plugin — every plugin in the block, plus the prompt itself, sees the same merged set:
+
+```jsonc
+// GitHub rule
+"with-envs": [
+  { "name": "GITHUB-TOKEN", "value": "secrets.GITHUB-TOKEN", "mandatory": true }
+]
+
+// Azure DevOps rule
+"with-envs": [
+  { "name": "AZURE-DEVOPS-TOKEN", "value": "secrets.AZURE-DEVOPS-TOKEN", "mandatory": true }
+]
+```
+
+Container start sequence:
 
 ```
 ContainerActivities.StartContainerAsync:
-    1. Read shared secrets from host environment (EnvConfig)
-    2. Read "platform" from OrchestrationResult.Inputs
-    3. Build env var map:
-       - Always: ANTHROPIC_API_KEY, PLATFORM, TENANT_ID, REPOSITORY_URL, PLUGIN_NAME, PLUGIN_COMMAND
-       - If platform == "github":      GITHUB_TOKEN
-       - If platform == "azuredevops": AZURE_DEVOPS_TOKEN
-    4. Pass as Docker container env vars at creation time
-    5. Secrets exist only in container memory, destroyed on cleanup
+    1. Seed host-wide envs (TENANT-ID, EXECUTION-ID, PROMPT, ANTHROPIC-API-KEY, ...)
+    2. For each entry in the execution's `with-envs`:
+         - secrets.<KEY> → XiansContext.CurrentAgent.Secrets.TenantScope().FetchByKeyAsync(key)
+         - env.<NAME>    → host EnvConfig.Get(name)
+         - constant: true → literal
+       Mandatory entries that resolve empty abort the container start (non-retryable).
+    3. Pass merged env to Docker at container creation
+    4. Secrets exist only in container memory, destroyed on cleanup
 ```
 
 ### 7.4 Git Clone Authentication
