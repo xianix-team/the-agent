@@ -27,7 +27,11 @@ log() { echo "$@" >&2; }
 # auto-injected by the agent from the execution-level `platform` / `repository` block
 # in rules.json (or synthesized by the chat onboarding tool). They are not authored
 # under `use-inputs` — the agent serialises them under these canonical kebab-case keys.
-XIANIX_INPUTS="${XIANIX_INPUTS:-{}}"
+# Note: do NOT write `${XIANIX_INPUTS:-{}}` — bash parses the first `}` as the
+# end of the parameter expansion, leaving a stray `}` appended to the value
+# (which then breaks jq with "Unmatched '}'"). Use `:=` to assign-if-unset
+# instead; bash handles the braces correctly there.
+: "${XIANIX_INPUTS:={\}}"
 REPOSITORY_URL=$(echo "${XIANIX_INPUTS}" | jq -r '."repository-url" // empty')
 PLATFORM=$(echo "${XIANIX_INPUTS}"       | jq -r '.platform // empty')
 GIT_REF=$(echo "${XIANIX_INPUTS}"        | jq -r '."git-ref" // empty')
