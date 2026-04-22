@@ -163,7 +163,7 @@ public class XianixAgent(
 
         var xiansAgent = xiansPlatform.Agents.Register(new()
         {
-            Name = Constants.AgentName,
+            Name = EnvConfig.AgentName,
             Description = "A versatile automation agent that listens for incoming webhooks from your tools and services, then triggers intelligent AI-powered workflows using Claude Code plugins — helping your team automate code reviews, respond to events, and streamline everyday development tasks without lifting a finger.",
             Summary = "AI automation agent that turns webhook events into smart, plugin-driven actions.",
             IsTemplate = true

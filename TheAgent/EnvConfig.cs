@@ -51,6 +51,11 @@ public static class EnvConfig
     public static string XiansServerUrl => GetRequired("XIANS-SERVER-URL");
     public static string XiansApiKey    => GetRequired("XIANS-API-KEY");
 
+    // Agent identity (display name shown when registering with the Xians platform).
+    // Note: workflow type names still derive from <see cref="Xianix.Constants.AgentName"/>
+    // because [Workflow(...)] attributes require compile-time constants.
+    public static string AgentName => Get("AGENT-NAME", Xianix.Constants.AgentName);
+
     // LLM / Anthropic
     public static string AnthropicApiKey         => GetRequired("ANTHROPIC-API-KEY");
     public static string AnthropicDeploymentName => Get("ANTHROPIC-DEPLOYMENT-NAME", "claude-haiku-4-5");
