@@ -16,13 +16,13 @@
     <PackageReference Include="Microsoft.Agents.AI.Anthropic" Version="1.0.0-rc5" />
     <PackageReference Include="Microsoft.Agents.AI.Foundry" Version="1.1.0" />
     <PackageReference Include="Microsoft.Agents.AI.OpenAI" Version="1.0.0-rc5" />
-    <!-- <PackageReference Include="Xians.Lib" Version="3.23.0" /> -->
+    <PackageReference Include="Xians.Lib" Version="3.24.0" />
 
   </ItemGroup>
 
   <ItemGroup>
     <!-- Use PackageReference Xians.Lib above for Docker/CI. For local dev against platform repo, uncomment: -->
-    <ProjectReference Include="..\..\..\platform\XiansAi.Lib\Xians.Lib\Xians.Lib.csproj" />
+    <!-- <ProjectReference Include="..\..\..\platform\XiansAi.Lib\Xians.Lib\Xians.Lib.csproj" /> -->
   </ItemGroup>
 
   <ItemGroup>
