@@ -7,10 +7,21 @@ The `xianix-executor` Docker image runs inside an isolated container per tenant 
 | File | Purpose |
 |------|---------|
 | `Dockerfile` | Image definition — Python 3.12, Node.js 20, git, gh CLI, Claude Code CLI + SDK |
-| `entrypoint.sh` | Bare-clone-or-fetch + worktree creation + plugin install + launches `execute_plugin.py` |
+| `entrypoint.sh` | Thin dispatcher — picks `prepare_repo.sh` and/or `run_prompt.sh` based on `XIANIX-MODE` |
+| `prepare_repo.sh` | Configures git credentials and bare-clone-or-fetches the repo into `/workspace/repo`. In `prepare-and-execute` mode it also creates the per-execution worktree at `/workspace/exec-${EXECUTION-ID}`. |
+| `run_prompt.sh` | Installs Claude Code plugins, launches `execute_plugin.py`, then cleans up the worktree |
+| `_common.sh` | Shared helpers sourced by both phase scripts (env aliasing, `log`, input parsing, `configure_credentials`) |
 | `execute_plugin.py` | Invokes Claude Code SDK against the worktree; writes JSON result to stdout |
 | `requirements.txt` | Python dependencies (pinned) |
 | `.dockerignore` | Build context exclusions |
+
+### Execution modes (`XIANIX-MODE`)
+
+| Mode | What runs | Use case |
+|------|-----------|----------|
+| `prepare-and-execute` *(default)* | `prepare_repo.sh` then `run_prompt.sh` | Webhook flows and chat-driven `RunClaudeCodeOnRepository`. Identical to the pre-split behaviour. |
+| `prepare` | `prepare_repo.sh` only (bare clone, **no** worktree, no plugins, no prompt) | Chat-driven `OnboardRepository`: add a new repo to the tenant without running anything against it. |
+| `execute` | `run_prompt.sh` only — assumes the workspace already exists | Reserved for future composite flows; not currently emitted by the control plane. |
 
 ## Building the image
 
@@ -67,6 +78,7 @@ cat progress.log  # git + plugin + executor progress messages
 |----------|----------|-------------|
 | `TENANT-ID` | Yes | Identifies the tenant for logging and isolation |
 | `EXECUTION-ID` | Yes | Unique per-execution ID, used as the git worktree name |
+| `XIANIX-MODE` | No | Phase selector — `prepare-and-execute` (default), `prepare` (bare clone only), or `execute` (run an already-prepared workspace). See *Execution modes* above. |
 | `XIANIX-INPUTS` | Yes | JSON object with dynamic inputs. For repo-bound runs the agent auto-injects the structural keys `repository-url`, `platform`, and (when declared) `git-ref` from the execution-level `repository` / `platform` fields in `rules.json`. The short `repository-name` (e.g. `owner/repo`) is **derived** from `repository-url` (platform-aware: handles GitHub, Azure DevOps `_git` URLs, etc.) and injected alongside them. None of these keys are authored under `use-inputs`. |
 | `CLAUDE-CODE-PLUGINS` | Yes | JSON array of `{ "plugin-name", "marketplace"? }` plugin descriptors. Env vars used by the plugins are injected separately by the agent via the execution-level `with-envs` in `rules.json` and never appear in this payload. |
 | `PROMPT` | Yes | Fully interpolated Claude Code prompt to execute |

@@ -39,4 +39,15 @@ public sealed record ContainerExecutionInput
     public required string Prompt { get; init; }
 
     public string VolumeName { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Phase selector forwarded as the <c>XIANIX-MODE</c> env var to the executor container.
+    /// One of:
+    /// <list type="bullet">
+    ///   <item><description><c>prepare-and-execute</c> (default) — clone/refresh + worktree + plugins + prompt + cleanup. Used by webhook flows and chat-driven prompt runs.</description></item>
+    ///   <item><description><c>prepare</c> — bare-clone the repo into the tenant volume only (no worktree, no plugins, no prompt). Used by chat-driven onboarding.</description></item>
+    ///   <item><description><c>execute</c> — assume the workspace is ready; install plugins + run prompt. Reserved for future composite flows.</description></item>
+    /// </list>
+    /// </summary>
+    public string Mode { get; init; } = "prepare-and-execute";
 }

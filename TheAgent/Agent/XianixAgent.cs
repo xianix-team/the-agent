@@ -87,6 +87,10 @@ public class XianixAgent(
         xiansAgent.Workflows
             .DefineCustom<ClaudeCodeChatWorkflow>(new WorkflowOptions { Activable = false })
             .AddActivity<ContainerActivities>();
+
+        xiansAgent.Workflows
+            .DefineCustom<OnboardRepositoryWorkflow>(new WorkflowOptions { Activable = false })
+            .AddActivity<ContainerActivities>();
     }
 
     private void ConfigureWebhookWorkflow(XiansAgent xiansAgent, CancellationToken cancellationToken)

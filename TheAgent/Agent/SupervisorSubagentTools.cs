@@ -118,9 +118,95 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
     }
 
     [Description(
+        "Clone a brand-new repository into this tenant's workspace so that subsequent " +
+        "RunClaudeCodeOnRepository calls can operate on it. Use this when the user asks " +
+        "to add / onboard / set up a repository and the URL is NOT in ListTenantRepositories. " +
+        "The platform is inferred from the URL host (`github.com` → github, " +
+        "`dev.azure.com` / `*.visualstudio.com` → azuredevops); only pass `platform` " +
+        "explicitly for self-hosted GHES or on-prem Azure DevOps. " +
+        "The tenant must have the matching credential in their Xians Secret Vault " +
+        "(`GITHUB-TOKEN` for github, `AZURE-DEVOPS-TOKEN` for azuredevops) — otherwise " +
+        "the clone fails with a clear error. " +
+        "Returns immediately after starting the clone; progress and the success/failure " +
+        "result are streamed back as separate chat messages, so do NOT echo or summarise " +
+        "the result yourself. " +
+        "If the user wants to onboard AND immediately run a prompt, prefer calling " +
+        "RunClaudeCodeOnRepository directly with the new URL — it will lazy-clone in the " +
+        "same workflow.")]
+    public async Task<string> OnboardRepository(
+        [Description("Repository HTTPS URL (github.com or dev.azure.com / *.visualstudio.com).")] string repositoryUrl,
+        [Description("Optional platform override ('github' or 'azuredevops'). Inferred from the URL host when omitted; only pass this for self-hosted GHES / on-prem ADO.")] string? platform = null)
+    {
+        if (string.IsNullOrWhiteSpace(repositoryUrl))
+            return "ERROR: repositoryUrl is required.";
+
+        string resolvedPlatform;
+        if (!string.IsNullOrWhiteSpace(platform))
+        {
+            if (!RepositoryPlatform.IsKnownPlatform(platform))
+                return $"ERROR: unknown platform '{platform}'. Expected '{RepositoryPlatform.GitHub}' or '{RepositoryPlatform.AzureDevOps}'.";
+            resolvedPlatform = platform;
+        }
+        else
+        {
+            try { resolvedPlatform = RepositoryPlatform.InferPlatform(repositoryUrl); }
+            catch (ArgumentException ex)
+            {
+                return $"ERROR: cannot infer platform for '{repositoryUrl}': {ex.Message} " +
+                       $"Pass platform='{RepositoryPlatform.GitHub}' or '{RepositoryPlatform.AzureDevOps}' explicitly.";
+            }
+        }
+
+        var tenantId      = context.Message.TenantId;
+        var participantId = context.Message.ParticipantId;
+        var scope         = context.Message.Scope;
+
+        var existing = await TenantVolumeReader.ListAsync(tenantId);
+        if (existing.Any(r => string.Equals(r.Url, repositoryUrl, StringComparison.Ordinal)))
+        {
+            return $"Repository `{repositoryUrl}` is already onboarded for this tenant. " +
+                   "Call `RunClaudeCodeOnRepository` directly to operate on it.";
+        }
+
+        var repoName = RepositoryNaming.DeriveName(repositoryUrl);
+        var withEnvs = RepositoryPlatform.RequiredCredentialEnvs(resolvedPlatform);
+
+        var req = new OnboardRepositoryRequest
+        {
+            TenantId       = tenantId,
+            ParticipantId  = participantId,
+            RepositoryUrl  = repositoryUrl,
+            RepositoryName = repoName,
+            Platform       = resolvedPlatform,
+            Scope          = scope,
+            WithEnvs       = withEnvs,
+        };
+
+        _logger.LogInformation(
+            "Dispatching repo onboarding: tenant={TenantId} participant={ParticipantId} repo={RepoName} url={RepositoryUrl} platform={Platform}",
+            tenantId, participantId, repoName, repositoryUrl, resolvedPlatform);
+
+        // Adding a random suffix so concurrent onboarding attempts against the same repo
+        // don't collide with each other or with a same-second RunClaudeCodeOnRepository.
+        var uniqueKeys = new[] { tenantId, repoName, "onboard", Guid.NewGuid().ToString("N")[..8] };
+        var executionTimeout = TimeSpan.FromSeconds(EnvConfig.ContainerExecutionTimeoutSeconds + 300);
+
+        await SubWorkflowService.StartAsync<OnboardRepositoryWorkflow>(
+            uniqueKeys, executionTimeout, req);
+
+        return $"Started onboarding for `{repoName}` (platform: `{resolvedPlatform}`). " +
+               "I'll let you know when the clone finishes — do not repeat this status to the user.";
+    }
+
+    [Description(
         "Run a Claude Code prompt against one of the tenant's repositories. " +
-        "The `repositoryUrl` MUST be one of the URLs returned by ListTenantRepositories — " +
-        "arbitrary URLs are rejected for tenant isolation. " +
+        "If `repositoryUrl` is already in ListTenantRepositories the existing tenant " +
+        "workspace is reused. If it's a brand-new URL on a supported host " +
+        "(`github.com`, `dev.azure.com`, `*.visualstudio.com`) it is **lazy-cloned** as " +
+        "the first step of the same workflow — no separate OnboardRepository call needed. " +
+        "Use OnboardRepository instead when the user only wants to add a repo without " +
+        "running anything against it, or when the URL host is non-standard (self-hosted " +
+        "GHES / on-prem ADO) and the user must pick the platform explicitly. " +
         "If the user's request matches a marketplace plugin (see ListAvailablePlugins), pass " +
         "its `pluginName` in `pluginNames` AND supply every `caller`-source mandatory input " +
         "from one of that plugin's `usageExamples` via `inputs` — the run is rejected if any " +
@@ -137,7 +223,7 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         "streamed back to the user as separate chat messages by the workflow itself, " +
         "so do NOT echo or summarise the result yourself.")]
     public async Task<string> RunClaudeCodeOnRepository(
-        [Description("The repository URL to operate on. Must come from ListTenantRepositories.")] string repositoryUrl,
+        [Description("The repository URL to operate on. May be one already in ListTenantRepositories OR a brand-new URL on github.com / dev.azure.com / *.visualstudio.com (it will be cloned in-flight). For self-hosted hosts, call OnboardRepository first with an explicit platform.")] string repositoryUrl,
         [Description("The full Claude Code prompt to execute. For plugin runs, use the plugin's executePrompt template with placeholders substituted.")] string prompt,
         [Description("Optional plugin specs (e.g. [\"pr-reviewer@xianix-plugins-official\"]). Each must come from ListAvailablePlugins. Omit or pass an empty array for a no-plugin run.")] string[]? pluginNames = null,
         [Description("Mandatory inputs for the chosen plugin's usage example, keyed by the rules.json kebab-case input name (e.g. {\"pr-number\":\"42\",\"pr-title\":\"Fix bug\",\"git-ref\":\"feat/x\"}). Include `git-ref` whenever the plugin lists it as a caller input — it determines the worktree state. Omit when no plugin is used. Never include repository-url, repository-name, or platform — those are auto-filled.")] Dictionary<string, string>? inputs = null)
@@ -152,10 +238,23 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         var scope         = context.Message.Scope;
 
         var repos = await TenantVolumeReader.ListAsync(tenantId);
-        if (!repos.Any(r => string.Equals(r.Url, repositoryUrl, StringComparison.Ordinal)))
+        var isKnownRepo = repos.Any(r => string.Equals(r.Url, repositoryUrl, StringComparison.Ordinal));
+
+        // Infer the platform either way — known repos still need it for the credential
+        // env merge below (in case the chosen plugins didn't declare the matching
+        // secrets.* entry), and unknown repos need it to lazy-clone in-flight.
+        string platform;
+        try { platform = RepositoryPlatform.InferPlatform(repositoryUrl); }
+        catch (ArgumentException ex)
         {
-            return $"ERROR: '{repositoryUrl}' is not a known repository for tenant '{tenantId}'. " +
-                   "Call ListTenantRepositories and pick one of the returned URLs.";
+            if (isKnownRepo)
+            {
+                // Should never happen — the URL was previously cloned successfully — but
+                // fail loud rather than silently dropping the credential merge.
+                return $"ERROR: cannot infer platform for known repo '{repositoryUrl}': {ex.Message}";
+            }
+            return $"ERROR: '{repositoryUrl}' is not onboarded and the platform can't be inferred " +
+                   $"({ex.Message}). Call OnboardRepository with an explicit platform, then retry.";
         }
 
         IReadOnlyList<CatalogPlugin> resolvedPlugins = Array.Empty<CatalogPlugin>();
@@ -179,11 +278,19 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
 
         var effectiveInputs = ((ResolutionResult.Success)resolution).Inputs;
 
-        // Union execution-level with-envs across every chosen plugin (dedup by name) so a
-        // value like `secrets.GITHUB-TOKEN` only ends up in the container once even when two
-        // plugins both need it.
+        // Pick only the with-envs the chosen plugins declared on executions targeting THIS
+        // platform (plus any platform-agnostic ones). The plugin catalog deliberately keeps
+        // a per-platform breakdown so a plugin reused across GitHub and Azure DevOps rules
+        // doesn't drag both `secrets.GITHUB-TOKEN` and `secrets.AZURE-DEVOPS-TOKEN` into a
+        // single-platform run — that would force the tenant to have a credential they don't
+        // need and fail at the secret-resolution step. Then we merge in the platform-
+        // required credential envs (GITHUB-TOKEN / AZURE-DEVOPS-TOKEN) so the executor can
+        // clone the repo on its own even if the user picked no plugin or a plugin that
+        // happens not to declare the matching platform PAT — without these the lazy-clone
+        // path would fail at git auth time. Plugin-declared entries win on ties.
         var withEnvs = resolvedPlugins
-            .SelectMany(p => p.ResolvedEnvs)
+            .SelectMany(p => SelectEnvsForPlatform(p, platform))
+            .Concat(RepositoryPlatform.RequiredCredentialEnvs(platform))
             .GroupBy(e => e.Name, StringComparer.Ordinal)
             .Select(g => g.First())
             .ToList();
@@ -202,8 +309,8 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         };
 
         _logger.LogInformation(
-            "Dispatching Claude Code run: tenant={TenantId} participant={ParticipantId} repo={RepoName} url={RepositoryUrl} plugins={Plugins} inputs={Inputs} promptLength={PromptLength}\n--- prompt ---\n{Prompt}\n--- end prompt ---",
-            tenantId, participantId, repoName, repositoryUrl,
+            "Dispatching Claude Code run: tenant={TenantId} participant={ParticipantId} repo={RepoName} url={RepositoryUrl} platform={Platform} known={KnownRepo} plugins={Plugins} inputs={Inputs} promptLength={PromptLength}\n--- prompt ---\n{Prompt}\n--- end prompt ---",
+            tenantId, participantId, repoName, repositoryUrl, platform, isKnownRepo,
             resolvedPlugins.Count == 0 ? "(none)" : string.Join(",", resolvedPlugins.Select(p => p.PluginName)),
             string.Join(",", effectiveInputs.Keys),
             prompt.Length, prompt);
@@ -220,7 +327,34 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         var pluginSuffix = resolvedPlugins.Count == 0
             ? ""
             : $" with plugin(s) {string.Join(", ", resolvedPlugins.Select(p => $"`{p.PluginName}`"))}";
-        return $"Started Claude Code on `{repoName}`{pluginSuffix}. Output will be streamed in subsequent messages — do not repeat it back to the user.";
+        var clonePrefix = isKnownRepo
+            ? ""
+            : "Will clone the repository first (this is the first run on this URL). ";
+        return $"{clonePrefix}Started Claude Code on `{repoName}`{pluginSuffix}. Output will be streamed in subsequent messages — do not repeat it back to the user.";
+    }
+
+    /// <summary>
+    /// Picks the with-envs from a catalog plugin that are relevant to the dispatch's
+    /// platform: entries declared on executions targeting <paramref name="platform"/> plus
+    /// entries from platform-agnostic executions (those with an empty Platform binding,
+    /// stored under the empty-string key). Lookup is case-insensitive on platform.
+    /// Returns an empty sequence when the plugin has no executions on this platform and
+    /// no platform-agnostic executions — the caller still merges in the
+    /// <see cref="RepositoryPlatform.RequiredCredentialEnvs(string)"/> baseline so the
+    /// clone can authenticate regardless.
+    /// </summary>
+    internal static IEnumerable<EnvEntry> SelectEnvsForPlatform(CatalogPlugin plugin, string platform)
+    {
+        var key = (platform ?? string.Empty).Trim().ToLowerInvariant();
+        if (plugin.EnvsByPlatform.TryGetValue(key, out var matched))
+        {
+            foreach (var e in matched) yield return e;
+        }
+        if (key.Length > 0
+            && plugin.EnvsByPlatform.TryGetValue(string.Empty, out var agnostic))
+        {
+            foreach (var e in agnostic) yield return e;
+        }
     }
 
     /// <summary>

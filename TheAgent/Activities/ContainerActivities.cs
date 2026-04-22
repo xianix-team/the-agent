@@ -380,6 +380,7 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
 
         SetRuntime(env, prov, "TENANT-ID",            input.TenantId);
         SetRuntime(env, prov, "EXECUTION-ID",         input.ExecutionId);
+        SetRuntime(env, prov, "XIANIX-MODE",          input.Mode);
         SetRuntime(env, prov, "XIANIX-INPUTS",        input.InputsJson);
         SetRuntime(env, prov, "CLAUDE-CODE-PLUGINS",  input.ClaudeCodePlugins);
         SetRuntime(env, prov, "PROMPT",               input.Prompt);
