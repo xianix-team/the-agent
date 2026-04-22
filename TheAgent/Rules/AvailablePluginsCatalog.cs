@@ -19,10 +19,31 @@ internal static class AvailablePluginsCatalog
 {
     /// <summary>
     /// Input names whose values the chat tool resolves automatically from the chosen
-    /// repository — the model never needs to (and must not) supply them.
+    /// repository — the model never needs to (and must not) supply them. The
+    /// <c>repository-name</c> entry is the short identifier (e.g. <c>owner/repo</c>) that
+    /// the chat tool derives from the repo's clone URL via
+    /// <see cref="RepositoryNaming.DeriveName"/> — it is never authored in <c>rules.json</c>.
     /// </summary>
     public const string RepositoryUrlInput  = "repository-url";
     public const string RepositoryNameInput = "repository-name";
+
+    /// <summary>
+    /// Input name the catalog synthesises from <see cref="WebhookExecution.Platform"/>.
+    /// Surfaced to the chat tool as a Constant input so PluginInputResolver auto-injects it
+    /// into <c>XIANIX_INPUTS</c> — keeps the wire-format contract for plugin prompts and the
+    /// executor entrypoint stable even though <c>platform</c> is no longer a <c>use-inputs</c>
+    /// entry in <c>rules.json</c>.
+    /// </summary>
+    public const string PlatformInput = "platform";
+
+    /// <summary>
+    /// Input name the catalog synthesises from <see cref="RepositoryBindingTemplate.Ref"/>.
+    /// Surfaced to the chat tool as a Caller input — when a webhook rule declares which ref
+    /// to check out, the chat-driven equivalent must supply it too. This keeps the chat path
+    /// symmetric with the webhook path and ensures the executor entrypoint always finds
+    /// <c>git-ref</c> in <c>XIANIX_INPUTS</c> when the rule expects a specific worktree state.
+    /// </summary>
+    public const string GitRefInput = "git-ref";
 
     private static readonly JsonSerializerOptions RulesJsonOptions = new()
     {
@@ -155,10 +176,58 @@ internal static class AvailablePluginsCatalog
 
         public void AddUsage(WebhookExecution execution)
         {
-            var inputs = execution.InputRules
-                .Where(i => !string.IsNullOrWhiteSpace(i.Name))
-                .Select(BuildInputRequirement)
-                .ToList();
+            var inputs = new List<CatalogInputRequirement>();
+
+            // Synthesise structural execution context as catalog inputs so the chat-side
+            // resolution flow (PluginInputResolver) can validate and inject them the same
+            // way as the webhook path treats them:
+            //   • repository-url   → AutoFromRepository (from chosen repo)
+            //   • repository-name  → AutoFromRepository (derived from the repo's clone URL
+            //                        by RepositoryNaming.DeriveName — paired 1:1 with -url
+            //                        so plugins always see both keys together)
+            //   • platform         → Constant (from rules.json)
+            //   • git-ref          → Caller (model must supply — symmetric with the webhook
+            //                        payload supplying it)
+            if (execution.Repository is { } repo)
+            {
+                if (repo.Url is { IsEmpty: false } urlBinding)
+                {
+                    inputs.Add(new CatalogInputRequirement(
+                        Name:          RepositoryUrlInput,
+                        Mandatory:     true,
+                        Source:        InputSourceKind.AutoFromRepository,
+                        ConstantValue: urlBinding.Constant ? urlBinding.Value : null,
+                        PathHint:      DescribeRepoBinding(urlBinding)));
+                    inputs.Add(new CatalogInputRequirement(
+                        Name:          RepositoryNameInput,
+                        Mandatory:     true,
+                        Source:        InputSourceKind.AutoFromRepository,
+                        ConstantValue: null,
+                        PathHint:      "derived from repository.url"));
+                }
+                if (repo.Ref is { IsEmpty: false } refBinding)
+                    inputs.Add(new CatalogInputRequirement(
+                        Name:          GitRefInput,
+                        Mandatory:     true,
+                        Source:        refBinding.Constant ? InputSourceKind.AutoFromRepository : InputSourceKind.Caller,
+                        ConstantValue: refBinding.Constant ? refBinding.Value : null,
+                        PathHint:      DescribeRepoBinding(refBinding)));
+            }
+
+            if (!string.IsNullOrWhiteSpace(execution.Platform))
+                inputs.Add(new CatalogInputRequirement(
+                    Name:          PlatformInput,
+                    Mandatory:     true,
+                    Source:        InputSourceKind.Constant,
+                    ConstantValue: execution.Platform.Trim(),
+                    PathHint:      null));
+
+            foreach (var input in execution.InputRules)
+            {
+                if (string.IsNullOrWhiteSpace(input.Name))
+                    continue;
+                inputs.Add(BuildInputRequirement(input));
+            }
 
             _usages.Add(new CatalogUsageExample(
                 ExecutionName: execution.Name?.Trim() ?? "",
@@ -171,6 +240,12 @@ internal static class AvailablePluginsCatalog
                 _envs.TryAdd(env.Name, env);
             }
         }
+
+        // Hint string for the catalog UI: makes the constant-vs-path distinction visible
+        // so an operator browsing the catalog can tell at a glance which structural fields
+        // are pinned and which depend on the webhook payload.
+        private static string DescribeRepoBinding(RepoFieldBinding binding) =>
+            binding.Constant ? $"constant: {binding.Value}" : binding.Value;
 
         private static CatalogInputRequirement BuildInputRequirement(InputRuleEntry input)
         {

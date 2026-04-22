@@ -45,14 +45,18 @@ public class ProcessingWorkflow
             ? ""
             : $", block={orchestrationResult.ExecutionBlockName}";
         var executionLabel = $"webhook={orchestrationResult.WebhookName}{block}";
-        var repositoryUrl = OrchestrationResult.GetInputString(orchestrationResult.Inputs, "repository-url") ?? string.Empty;
+        var execution      = orchestrationResult.Execution!;
+        var repositoryUrl  = execution.RepositoryUrl;
 
         Workflow.Logger.LogInformation(
-            "ProcessingWorkflow starting: tenant={TenantId}, repo={Repo}, block={Block}, plugins={PluginCount}.",
+            "ProcessingWorkflow starting: tenant={TenantId}, platform={Platform}, repo={Repo}, block={Block}, plugins={PluginCount}.",
             orchestrationResult.TenantId,
-            repositoryUrl,
+            string.IsNullOrEmpty(execution.Platform) ? "(none)" : execution.Platform,
+            string.IsNullOrEmpty(execution.RepositoryName)
+                ? (string.IsNullOrEmpty(repositoryUrl) ? "(none)" : repositoryUrl)
+                : execution.RepositoryName,
             orchestrationResult.ExecutionBlockName ?? "—",
-            orchestrationResult.Execution!.Plugins.Count);
+            execution.Plugins.Count);
 
         var input = BuildContainerInput(orchestrationResult);
 

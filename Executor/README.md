@@ -27,7 +27,7 @@ The image expects all configuration via environment variables:
 docker run --rm \
   -e TENANT-ID=local-test \
   -e EXECUTION-ID=test-001 \
-  -e 'XIANIX-INPUTS={"repository-url":"https://github.com/your-org/your-repo","platform":"github","pr-head-branch":"feature/foo"}' \
+  -e 'XIANIX-INPUTS={"repository-url":"https://github.com/your-org/your-repo","platform":"github","git-ref":"feature/foo"}' \
   -e CLAUDE-CODE-PLUGINS='[{"plugin-name":"github@claude-plugins-official","marketplace":"anthropics/claude-plugins-official"}]' \
   -e PROMPT="Review this repository and summarize the architecture." \
   -e ANTHROPIC-API-KEY=sk-ant-... \
@@ -67,7 +67,7 @@ cat progress.log  # git + plugin + executor progress messages
 |----------|----------|-------------|
 | `TENANT-ID` | Yes | Identifies the tenant for logging and isolation |
 | `EXECUTION-ID` | Yes | Unique per-execution ID, used as the git worktree name |
-| `XIANIX-INPUTS` | Yes | JSON object with dynamic inputs (must include `repository-url`) |
+| `XIANIX-INPUTS` | Yes | JSON object with dynamic inputs. For repo-bound runs the agent auto-injects the structural keys `repository-url`, `platform`, and (when declared) `git-ref` from the execution-level `repository` / `platform` fields in `rules.json`. The short `repository-name` (e.g. `owner/repo`) is **derived** from `repository-url` (platform-aware: handles GitHub, Azure DevOps `_git` URLs, etc.) and injected alongside them. None of these keys are authored under `use-inputs`. |
 | `CLAUDE-CODE-PLUGINS` | Yes | JSON array of `{ "plugin-name", "marketplace"? }` plugin descriptors. Env vars used by the plugins are injected separately by the agent via the execution-level `with-envs` in `rules.json` and never appear in this payload. |
 | `PROMPT` | Yes | Fully interpolated Claude Code prompt to execute |
 | `ANTHROPIC-API-KEY` | Yes | Anthropic API key (read by the Claude Code SDK) |
@@ -82,9 +82,9 @@ cat progress.log  # git + plugin + executor progress messages
 
 | Key | Used for |
 |-----|----------|
-| `repository-url` | Git clone/fetch target (required) |
-| `platform` | Credential selection: `github` (default) or `azuredevops` |
-| `pr-head-branch` | Optional ref to check out via worktree |
+| `repository-url` | Git clone/fetch target. Required for repo-bound runs; framework-managed (injected from the execution-level `repository.url` in `rules.json`). |
+| `platform` | Credential selection: `github` (default), `azuredevops`. Framework-managed (injected from the execution-level `platform`). |
+| `git-ref` | Ref (branch / commit / tag) to check out into the worktree. Framework-managed (injected from the execution-level `repository.ref` in `rules.json`). When the rule omits `repository.ref` the executor runs against the bare-clone HEAD. |
 
 ## Concurrency model
 

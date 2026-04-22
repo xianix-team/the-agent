@@ -30,4 +30,8 @@
     <EmbeddedResource Include="**\*.md" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="TheAgent.Tests" />
+  </ItemGroup>
+
 </Project>

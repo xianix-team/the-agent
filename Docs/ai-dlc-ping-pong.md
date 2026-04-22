@@ -311,57 +311,60 @@ A reference cron workflow lives at `Scripts/scheduler/ai-dlc-scanners.yml` (to b
 
 ## 9. Inputs to extract from each event
 
-All label-driven rules share an almost-identical `use-inputs` block.
+Structural execution context — `platform`, `repository.url`, and (for refs you need to check out) `repository.ref` — is declared at the **execution level**, not under `use-inputs`. The agent auto-injects the resolved values into `XIANIX_INPUTS` under the canonical kebab-case keys `platform`, `repository-url`, and `git-ref`. The short `repository-name` (e.g. `owner/repo`) is **derived** from `repository-url` (platform-aware: handles GitHub, Azure DevOps `_git` URLs, etc.) and injected alongside them — there is no `repository.name` knob in the schema. See [`rules-json.md`](./rules-json.md#1b-platform--repository--structural-execution-context) for the full schema.
 
 For **GitHub issues**:
 
 ```json
+"platform": "github",
+"repository": {
+  "url": "repository.clone_url"
+},
 "use-inputs": [
-  { "name": "issue-number",    "value": "issue.number" },
-  { "name": "issue-title",     "value": "issue.title" },
-  { "name": "repository-url",  "value": "repository.clone_url" },
-  { "name": "repository-name", "value": "repository.full_name" },
-  { "name": "trigger-label",   "value": "label.name" },
-  { "name": "platform",        "value": "github", "constant": true }
+  { "name": "issue-number",  "value": "issue.number" },
+  { "name": "issue-title",   "value": "issue.title" },
+  { "name": "trigger-label", "value": "label.name" }
 ]
 ```
 
 For **GitHub PRs**:
 
 ```json
+"platform": "github",
+"repository": {
+  "url": "repository.clone_url",
+  "ref": "pull_request.head.ref"
+},
 "use-inputs": [
-  { "name": "pr-number",       "value": "pull_request.number" },
-  { "name": "pr-title",        "value": "pull_request.title" },
-  { "name": "pr-head-branch",  "value": "pull_request.head.ref" },
-  { "name": "repository-url",  "value": "repository.clone_url" },
-  { "name": "repository-name", "value": "repository.full_name" },
-  { "name": "trigger-label",   "value": "label.name" },
-  { "name": "platform",        "value": "github", "constant": true }
+  { "name": "pr-number",     "value": "pull_request.number" },
+  { "name": "pr-title",      "value": "pull_request.title" },
+  { "name": "trigger-label", "value": "label.name" }
 ]
 ```
 
 For **GitHub `repository_dispatch` (continuous scanners)**:
 
 ```json
+"platform": "github",
+"repository": {
+  "url": "repository.clone_url"
+},
 "use-inputs": [
-  { "name": "scanner",         "value": "client_payload.scanner" },
-  { "name": "scope",           "value": "client_payload.scope" },
-  { "name": "repository-url",  "value": "repository.clone_url" },
-  { "name": "repository-name", "value": "repository.full_name" },
-  { "name": "platform",        "value": "github", "constant": true }
+  { "name": "scanner", "value": "client_payload.scanner" },
+  { "name": "scope",   "value": "client_payload.scope"   }
 ]
 ```
 
 For **Azure DevOps work items**:
 
 ```json
+"platform": "azuredevops",
 "use-inputs": [
-  { "name": "workitem-id",     "value": "resource.workItemId" },
-  { "name": "workitem-title",  "value": "resource.revision.fields.\"System.Title\"" },
-  { "name": "workitem-type",   "value": "resource.revision.fields.\"System.WorkItemType\"" },
-  { "name": "project-name",    "value": "resource.revision.fields.\"System.TeamProject\"" },
-  { "name": "tags",            "value": "resource.fields.\"System.Tags\".newValue" },
-  { "name": "platform",        "value": "azuredevops", "constant": true }
+  { "name": "workitem-id",    "value": "resource.workItemId" },
+  { "name": "workitem-title", "value": "resource.revision.fields.\"System.Title\"" },
+  { "name": "workitem-type",  "value": "resource.revision.fields.\"System.WorkItemType\"" },
+  { "name": "project-name",   "value": "resource.revision.fields.\"System.TeamProject\"" },
+  { "name": "tags",           "value": "resource.fields.\"System.Tags\".newValue" }
 ]
 ```
 

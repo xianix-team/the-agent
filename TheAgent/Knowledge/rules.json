@@ -4,30 +4,26 @@
         "executions": [
             {
                 "name": "github-pull-request-review",
+                "platform": "github",
+                "repository": {
+                    "url": "repository.clone_url",
+                    "ref": "pull_request.head.ref"
+                },
                 "match-any": [
                     {
-                    "name": "github-pr-tag-applied",
-                    "rule": "action==labeled&&label.name=='ai-dlc/pr/pr-review'"
+                        "name": "github-pr-tag-applied",
+                        "rule": "action==labeled&&label.name=='ai-dlc/pr/pr-review'"
                     },
                     {
-                    "name": "github-pr-opened-with-tag",
-                    "rule": "action==opened&&pull_request.labels.*.name=='ai-dlc/pr/pr-review'"
+                        "name": "github-pr-opened-with-tag",
+                        "rule": "action==opened&&pull_request.labels.*.name=='ai-dlc/pr/pr-review'"
                     },
                     {
-                    "name": "github-pr-synchronize-with-tag",
-                    "rule": "action==synchronize&&pull_request.labels.*.name=='ai-dlc/pr/pr-review'"
+                        "name": "github-pr-synchronize-with-tag",
+                        "rule": "action==synchronize&&pull_request.labels.*.name=='ai-dlc/pr/pr-review'"
                     }
                 ],
                 "use-inputs": [
-                    {
-                        "name": "repository-url",
-                        "value": "repository.clone_url"
-                    },
-                    {
-                        "name": "platform",
-                        "value": "github",
-                        "constant": true
-                    },                    
                     {
                         "name": "pr-link",
                         "value": "pull_request.url"
@@ -50,6 +46,11 @@
             },
             {
                 "name": "azuredevops-pull-request-review",
+                "platform": "azuredevops",
+                "repository": {
+                    "url": "resource.repository.remoteUrl",
+                    "ref": "resource.sourceRefName"
+                },
                 "match-any": [
                     {
                         "name": "azuredevops-pr-created",
@@ -70,25 +71,8 @@
                         "value": "resource.pullRequestId"
                     },
                     {
-                        "name": "repository-url",
-                        "value": "resource.repository.remoteUrl"
-                    },
-                    {
-                        "name": "repository-name",
-                        "value": "resource.repository.name"
-                    },
-                    {
                         "name": "pr-title",
                         "value": "resource.title"
-                    },
-                    {
-                        "name": "pr-head-branch",
-                        "value": "resource.sourceRefName"
-                    },
-                    {
-                        "name": "platform",
-                        "value": "azuredevops",
-                        "constant": true
                     }
                 ],
                 "use-plugins": [
@@ -104,32 +88,33 @@
                         "mandatory": true
                     }
                 ],
-                "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review. The `az` CLI is authenticated and available if you need it directly."
+                "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{git-ref}}).\n\nRun /code-review to perform the automated review. The `az` CLI is authenticated and available if you need it directly."
             },
             {
                 "name": "github-issue-requirement-analysis",
+                "platform": "github",
+                "repository": {
+                    "url": "repository.clone_url"
+                },
                 "match-any": [
                     {
-                    "name": "github-issue-tag-applied",
-                    "rule": "action==labeled&&label.name=='ai-dlc/issue/analyze'"
+                        "name": "github-issue-tag-applied",
+                        "rule": "action==labeled&&label.name=='ai-dlc/issue/analyze'"
                     },
                     {
-                    "name": "github-issue-opened-with-tag",
-                    "rule": "action==opened&&issue.labels.*.name=='ai-dlc/issue/analyze'"
+                        "name": "github-issue-opened-with-tag",
+                        "rule": "action==opened&&issue.labels.*.name=='ai-dlc/issue/analyze'"
                     }
                 ],
                 "use-inputs": [
-                  { "name": "issue-number",    "value": "issue.number",        "mandatory": true },
-                  { "name": "repository-url",  "value": "repository.clone_url", "mandatory": true },
-                  { "name": "repository-name", "value": "repository.full_name" },
-                  { "name": "issue-title",     "value": "issue.title" },
-                  { "name": "platform",        "value": "github", "constant": true }
+                    { "name": "issue-number", "value": "issue.number", "mandatory": true },
+                    { "name": "issue-title",  "value": "issue.title" }
                 ],
                 "use-plugins": [
-                  {
-                    "plugin-name": "req-analyst@xianix-plugins-official",
-                    "marketplace": "xianix-team/plugins-official"
-                  }
+                    {
+                        "plugin-name": "req-analyst@xianix-plugins-official",
+                        "marketplace": "xianix-team/plugins-official"
+                    }
                 ],
                 "with-envs": [
                     {
@@ -142,6 +127,7 @@
             },
             {
                 "name": "azuredevops-work-item-requirement-analysis",
+                "platform": "azuredevops",
                 "match-any": [
                     {
                         "name": "azuredevops-workitem-assigned-to-agent",
@@ -164,11 +150,6 @@
                     {
                         "name": "project-name",
                         "value": "resource.revision.fields.\"System.TeamProject\""
-                    },
-                    {
-                        "name": "platform",
-                        "value": "azuredevops",
-                        "constant": true
                     }
                 ],
                 "use-plugins": [

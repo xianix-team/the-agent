@@ -425,10 +425,12 @@ Container start sequence:
 ContainerActivities.StartContainerAsync:
     1. Seed host-wide envs (TENANT-ID, EXECUTION-ID, PROMPT, ANTHROPIC-API-KEY, ...)
     2. For each entry in the execution's `with-envs`:
-         - secrets.<KEY> → XiansContext.CurrentAgent.Secrets.TenantScope().FetchByKeyAsync(key)
-         - env.<NAME>    → host EnvConfig.Get(name)
+         - secrets.<KEY>  → XiansContext.CurrentAgent.Secrets.TenantScope().FetchByKeyAsync(key)
+         - host.<NAME>    → host EnvConfig.Get(name)
          - constant: true → literal
        Mandatory entries that resolve empty abort the container start (non-retryable).
+       Bare names or unknown prefixes also abort (non-retryable) — the source of every
+       credential must be unambiguous on the rule.
     3. Pass merged env to Docker at container creation
     4. Secrets exist only in container memory, destroyed on cleanup
 ```

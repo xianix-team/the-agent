@@ -125,9 +125,11 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         "its `pluginName` in `pluginNames` AND supply every `caller`-source mandatory input " +
         "from one of that plugin's `usageExamples` via `inputs` — the run is rejected if any " +
         "mandatory input is missing. Plugin names and inputs are validated against the catalog. " +
-        "Inputs use the kebab-case names from rules.json (e.g. `pr-number`, `pr-title`, " +
-        "`pr-head-branch`). Do NOT pass `repository-url` or `repository-name` — they are " +
-        "auto-filled from the chosen repository. When using a plugin, craft `prompt` from the " +
+        "Inputs use the kebab-case names from rules.json (e.g. `pr-number`, `pr-title`). " +
+        "Pass `git-ref` (branch / commit / tag) when the chosen plugin's usage example lists " +
+        "it as a `caller` input — it controls which ref the executor checks out into the " +
+        "worktree. Do NOT pass `repository-url`, `repository-name`, or `platform` — they are " +
+        "auto-filled from the chosen repository / rule. When using a plugin, craft `prompt` from the " +
         "plugin's `usageExamples.executePrompt` template (e.g. `/code-review`, " +
         "`/requirement-analysis 42`) substituting the same `{{placeholders}}` you supply via " +
         "`inputs`. " +
@@ -138,7 +140,7 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         [Description("The repository URL to operate on. Must come from ListTenantRepositories.")] string repositoryUrl,
         [Description("The full Claude Code prompt to execute. For plugin runs, use the plugin's executePrompt template with placeholders substituted.")] string prompt,
         [Description("Optional plugin specs (e.g. [\"pr-reviewer@xianix-plugins-official\"]). Each must come from ListAvailablePlugins. Omit or pass an empty array for a no-plugin run.")] string[]? pluginNames = null,
-        [Description("Mandatory inputs for the chosen plugin's usage example, keyed by the rules.json kebab-case input name (e.g. {\"pr-number\":\"42\",\"pr-title\":\"Fix bug\",\"pr-head-branch\":\"feat/x\"}). Omit when no plugin is used. Never include repository-url or repository-name — those are auto-filled.")] Dictionary<string, string>? inputs = null)
+        [Description("Mandatory inputs for the chosen plugin's usage example, keyed by the rules.json kebab-case input name (e.g. {\"pr-number\":\"42\",\"pr-title\":\"Fix bug\",\"git-ref\":\"feat/x\"}). Include `git-ref` whenever the plugin lists it as a caller input — it determines the worktree state. Omit when no plugin is used. Never include repository-url, repository-name, or platform — those are auto-filled.")] Dictionary<string, string>? inputs = null)
     {
         if (string.IsNullOrWhiteSpace(repositoryUrl))
             return "ERROR: repositoryUrl is required. Call ListTenantRepositories first.";
@@ -169,7 +171,7 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
             resolvedPlugins = resolved;
         }
 
-        var repoName = ExtractRepoName(repositoryUrl);
+        var repoName = RepositoryNaming.DeriveName(repositoryUrl);
 
         var resolution = PluginInputResolver.Resolve(repositoryUrl, repoName, resolvedPlugins, inputs);
         if (resolution is ResolutionResult.Missing missing)
@@ -247,26 +249,4 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         return string.Join("\n", lines);
     }
 
-    /// <summary>
-    /// Pulls a short repo identifier out of a clone URL, e.g.
-    /// <c>https://github.com/owner/repo.git</c> → <c>owner/repo</c>. Falls back to the raw
-    /// URL when no useful path segments are present.
-    /// </summary>
-    private static string ExtractRepoName(string repositoryUrl)
-    {
-        if (Uri.TryCreate(repositoryUrl, UriKind.Absolute, out var uri))
-        {
-            var segments = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
-            if (segments.Length >= 2)
-            {
-                var repo = segments[^1];
-                if (repo.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
-                    repo = repo[..^4];
-                return $"{segments[^2]}/{repo}";
-            }
-            if (segments.Length == 1)
-                return segments[0];
-        }
-        return repositoryUrl;
-    }
 }

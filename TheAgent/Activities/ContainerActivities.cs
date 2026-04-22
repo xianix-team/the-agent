@@ -410,9 +410,13 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
 
     /// <summary>
     /// Injects execution-level <c>with-envs</c> declared in rules.json.
-    /// Values may be static strings (<c>"constant": true</c>), <c>env.VAR_NAME</c> references
-    /// resolved from the host process environment, or <c>secrets.SECRET-KEY</c> references
-    /// fetched from the tenant-scoped Xians Secret Vault at container-start time.
+    /// Values must use one of three explicit forms — bare names are rejected so the source
+    /// of every credential is unambiguous on the rule:
+    /// <list type="bullet">
+    ///   <item><description><c>"constant": true</c> — <c>value</c> is taken verbatim.</description></item>
+    ///   <item><description><c>host.VAR_NAME</c> — read <c>VAR_NAME</c> from the agent host process environment.</description></item>
+    ///   <item><description><c>secrets.SECRET-KEY</c> — fetched from the tenant-scoped Xians Secret Vault.</description></item>
+    /// </list>
     /// rules.json entries always take precedence over host-derived defaults already in
     /// <paramref name="env"/> — the rules.json declaration is the source of truth.
     /// </summary>
@@ -474,21 +478,24 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
                 names, tenantId);
             throw new ApplicationFailureException(
                 $"Missing mandatory environment variable(s): {names}. " +
-                $"Ensure these are configured in the host environment, " +
+                $"Ensure these are configured on the agent host (for 'host.*' references) " +
                 $"or in the tenant Secret Vault (for 'secrets.*' references).", nonRetryable: true);
         }
     }
 
     /// <summary>
-    /// Resolves an env value from rules.json. Supports three forms:
+    /// Resolves a <c>with-envs</c> value from rules.json. Recognises exactly three forms:
     /// <list type="bullet">
     ///   <item><description><c>"constant": true</c> — <paramref name="value"/> is returned as-is.</description></item>
-    ///   <item><description><c>env.VAR_NAME</c> — read <c>VAR_NAME</c> from the host process environment.</description></item>
+    ///   <item><description><c>host.VAR_NAME</c> — read <c>VAR_NAME</c> from the agent host process environment.</description></item>
     ///   <item><description><c>secrets.SECRET-KEY</c> — fetched from the tenant-scoped Xians Secret Vault via
     ///     <c>XiansContext.CurrentAgent.Secrets.TenantScope().FetchByKeyAsync(...)</c>. Returns an empty
     ///     string if the secret is not found or the fetch fails (mandatory check then handles it).</description></item>
     /// </list>
-    /// Bare names with no prefix are treated as host env vars for backwards compatibility.
+    /// Anything else — bare names, <c>env.X</c> (legacy), or any unknown prefix — throws a
+    /// non-retryable <see cref="ApplicationFailureException"/>: a rules.json typo could
+    /// otherwise silently leak a host env var into the container or, worse, ship an unset
+    /// credential without anyone noticing. Loud failure beats quiet ambiguity for credentials.
     /// Returns the resolved value plus provenance metadata (source kind + the host var
     /// name or secret key the value was looked up under) so the caller can log injection
     /// outcomes without ever surfacing the value itself.
@@ -501,44 +508,77 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
     {
         if (constant) return (value, EnvSource.Constant, Detail: string.Empty);
 
-        if (value.StartsWith("secrets.", StringComparison.Ordinal))
+        var form = EnvValueForm.Parse(value);
+        switch (form.Kind)
         {
-            var secretKey = value[8..];
-            if (string.IsNullOrWhiteSpace(secretKey))
-            {
+            case EnvValueKind.Secret:
+                return await ResolveSecretAsync(form.Identifier, envName, logger);
+
+            case EnvValueKind.Host:
+                return (EnvConfig.Get(form.Identifier), EnvSource.HostEnv, Detail: form.Identifier);
+
+            case EnvValueKind.EmptySecret:
                 logger.LogWarning(
                     "with-envs entry '{EnvName}' references an empty secret key ('secrets.').",
                     envName);
                 return (string.Empty, EnvSource.Secret, Detail: "<empty-key>");
-            }
 
-            try
-            {
-                var vault = XiansContext.CurrentAgent.Secrets.TenantScope();
-                var fetched = await vault.FetchByKeyAsync(secretKey);
-                if (fetched is null || string.IsNullOrEmpty(fetched.Value))
-                {
-                    logger.LogWarning(
-                        "Secret '{SecretKey}' not found in tenant Secret Vault " +
-                        "(with-envs entry '{EnvName}').",
-                        secretKey, envName);
-                    return (string.Empty, EnvSource.Secret, Detail: secretKey);
-                }
-                return (fetched.Value, EnvSource.Secret, Detail: secretKey);
-            }
-            catch (Exception ex)
-            {
+            case EnvValueKind.EmptyHost:
                 logger.LogError(
-                    ex,
-                    "Failed to fetch secret '{SecretKey}' from tenant Secret Vault " +
+                    "with-envs entry '{EnvName}' has an empty host reference ('host.').", envName);
+                throw new ApplicationFailureException(
+                    $"with-envs entry '{envName}' has an empty 'host.' reference. " +
+                    "Use 'host.VAR_NAME' (e.g. 'host.GITHUB_TOKEN').", nonRetryable: true);
+
+            case EnvValueKind.Invalid:
+            default:
+                // Unknown form — bare name, legacy 'env.X', typo like 'hosts.X'. Refuse
+                // rather than silently fall through to the host env: for credentials,
+                // "I don't know where you wanted me to read this from" must never become
+                // "I quietly read it from the host".
+                logger.LogError(
+                    "with-envs entry '{EnvName}' has an unrecognised value form '{Value}'. " +
+                    "Expected 'host.VAR_NAME', 'secrets.SECRET-KEY', or set \"constant\": true.",
+                    envName, value);
+                throw new ApplicationFailureException(
+                    $"with-envs entry '{envName}' has an unrecognised value form '{value}'. " +
+                    "Use one of: 'host.VAR_NAME' (host env), 'secrets.SECRET-KEY' (tenant Secret Vault), " +
+                    "or set \"constant\": true to take the value as a literal.",
+                    nonRetryable: true);
+        }
+    }
+
+    /// <summary>
+    /// Fetches a tenant-scoped secret. Failures (missing key, vault errors) resolve to an
+    /// empty string and are caught by the mandatory check upstream — they intentionally do
+    /// NOT throw, because an empty optional secret is a normal outcome for many runs.
+    /// </summary>
+    private static async Task<(string Value, EnvSource Source, string Detail)> ResolveSecretAsync(
+        string secretKey, string envName, ILogger logger)
+    {
+        try
+        {
+            var vault = XiansContext.CurrentAgent.Secrets.TenantScope();
+            var fetched = await vault.FetchByKeyAsync(secretKey);
+            if (fetched is null || string.IsNullOrEmpty(fetched.Value))
+            {
+                logger.LogWarning(
+                    "Secret '{SecretKey}' not found in tenant Secret Vault " +
                     "(with-envs entry '{EnvName}').",
                     secretKey, envName);
                 return (string.Empty, EnvSource.Secret, Detail: secretKey);
             }
+            return (fetched.Value, EnvSource.Secret, Detail: secretKey);
         }
-
-        var varName = value.StartsWith("env.", StringComparison.Ordinal) ? value[4..] : value;
-        return (EnvConfig.Get(varName), EnvSource.HostEnv, Detail: varName);
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "Failed to fetch secret '{SecretKey}' from tenant Secret Vault " +
+                "(with-envs entry '{EnvName}').",
+                secretKey, envName);
+            return (string.Empty, EnvSource.Secret, Detail: secretKey);
+        }
     }
 
     /// <summary>

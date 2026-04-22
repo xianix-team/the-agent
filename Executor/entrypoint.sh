@@ -19,9 +19,13 @@ log "Execution ID:        ${EXECUTION_ID}"
 log "Claude Code Plugins: ${CLAUDE_CODE_PLUGINS}"
 
 # ── Extract dynamic inputs ──────────────────────────────────────────────────
+# `repository-url`, `platform`, and `git-ref` are framework-managed structural fields
+# auto-injected by the agent from the execution-level `platform` / `repository` block
+# in rules.json. They are not authored under `use-inputs` — the agent serialises them
+# under these canonical kebab-case keys for this script and for plugin prompts.
 REPOSITORY_URL=$(echo "${XIANIX_INPUTS}" | jq -r '."repository-url" // empty')
 PLATFORM=$(echo "${XIANIX_INPUTS}"       | jq -r '.platform // empty')
-GIT_REF=$(echo "${XIANIX_INPUTS}"        | jq -r '."pr-head-branch" // empty')
+GIT_REF=$(echo "${XIANIX_INPUTS}"        | jq -r '."git-ref" // empty')
 
 if [ -n "${REPOSITORY_URL}" ] && [ -z "${PLATFORM}" ]; then
     PLATFORM="github"
