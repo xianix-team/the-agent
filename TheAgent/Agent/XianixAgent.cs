@@ -1,3 +1,4 @@
+using System.Reflection.Metadata;
 using Microsoft.Extensions.Logging;
 using TheAgent;
 using Xianix.Activities;
@@ -81,15 +82,19 @@ public class XianixAgent(
     private static void ConfigureCustomWorkflows(XiansAgent xiansAgent)
     {
         xiansAgent.Workflows
-            .DefineCustom<ProcessingWorkflow>(new WorkflowOptions { Activable = false })
+            .DefineCustom<ProcessingWorkflow>(
+                new WorkflowOptions { Activable = false },
+                typeName: EnvConfig.AgentName + ":Processing Workflow")
             .AddActivity<ContainerActivities>();
 
         xiansAgent.Workflows
-            .DefineCustom<ClaudeCodeChatWorkflow>(new WorkflowOptions { Activable = false })
+            .DefineCustom<ClaudeCodeChatWorkflow>(new WorkflowOptions { Activable = false },
+            typeName: EnvConfig.AgentName + ":ClaudeCodeChat Workflow")
             .AddActivity<ContainerActivities>();
 
         xiansAgent.Workflows
-            .DefineCustom<OnboardRepositoryWorkflow>(new WorkflowOptions { Activable = false })
+            .DefineCustom<OnboardRepositoryWorkflow>(new WorkflowOptions { Activable = false },
+            typeName: EnvConfig.AgentName + ":OnboardRepository Workflow")
             .AddActivity<ContainerActivities>();
     }
 

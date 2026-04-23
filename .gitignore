@@ -9,6 +9,7 @@
 
 # Environment secrets — never commit .env
 .env
+.local/
 
 # Build results
 [Dd]ebug/

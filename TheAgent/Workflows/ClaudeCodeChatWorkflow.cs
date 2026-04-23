@@ -19,7 +19,8 @@ namespace Xianix.Workflows;
 /// <c>SubWorkflowService.StartAsync</c> (fire-and-forget — the chat tool returns
 /// immediately, this workflow becomes the source of truth for user-facing output).
 /// </summary>
-[Workflow(Constants.AgentName + ":Claude Code Chat Workflow")]
+//[Workflow(Constants.AgentName + ":Claude Code Chat Workflow")]
+[Workflow]
 public class ClaudeCodeChatWorkflow
 {
     [WorkflowRun]

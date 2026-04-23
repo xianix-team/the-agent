@@ -20,7 +20,8 @@ namespace Xianix.Workflows;
 /// Mirrors <see cref="ClaudeCodeChatWorkflow"/> closely on purpose so the chat user sees
 /// the same kind of progress + completion stream regardless of which tool they triggered.
 /// </summary>
-[Workflow(Constants.AgentName + ":Onboard Repository Workflow")]
+//[Workflow(Constants.AgentName + ":Onboard Repository Workflow")]
+[Workflow]
 public class OnboardRepositoryWorkflow
 {
     [WorkflowRun]

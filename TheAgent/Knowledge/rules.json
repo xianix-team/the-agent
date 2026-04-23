@@ -42,7 +42,7 @@
                         "mandatory": true
                     }
                 ],
-                "execute-prompt": "You are reviewing pull request {{pr-link}}. Run /code-review to perform the automated review."
+                "execute-prompt": "You are reviewing pull request {{pr-link}}. Run /pr-review to perform the automated review."
             },
             {
                 "name": "azuredevops-pull-request-review",
@@ -84,7 +84,7 @@
                         "mandatory": true
                     }
                 ],
-                "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}} (branch: {{git-ref}}).\n\nRun /code-review to perform the automated review. The `az` CLI is authenticated and available if you need it directly."
+                "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}} (branch: {{git-ref}}).\n\nRun /pr-review to perform the automated review. "
             },
             {
                 "name": "github-issue-requirement-analysis",
