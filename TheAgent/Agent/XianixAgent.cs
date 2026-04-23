@@ -89,11 +89,9 @@ public class XianixAgent(
             .DefineCustom<ClaudeCodeChatWorkflow>(new WorkflowOptions { Activable = false })
             .AddActivity<ContainerActivities>();
 
-        xiansAgent.Workflows
-            .DefineCustom<CognitiveDispatcher>(new WorkflowOptions { Activable = true });
+        xiansAgent.Workflows.DefineCustom<CognitiveDispatcher>(new WorkflowOptions { Activable = true });
 
-        xiansAgent.Workflows
-            .DefineCustom<JobDispatcherWorkflow>(new WorkflowOptions { Activable = false });
+        xiansAgent.Workflows.DefineCustom<JobDispatcherWorkflow>(new WorkflowOptions { Activable = false });
     }
 
     private void ConfigureWebhookWorkflow(XiansAgent xiansAgent, CancellationToken cancellationToken)

@@ -20,7 +20,8 @@ public class JobDispatcherWorkflow
             OrchestrationResult orchestrationResult = OrchestrationResult.Matched(
                 scheduleEntry.ScheduleName,
                 tenantId,
-                scheduleEntry.Inputs
+                scheduleEntry.Inputs,
+                execution: new ExecutionSpec(scheduleEntry.Plugins, scheduleEntry.Prompt)
             );
             await XiansContext.Workflows.StartAsync<ProcessingWorkflow>(new object[] { orchestrationResult }, Guid.NewGuid().ToString());
         }

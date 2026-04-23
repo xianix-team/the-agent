@@ -1,57 +1,28 @@
 [
     {
         "schedule": "github-pull-request-review-schedule",
-        "cron": "*/10 * * * *",
-        "executions": [
+        "cron": "*/2 * * * *",
+        "use-inputs": {
+            "pr-number": "193",
+            "repository-url": "https://github.com/99x-Projects/qib.git",
+            "repository-name": "99x-Projects/qib",
+            "pr-title": "Test",
+            "pr-head-branch": "3799e5e715d1b1eea645295ed4a238e7bae51314",
+            "platform": "github"
+        },
+        "use-plugins": [
             {
-                "name": "github-pull-request-review-schedule",
-                "use-inputs": [
+                "plugin-name": "pr-reviewer@xianix-plugins-official",
+                "marketplace": "xianix-team/plugins-official",
+                "envs": [
                     {
-                        "name": "pr-number",
-                        "value": "193",
-                        "constant": true
-                    },
-                    {
-                        "name": "repository-url",
-                        "value": "https://github.com/99x-Projects/qib.git",
-                        "constant": true
-                    },
-                    {
-                        "name": "repository-name",
-                        "value": "99x-Projects/qib",
-                        "constant": true
-                    },
-                    {
-                        "name": "pr-title",
-                        "value": "Test",
-                        "constant": true
-                    },
-                    {
-                        "name": "pr-head-branch",
-                        "value": "3799e5e715d1b1eea645295ed4a238e7bae51314",
-                        "constant": true
-                    },
-                    {
-                        "name": "platform",
-                        "value": "github",
-                        "constant": true
+                        "name": "GITHUB-TOKEN",
+                        "value": "env.GITHUB-TOKEN",
+                        "mandatory": true
                     }
-                ],
-                "use-plugins": [
-                    {
-                        "plugin-name": "pr-reviewer@xianix-plugins-official",
-                        "marketplace": "xianix-team/plugins-official",
-                        "envs": [
-                            {
-                                "name": "GITHUB-TOKEN",
-                                "value": "env.GITHUB-TOKEN",
-                                "mandatory": true
-                            }
-                        ]
-                    }
-                ],
-                "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."
+                ]
             }
-        ]
+        ],
+        "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."
     }
 ]

@@ -9,31 +9,30 @@ namespace Xianix.Dispatcher;
 [Workflow(Constants.AgentName + ":Cognitive Dispatcher Workflow")]
 public sealed class CognitiveDispatcher
 {
-    private readonly IScheduleEvaluator _scheduleEvaluator;
+    private readonly ScheduleEvaluator _scheduleEvaluator;
     public CognitiveDispatcher()
     {
         _scheduleEvaluator = new ScheduleEvaluator();
     }
     [WorkflowRun]
-    public async Task Orchestrate(string tenantId, CancellationToken cancellationToken = default)
+    public async Task Orchestrate()
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
-        Workflow.Logger.LogDebug("Cognitive Dispatcher started for tenant '{TenantId}'.", tenantId);
+        Workflow.Logger.LogDebug("Cognitive Dispatcher started for tenant '{TenantId}'.", XiansContext.TenantId);
 
         try
         {
-            foreach (ScheduleEntry schedule in await _scheduleEvaluator.Evaluate() ?? [])
+            foreach (ScheduleEntry schedule in await _scheduleEvaluator.Evaluate())
             {
                 await XiansContext.CurrentAgent.Schedules
                 .Create<JobDispatcherWorkflow>(schedule.ScheduleName)
                 .WithCronSchedule(schedule.cronExpression, timezone: schedule.timezone)
-                .WithInput(tenantId, schedule)
-                .CreateAsync();
+                .WithInput(XiansContext.TenantId, schedule)
+                .CreateIfNotExistsAsync();
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Workflow.Logger.LogError(ex, "Tenant {TenantId}: rules evaluation threw an exception.", tenantId);
+            Workflow.Logger.LogError(ex, "Tenant {TenantId}: rules evaluation threw an exception.", XiansContext.TenantId);
         }
     }
 }
