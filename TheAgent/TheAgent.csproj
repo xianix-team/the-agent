@@ -16,7 +16,7 @@
     <PackageReference Include="Microsoft.Agents.AI.Anthropic" Version="1.0.0-rc5" />
     <PackageReference Include="Microsoft.Agents.AI.Foundry" Version="1.1.0" />
     <PackageReference Include="Microsoft.Agents.AI.OpenAI" Version="1.0.0-rc5" />
-    <PackageReference Include="Xians.Lib" Version="3.23.0" />
+    <PackageReference Include="Xians.Lib" Version="3.24.3" />
 
   </ItemGroup>
 
@@ -28,6 +28,10 @@
   <ItemGroup>
     <EmbeddedResource Include="**\*.json" />
     <EmbeddedResource Include="**\*.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="TheAgent.Tests" />
   </ItemGroup>
 
 </Project>

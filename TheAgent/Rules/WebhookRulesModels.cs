@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Xianix.Rules;
@@ -17,6 +18,33 @@ public sealed class WebhookExecution
     [JsonPropertyName("name")]
     public string Name { get; init; } = "";
 
+    /// <summary>
+    /// Hosting service the execution operates against (e.g. <c>github</c>, <c>azuredevops</c>).
+    /// Structural execution context — describes <em>where</em> the run happens, independent of
+    /// which plugin runs. Auto-injected into <c>XIANIX_INPUTS</c> as <c>"platform"</c> so plugin
+    /// prompt templates can still reference <c>{{platform}}</c> and the executor's credential
+    /// helper can pick the right <c>git</c> setup. Empty string means "let the executor infer
+    /// from the repository URL (defaults to github)".
+    /// </summary>
+    [JsonPropertyName("platform")]
+    public string Platform { get; init; } = "";
+
+    /// <summary>
+    /// Structural binding for the repository this execution operates on. When present, every
+    /// declared sub-field (<see cref="RepositoryBindingTemplate.Url"/>,
+    /// <see cref="RepositoryBindingTemplate.Ref"/>) is treated as mandatory — if any
+    /// declared JSON path doesn't resolve, the execution block is skipped before any
+    /// container starts. Resolved values are auto-injected into <c>XIANIX_INPUTS</c> as
+    /// <c>repository-url</c> / <c>git-ref</c> so plugin prompt templates and the executor
+    /// entrypoint can read them off the same canonical kebab-case keys. The short
+    /// <c>repository-name</c> identifier is derived from <c>repository.url</c> via
+    /// <see cref="RepositoryNaming.DeriveName"/> and injected alongside them — it is not
+    /// authored in <c>rules.json</c>. Omit the whole block for executions that don't
+    /// operate on a specific repo (e.g. Azure DevOps work-item analysis).
+    /// </summary>
+    [JsonPropertyName("repository")]
+    public RepositoryBindingTemplate? Repository { get; init; }
+
     [JsonPropertyName("match-any")]
     public List<MatchEntry> Match { get; init; } = [];
 
@@ -25,6 +53,22 @@ public sealed class WebhookExecution
 
     [JsonPropertyName("use-plugins")]
     public List<PluginEntry> Plugins { get; init; } = [];
+
+    /// <summary>
+    /// Environment variables injected into the executor container before the prompt runs.
+    /// Applies to the whole execution (not a single plugin) — declared at the execution
+    /// level so a value like <c>secrets.GITHUB-TOKEN</c> only has to be written once even
+    /// when several plugins consume it. Each entry's <c>value</c> must use one of three
+    /// explicit forms — bare names are rejected so the source of every credential is
+    /// unambiguous on the rule:
+    /// <list type="bullet">
+    ///   <item><description>a literal string with <c>"constant": true</c>;</description></item>
+    ///   <item><description><c>host.VAR_NAME</c> — read from the agent host process environment;</description></item>
+    ///   <item><description><c>secrets.SECRET-KEY</c> — fetched from the tenant Xians Secret Vault.</description></item>
+    /// </list>
+    /// </summary>
+    [JsonPropertyName("with-envs")]
+    public List<EnvEntry> WithEnvs { get; init; } = [];
 
     /// <summary>
     /// Prompt template to execute after all plugins are installed.
@@ -63,20 +107,15 @@ public sealed class PluginEntry
     /// </summary>
     [JsonPropertyName("marketplace")]
     public string Marketplace { get; init; } = "";
-
-    /// <summary>
-    /// Optional environment variables to inject into the executor container before running the plugin.
-    /// Each entry's <c>value</c> may be a static string or an <c>env.VAR_NAME</c> reference that
-    /// is resolved from the host process environment at container-start time.
-    /// </summary>
-    [JsonPropertyName("envs")]
-    public List<EnvEntry> Envs { get; init; } = [];
 }
 
 /// <summary>
-/// A named environment variable to inject into the executor container.
-/// By default <c>value</c> is an <c>env.VAR_NAME</c> reference resolved from the host process environment.
-/// Set <c>"constant": true</c> to use <c>value</c> as a static literal string instead.
+/// A named environment variable to inject into the executor container. <c>value</c> must
+/// always carry an explicit source prefix — bare names are rejected at container-start
+/// time so the origin of every credential is unambiguous on the rule. Use
+/// <c>host.VAR_NAME</c> for the agent host process environment, <c>secrets.SECRET-KEY</c>
+/// for the tenant-scoped Xians Secret Vault, or set <c>"constant": true</c> to take
+/// <c>value</c> as a literal string.
 /// </summary>
 public sealed class EnvEntry
 {
@@ -84,7 +123,14 @@ public sealed class EnvEntry
     public string Name { get; init; } = "";
 
     /// <summary>
-    /// <c>env.VAR_NAME</c> to read from the host environment, or a literal string when <see cref="Constant"/> is true.
+    /// One of:
+    /// <list type="bullet">
+    ///   <item><description><c>host.VAR_NAME</c> — read from the agent host process environment.</description></item>
+    ///   <item><description><c>secrets.SECRET-KEY</c> — fetched from the tenant Secret Vault at container-start time.</description></item>
+    ///   <item><description>A literal string when <see cref="Constant"/> is <c>true</c>.</description></item>
+    /// </list>
+    /// Any other shape (bare names, unknown prefixes) fails the activation with a
+    /// non-retryable error — see <c>ContainerActivities.ResolveEnvValueAsync</c>.
     /// </summary>
     [JsonPropertyName("value")]
     public string Value { get; init; } = "";
@@ -104,6 +150,150 @@ public sealed class MatchEntry
 {
     public string Name { get; init; } = "";
     public string Rule { get; init; } = "";
+}
+
+/// <summary>
+/// Structural <c>repository</c> binding declared on a <see cref="WebhookExecution"/>. Each
+/// sub-field is a <see cref="RepoFieldBinding"/> that may either resolve a JSON path against
+/// the webhook payload (the common case for webhook-driven runs) or carry a hard-coded
+/// literal (for runs whose repository is fixed regardless of the payload — cron pings,
+/// single-tenant agents pinned to one repo, manual triggers). Resolved strings flow on
+/// <see cref="EvaluationResult.RepositoryUrl"/> and <see cref="EvaluationResult.GitRef"/>.
+/// The short <c>repository-name</c> identifier is derived from the resolved URL via
+/// <see cref="RepositoryNaming.DeriveName"/> — it is not authored here.
+/// </summary>
+public sealed class RepositoryBindingTemplate
+{
+    /// <summary>
+    /// Repository clone URL. By default a JSON path into the webhook payload (e.g.
+    /// <c>"repository.clone_url"</c>); set the object form
+    /// <c>{ "value": "https://github.com/foo/bar.git", "constant": true }</c> to hard-code a
+    /// fixed repository regardless of the payload.
+    /// </summary>
+    [JsonPropertyName("url")]
+    public RepoFieldBinding? Url { get; init; }
+
+    /// <summary>
+    /// Git ref (branch, commit SHA, or tag) the executor should check out into the per-run
+    /// worktree. Treated as <em>mandatory when declared</em> — if a declared JSON path
+    /// doesn't resolve, the execution block is skipped (same semantics as <see cref="Url"/>).
+    /// Set the object form <c>{ "value": "main", "constant": true }</c> to pin to a fixed
+    /// branch/tag. Omit the field entirely to run against the bare-clone HEAD.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public RepoFieldBinding? Ref { get; init; }
+}
+
+/// <summary>
+/// Polymorphic value binding for the structural <c>repository</c> sub-fields. Accepts
+/// either a bare string (treated as a JSON path into the webhook payload — the original
+/// shape) or an object <c>{ "value": "...", "constant": &lt;bool&gt; }</c> mirroring the
+/// envelope already used by <see cref="InputRuleEntry"/>. The string shorthand is
+/// equivalent to <c>{ "value": "...", "constant": false }</c>.
+/// </summary>
+[JsonConverter(typeof(RepoFieldBindingJsonConverter))]
+public sealed class RepoFieldBinding
+{
+    /// <summary>Either the JSON path expression or, when <see cref="Constant"/> is true, the literal value.</summary>
+    public string Value { get; init; } = "";
+
+    /// <summary>When true, <see cref="Value"/> is used verbatim and not resolved against the payload.</summary>
+    public bool Constant { get; init; }
+
+    /// <summary>True when the binding carries no usable value (covers the omitted / null / empty-string cases).</summary>
+    public bool IsEmpty => string.IsNullOrWhiteSpace(Value);
+
+    /// <summary>Convenience factory matching the bare-string shorthand (JSON-path binding).</summary>
+    public static RepoFieldBinding Path(string path) => new() { Value = path, Constant = false };
+
+    /// <summary>Convenience factory for the literal-value form.</summary>
+    public static RepoFieldBinding Literal(string value) => new() { Value = value, Constant = true };
+}
+
+/// <summary>
+/// Custom converter so the <c>repository.url</c> / <c>repository.ref</c> fields accept
+/// either a bare string ("treat as JSON path") or an object ("respect explicit
+/// <c>constant</c> flag") — the same envelope already used by <see cref="InputRuleEntry"/>.
+/// Property name matching is case-insensitive to stay consistent with
+/// <see cref="WebhookRulesEvaluator"/>'s default reader options.
+/// </summary>
+internal sealed class RepoFieldBindingJsonConverter : JsonConverter<RepoFieldBinding>
+{
+    public override RepoFieldBinding? Read(
+        ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        switch (reader.TokenType)
+        {
+            case JsonTokenType.Null:
+                return null;
+
+            case JsonTokenType.String:
+                // Bare-string shorthand — preserves the original schema where every
+                // repository sub-field was a JSON path expression.
+                var path = reader.GetString() ?? "";
+                return new RepoFieldBinding { Value = path, Constant = false };
+
+            case JsonTokenType.StartObject:
+                string? value = null;
+                bool? constant = null;
+                while (reader.Read())
+                {
+                    if (reader.TokenType == JsonTokenType.EndObject)
+                        return new RepoFieldBinding
+                        {
+                            Value    = value ?? "",
+                            Constant = constant ?? false,
+                        };
+
+                    if (reader.TokenType != JsonTokenType.PropertyName)
+                        throw new JsonException(
+                            $"Unexpected token '{reader.TokenType}' inside repository field binding.");
+
+                    var prop = reader.GetString() ?? "";
+                    reader.Read();
+
+                    if (string.Equals(prop, "value", StringComparison.OrdinalIgnoreCase))
+                    {
+                        value = reader.TokenType == JsonTokenType.Null ? "" : reader.GetString();
+                    }
+                    else if (string.Equals(prop, "constant", StringComparison.OrdinalIgnoreCase))
+                    {
+                        constant = reader.TokenType switch
+                        {
+                            JsonTokenType.True  => true,
+                            JsonTokenType.False => false,
+                            _ => throw new JsonException(
+                                $"Repository field binding 'constant' must be boolean, got '{reader.TokenType}'."),
+                        };
+                    }
+                    else
+                    {
+                        // Forward-compat: ignore unknown sibling fields rather than failing —
+                        // keeps additive schema changes backwards-compatible. Skip the value
+                        // (whatever its shape) so the reader stays aligned with the cursor.
+                        reader.Skip();
+                    }
+                }
+
+                throw new JsonException("Unexpected end of JSON inside repository field binding.");
+
+            default:
+                throw new JsonException(
+                    $"Repository field binding must be a string (JSON path) or object " +
+                    $"with 'value'/'constant' — got '{reader.TokenType}'.");
+        }
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer, RepoFieldBinding value, JsonSerializerOptions options)
+    {
+        // Round-trip the rich form so a re-serialised rule keeps the constant flag visible
+        // (callers reading the dump should see exactly which fields were hard-coded).
+        writer.WriteStartObject();
+        writer.WriteString("value", value.Value);
+        writer.WriteBoolean("constant", value.Constant);
+        writer.WriteEndObject();
+    }
 }
 
 public sealed class InputRuleEntry

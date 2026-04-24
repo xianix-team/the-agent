@@ -1,3 +1,4 @@
+using System.Reflection.Metadata;
 using Microsoft.Extensions.Logging;
 using TheAgent;
 using Xianix.Activities;
@@ -82,11 +83,19 @@ public class XianixAgent(
     private static void ConfigureCustomWorkflows(XiansAgent xiansAgent)
     {
         xiansAgent.Workflows
-            .DefineCustom<ProcessingWorkflow>(new WorkflowOptions { Activable = false })
+            .DefineCustom<ProcessingWorkflow>(
+                new WorkflowOptions { Activable = false },
+                typeName: EnvConfig.AgentName + ":Processing Workflow")
             .AddActivity<ContainerActivities>();
 
         xiansAgent.Workflows
-            .DefineCustom<ClaudeCodeChatWorkflow>(new WorkflowOptions { Activable = false })
+            .DefineCustom<ClaudeCodeChatWorkflow>(new WorkflowOptions { Activable = false },
+            typeName: EnvConfig.AgentName + ":ClaudeCodeChat Workflow")
+            .AddActivity<ContainerActivities>();
+
+        xiansAgent.Workflows
+            .DefineCustom<OnboardRepositoryWorkflow>(new WorkflowOptions { Activable = false },
+            typeName: EnvConfig.AgentName + ":OnboardRepository Workflow")
             .AddActivity<ContainerActivities>();
 
         xiansAgent.Workflows.DefineCustom<CognitiveDispatcher>(new WorkflowOptions { Activable = true });
@@ -164,7 +173,7 @@ public class XianixAgent(
 
         var xiansAgent = xiansPlatform.Agents.Register(new()
         {
-            Name = Constants.AgentName,
+            Name = EnvConfig.AgentName,
             Description = "A versatile automation agent that listens for incoming webhooks from your tools and services, then triggers intelligent AI-powered workflows using Claude Code plugins — helping your team automate code reviews, respond to events, and streamline everyday development tasks without lifting a finger.",
             Summary = "AI automation agent that turns webhook events into smart, plugin-driven actions.",
             IsTemplate = true

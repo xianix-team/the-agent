@@ -98,13 +98,68 @@ public sealed record OrchestrateWebhookResult
 public sealed class ExecutionSpec
 {
     public List<PluginEntry> Plugins { get; init; } = [];
+
+    /// <summary>
+    /// Execution-level <c>with-envs</c> from rules.json — env vars to inject into the
+    /// executor container before the prompt runs. Resolved by the agent at container-start
+    /// time. Every entry must use an explicit source prefix (<c>host.VAR</c>,
+    /// <c>secrets.KEY</c>) or set <c>"constant": true</c>; bare names are rejected.
+    /// </summary>
+    public List<EnvEntry> WithEnvs { get; init; } = [];
+
+    /// <summary>
+    /// Resolved structural hosting service for the run (e.g. <c>"github"</c>,
+    /// <c>"azuredevops"</c>). Empty when the rule didn't declare one. Independent of which
+    /// plugin runs — used by the framework (credentials, logging) and also auto-injected into
+    /// <c>InputsJson</c> as <c>"platform"</c> for back-compat with plugin prompts and the
+    /// executor entrypoint.
+    /// </summary>
+    public string Platform { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Resolved repository clone URL — the framework's <c>git clone</c> target. Empty when
+    /// the rule didn't declare a <c>repository.url</c> (e.g. work-item-only flows). Also
+    /// auto-injected into <c>InputsJson</c> as <c>"repository-url"</c>.
+    /// </summary>
+    public string RepositoryUrl { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Short repository identifier (e.g. <c>owner/repo</c>) for logs, chat messages, and
+    /// prompt interpolation. Always derived from <see cref="RepositoryUrl"/> via
+    /// <see cref="RepositoryNaming.DeriveName"/>; empty when no URL is set. Also
+    /// auto-injected into <c>InputsJson</c> as <c>"repository-name"</c>. Not authored in
+    /// <c>rules.json</c> — clone URL and display name are kept consistent by always deriving.
+    /// </summary>
+    public string RepositoryName { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Resolved git ref (branch, commit SHA, or tag) the executor should check out into the
+    /// per-run worktree. Empty when the rule didn't declare a <c>repository.ref</c> — the
+    /// executor falls back to the bare-clone HEAD in that case. Also auto-injected into
+    /// <c>InputsJson</c> as <c>"git-ref"</c> so plugin prompts and the executor entrypoint
+    /// can read it from the same canonical kebab-case key.
+    /// </summary>
+    public string GitRef { get; init; } = string.Empty;
+
     public string Prompt { get; init; } = string.Empty;
 
     public ExecutionSpec() { }
 
-    public ExecutionSpec(IReadOnlyList<PluginEntry> plugins, string prompt)
+    public ExecutionSpec(
+        IReadOnlyList<PluginEntry> plugins,
+        string prompt,
+        IReadOnlyList<EnvEntry>? withEnvs = null,
+        string platform = "",
+        string repositoryUrl = "",
+        string repositoryName = "",
+        string gitRef = "")
     {
-        Plugins = [.. plugins];
-        Prompt  = prompt;
+        Plugins        = [.. plugins];
+        WithEnvs       = withEnvs is null ? [] : [.. withEnvs];
+        Prompt         = prompt;
+        Platform       = platform ?? "";
+        RepositoryUrl  = repositoryUrl ?? "";
+        RepositoryName = repositoryName ?? "";
+        GitRef         = gitRef ?? "";
     }
 }

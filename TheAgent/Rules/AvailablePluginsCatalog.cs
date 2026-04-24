@@ -10,18 +10,40 @@ namespace Xianix.Rules;
 /// Used by the SupervisorSubagent's <c>ListAvailablePlugins</c> tool so the chat model can
 /// discover which plugins exist, which usage examples they expose, and what inputs each
 /// example needs from the caller; and by <c>RunClaudeCodeOnRepository</c> to resolve a
-/// plugin name back to its full <see cref="PluginEntry"/> (with envs) and validate that all
-/// mandatory inputs have been supplied — this is the chat-side equivalent of the input
-/// validation <see cref="WebhookRulesEvaluator"/> performs for the webhook path.
+/// plugin name back to its full <see cref="PluginEntry"/> (and the <c>with-envs</c> declared
+/// alongside it on each containing execution) and validate that all mandatory inputs have
+/// been supplied — this is the chat-side equivalent of the input validation
+/// <see cref="WebhookRulesEvaluator"/> performs for the webhook path.
 /// </summary>
 internal static class AvailablePluginsCatalog
 {
     /// <summary>
     /// Input names whose values the chat tool resolves automatically from the chosen
-    /// repository — the model never needs to (and must not) supply them.
+    /// repository — the model never needs to (and must not) supply them. The
+    /// <c>repository-name</c> entry is the short identifier (e.g. <c>owner/repo</c>) that
+    /// the chat tool derives from the repo's clone URL via
+    /// <see cref="RepositoryNaming.DeriveName"/> — it is never authored in <c>rules.json</c>.
     /// </summary>
     public const string RepositoryUrlInput  = "repository-url";
     public const string RepositoryNameInput = "repository-name";
+
+    /// <summary>
+    /// Input name the catalog synthesises from <see cref="WebhookExecution.Platform"/>.
+    /// Surfaced to the chat tool as a Constant input so PluginInputResolver auto-injects it
+    /// into <c>XIANIX_INPUTS</c> — keeps the wire-format contract for plugin prompts and the
+    /// executor entrypoint stable even though <c>platform</c> is no longer a <c>use-inputs</c>
+    /// entry in <c>rules.json</c>.
+    /// </summary>
+    public const string PlatformInput = "platform";
+
+    /// <summary>
+    /// Input name the catalog synthesises from <see cref="RepositoryBindingTemplate.Ref"/>.
+    /// Surfaced to the chat tool as a Caller input — when a webhook rule declares which ref
+    /// to check out, the chat-driven equivalent must supply it too. This keeps the chat path
+    /// symmetric with the webhook path and ensures the executor entrypoint always finds
+    /// <c>git-ref</c> in <c>XIANIX_INPUTS</c> when the rule expects a specific worktree state.
+    /// </summary>
+    public const string GitRefInput = "git-ref";
 
     private static readonly JsonSerializerOptions RulesJsonOptions = new()
     {
@@ -56,6 +78,18 @@ internal static class AvailablePluginsCatalog
         {
             return [];
         }
+
+        return BuildCatalog(ruleSets);
+    }
+
+    /// <summary>
+    /// Pure builder over already-deserialised rule sets, exposed for unit tests so the
+    /// per-plugin / per-platform aggregation can be exercised without a Xians Knowledge
+    /// fixture. <see cref="LoadAsync"/> calls this after pulling and parsing the document.
+    /// </summary>
+    internal static IReadOnlyList<CatalogPlugin> BuildCatalog(IEnumerable<WebhookRuleSet> ruleSets)
+    {
+        ArgumentNullException.ThrowIfNull(ruleSets);
 
         var byKey = new Dictionary<string, CatalogPluginBuilder>(StringComparer.Ordinal);
 
@@ -143,6 +177,20 @@ internal static class AvailablePluginsCatalog
         private readonly PluginEntry _source;
         private readonly List<CatalogUsageExample> _usages = [];
 
+        // Aggregated across every execution that references this plugin, kept for the
+        // model-facing `RequiredEnvs` (which lists every env the plugin could ever ask for).
+        // Dedup is by env name (first-wins); two executions that both declare GITHUB-TOKEN
+        // keep one entry.
+        private readonly Dictionary<string, EnvEntry> _envs = new(StringComparer.Ordinal);
+
+        // Per-platform breakdown of with-envs, so the chat tool can ship only the credentials
+        // a given dispatch actually needs (rather than the union of every platform the plugin
+        // happens to support). Keys are normalised to lowercase platform identifiers from
+        // <c>WebhookExecution.Platform</c> ("github", "azuredevops", or "" for executions
+        // without a platform binding). Within a key, dedup is by env name (first-wins).
+        private readonly Dictionary<string, Dictionary<string, EnvEntry>> _envsByPlatform =
+            new(StringComparer.Ordinal);
+
         public CatalogPluginBuilder(PluginEntry source)
         {
             _source = source;
@@ -150,16 +198,84 @@ internal static class AvailablePluginsCatalog
 
         public void AddUsage(WebhookExecution execution)
         {
-            var inputs = execution.InputRules
-                .Where(i => !string.IsNullOrWhiteSpace(i.Name))
-                .Select(BuildInputRequirement)
-                .ToList();
+            var inputs = new List<CatalogInputRequirement>();
+
+            // Synthesise structural execution context as catalog inputs so the chat-side
+            // resolution flow (PluginInputResolver) can validate and inject them the same
+            // way as the webhook path treats them:
+            //   • repository-url   → AutoFromRepository (from chosen repo)
+            //   • repository-name  → AutoFromRepository (derived from the repo's clone URL
+            //                        by RepositoryNaming.DeriveName — paired 1:1 with -url
+            //                        so plugins always see both keys together)
+            //   • platform         → Constant (from rules.json)
+            //   • git-ref          → Caller (model must supply — symmetric with the webhook
+            //                        payload supplying it)
+            if (execution.Repository is { } repo)
+            {
+                if (repo.Url is { IsEmpty: false } urlBinding)
+                {
+                    inputs.Add(new CatalogInputRequirement(
+                        Name:          RepositoryUrlInput,
+                        Mandatory:     true,
+                        Source:        InputSourceKind.AutoFromRepository,
+                        ConstantValue: urlBinding.Constant ? urlBinding.Value : null,
+                        PathHint:      DescribeRepoBinding(urlBinding)));
+                    inputs.Add(new CatalogInputRequirement(
+                        Name:          RepositoryNameInput,
+                        Mandatory:     true,
+                        Source:        InputSourceKind.AutoFromRepository,
+                        ConstantValue: null,
+                        PathHint:      "derived from repository.url"));
+                }
+                if (repo.Ref is { IsEmpty: false } refBinding)
+                    inputs.Add(new CatalogInputRequirement(
+                        Name:          GitRefInput,
+                        Mandatory:     true,
+                        Source:        refBinding.Constant ? InputSourceKind.AutoFromRepository : InputSourceKind.Caller,
+                        ConstantValue: refBinding.Constant ? refBinding.Value : null,
+                        PathHint:      DescribeRepoBinding(refBinding)));
+            }
+
+            if (!string.IsNullOrWhiteSpace(execution.Platform))
+                inputs.Add(new CatalogInputRequirement(
+                    Name:          PlatformInput,
+                    Mandatory:     true,
+                    Source:        InputSourceKind.Constant,
+                    ConstantValue: execution.Platform.Trim(),
+                    PathHint:      null));
+
+            foreach (var input in execution.InputRules)
+            {
+                if (string.IsNullOrWhiteSpace(input.Name))
+                    continue;
+                inputs.Add(BuildInputRequirement(input));
+            }
 
             _usages.Add(new CatalogUsageExample(
                 ExecutionName: execution.Name?.Trim() ?? "",
                 ExecutePrompt: execution.Prompt?.Trim() ?? "",
                 Inputs:        inputs));
+
+            var platformKey = (execution.Platform ?? string.Empty).Trim().ToLowerInvariant();
+            if (!_envsByPlatform.TryGetValue(platformKey, out var platformEnvs))
+            {
+                platformEnvs = new Dictionary<string, EnvEntry>(StringComparer.Ordinal);
+                _envsByPlatform[platformKey] = platformEnvs;
+            }
+
+            foreach (var env in execution.WithEnvs)
+            {
+                if (string.IsNullOrWhiteSpace(env.Name)) continue;
+                _envs.TryAdd(env.Name, env);
+                platformEnvs.TryAdd(env.Name, env);
+            }
         }
+
+        // Hint string for the catalog UI: makes the constant-vs-path distinction visible
+        // so an operator browsing the catalog can tell at a glance which structural fields
+        // are pinned and which depend on the webhook payload.
+        private static string DescribeRepoBinding(RepoFieldBinding binding) =>
+            binding.Constant ? $"constant: {binding.Value}" : binding.Value;
 
         private static CatalogInputRequirement BuildInputRequirement(InputRuleEntry input)
         {
@@ -188,14 +304,17 @@ internal static class AvailablePluginsCatalog
         }
 
         public CatalogPlugin Build() => new(
-            PluginName:    _source.PluginName,
-            Marketplace:   _source.Marketplace,
-            RequiredEnvs:  _source.Envs
-                .Where(e => !string.IsNullOrWhiteSpace(e.Name))
+            PluginName:      _source.PluginName,
+            Marketplace:     _source.Marketplace,
+            RequiredEnvs:    _envs.Values
                 .Select(e => new CatalogEnvRequirement(e.Name, e.Mandatory))
                 .ToList(),
-            UsageExamples: _usages,
-            Source:        _source);
+            EnvsByPlatform:  _envsByPlatform.ToDictionary(
+                kv => kv.Key,
+                kv => (IReadOnlyList<EnvEntry>)kv.Value.Values.ToList(),
+                StringComparer.Ordinal),
+            UsageExamples:   _usages,
+            Source:          _source);
     }
 }
 
@@ -203,13 +322,25 @@ internal static class AvailablePluginsCatalog
 /// Public, model-facing description of a plugin available to the tenant. Field names are
 /// camelCase-friendly so the JSON the chat tool emits is easy for the LLM to read.
 /// </summary>
+/// <param name="RequiredEnvs">Names + mandatory flags of every env declared on at least one
+/// execution that uses this plugin. Surfaced to the model so it knows which envs the tenant
+/// must have configured (typically via <c>secrets.*</c>).</param>
+/// <param name="EnvsByPlatform">The full <see cref="EnvEntry"/> records (with values like
+/// <c>secrets.GITHUB-TOKEN</c>) grouped by the <see cref="WebhookExecution.Platform"/> of
+/// the executions that declared them. Keys are normalised to lowercase
+/// (<c>"github"</c>, <c>"azuredevops"</c>, or <c>""</c> for platform-agnostic executions).
+/// <c>RunClaudeCodeOnRepository</c> uses this to forward only the credentials a given
+/// dispatch actually needs — so a GitHub-targeted run does not get blocked by an Azure
+/// DevOps PAT requirement that the same plugin happens to declare on its ADO usage.
+/// Within a key, dedup is by env name. Not surfaced to the model.</param>
 /// <param name="Source">The original <see cref="PluginEntry"/> from <c>rules.json</c>; used
-/// internally by <c>RunClaudeCodeOnRepository</c> to resolve a chosen plugin back to its
-/// full env spec. Not surfaced to the model.</param>
+/// internally by <c>RunClaudeCodeOnRepository</c> to forward the plugin spec to the
+/// container. Not surfaced to the model.</param>
 internal sealed record CatalogPlugin(
     string PluginName,
     string Marketplace,
     IReadOnlyList<CatalogEnvRequirement> RequiredEnvs,
+    IReadOnlyDictionary<string, IReadOnlyList<EnvEntry>> EnvsByPlatform,
     IReadOnlyList<CatalogUsageExample> UsageExamples,
     PluginEntry Source);
 

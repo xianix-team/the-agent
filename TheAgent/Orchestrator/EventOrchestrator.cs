@@ -54,7 +54,14 @@ public sealed class EventOrchestrator : IEventOrchestrator
         foreach (var evaluation in outcome.Results!)
         {
             var execution = !string.IsNullOrWhiteSpace(evaluation.Prompt)
-                ? new ExecutionSpec(evaluation.Plugins, evaluation.Prompt)
+                ? new ExecutionSpec(
+                    evaluation.Plugins,
+                    evaluation.Prompt,
+                    evaluation.WithEnvs,
+                    evaluation.Platform,
+                    evaluation.RepositoryUrl,
+                    evaluation.RepositoryName,
+                    evaluation.GitRef)
                 : null;
 
             matches.Add(OrchestrationResult.Matched(

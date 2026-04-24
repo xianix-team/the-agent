@@ -134,6 +134,7 @@ public sealed class SupervisorSubagent
                     AIFunctionFactory.Create(tools.GetCurrentDateTime),
                     AIFunctionFactory.Create(tools.ListTenantRepositories),
                     AIFunctionFactory.Create(tools.ListAvailablePlugins),
+                    AIFunctionFactory.Create(tools.OnboardRepository),
                     AIFunctionFactory.Create(tools.RunClaudeCodeOnRepository),
                 ],
             });

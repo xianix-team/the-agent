@@ -37,6 +37,14 @@ public sealed record ClaudeCodeChatRequest
     public IReadOnlyList<PluginEntry> Plugins { get; init; } = [];
 
     /// <summary>
+    /// Execution-level <c>with-envs</c> to inject into the executor container. Aggregated by
+    /// the chat tool from every <see cref="WebhookExecution"/> that references the chosen
+    /// plugins (deduplicated by env name). Defaults to no envs — chat runs with no plugins
+    /// don't need any extra credentials beyond the agent-managed runtime variables.
+    /// </summary>
+    public IReadOnlyList<EnvEntry> WithEnvs { get; init; } = [];
+
+    /// <summary>
     /// Resolved inputs (kebab-case names matching <c>rules.json</c> conventions) that will
     /// be serialized into <c>ContainerExecutionInput.InputsJson</c> and read by
     /// <c>Executor/entrypoint.sh</c> via <c>jq</c>. Always includes <c>repository-url</c>

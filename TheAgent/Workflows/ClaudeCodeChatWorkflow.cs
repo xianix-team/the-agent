@@ -19,7 +19,8 @@ namespace Xianix.Workflows;
 /// <c>SubWorkflowService.StartAsync</c> (fire-and-forget — the chat tool returns
 /// immediately, this workflow becomes the source of truth for user-facing output).
 /// </summary>
-[Workflow(Constants.AgentName + ":Claude Code Chat Workflow")]
+//[Workflow(Constants.AgentName + ":Claude Code Chat Workflow")]
+[Workflow]
 public class ClaudeCodeChatWorkflow
 {
     [WorkflowRun]
@@ -63,6 +64,7 @@ public class ClaudeCodeChatWorkflow
             ExecutionId       = Workflow.NewGuid().ToString("N")[..8],
             InputsJson        = JsonSerializer.Serialize(req.Inputs),
             ClaudeCodePlugins = ContainerPluginSerialization.Serialize(req.Plugins),
+            WithEnvsJson      = ContainerEnvSerialization.Serialize(req.WithEnvs),
             Prompt            = req.Prompt,
             VolumeName        = volumeName,
         };

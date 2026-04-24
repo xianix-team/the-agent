@@ -9,7 +9,8 @@ using Xians.Lib.Agents.Core;
 
 namespace Xianix.Workflows;
 
-[Workflow(Constants.AgentName + ":Processing Workflow")]
+//[Workflow(Constants.AgentName + ":Processing Workflow")]
+[Workflow]
 public class ProcessingWorkflow
 {
 
@@ -44,14 +45,18 @@ public class ProcessingWorkflow
             ? ""
             : $", block={orchestrationResult.ExecutionBlockName}";
         var executionLabel = $"webhook={orchestrationResult.WebhookName}{block}";
-        var repositoryUrl = OrchestrationResult.GetInputString(orchestrationResult.Inputs, "repository-url") ?? string.Empty;
+        var execution      = orchestrationResult.Execution!;
+        var repositoryUrl  = execution.RepositoryUrl;
 
         Workflow.Logger.LogInformation(
-            "ProcessingWorkflow starting: tenant={TenantId}, repo={Repo}, block={Block}, plugins={PluginCount}.",
+            "ProcessingWorkflow starting: tenant={TenantId}, platform={Platform}, repo={Repo}, block={Block}, plugins={PluginCount}.",
             orchestrationResult.TenantId,
-            repositoryUrl,
+            string.IsNullOrEmpty(execution.Platform) ? "(none)" : execution.Platform,
+            string.IsNullOrEmpty(execution.RepositoryName)
+                ? (string.IsNullOrEmpty(repositoryUrl) ? "(none)" : repositoryUrl)
+                : execution.RepositoryName,
             orchestrationResult.ExecutionBlockName ?? "—",
-            orchestrationResult.Execution!.Plugins.Count);
+            execution.Plugins.Count);
 
         var input = BuildContainerInput(orchestrationResult);
 
@@ -92,8 +97,9 @@ public class ProcessingWorkflow
 
     private static ContainerExecutionInput BuildContainerInput(OrchestrationResult result)
     {
-        var inputsJson = JsonSerializer.Serialize(result.Inputs);
+        var inputsJson  = JsonSerializer.Serialize(result.Inputs);
         var pluginsJson = ContainerPluginSerialization.Serialize(result.Execution!.Plugins);
+        var envsJson    = ContainerEnvSerialization.Serialize(result.Execution.WithEnvs);
 
         return new ContainerExecutionInput
         {
@@ -101,6 +107,7 @@ public class ProcessingWorkflow
             ExecutionId       = Workflow.Random.Next().ToString("x8"),
             InputsJson        = inputsJson,
             ClaudeCodePlugins = pluginsJson,
+            WithEnvsJson      = envsJson,
             Prompt            = result.Execution.Prompt,
         };
     }

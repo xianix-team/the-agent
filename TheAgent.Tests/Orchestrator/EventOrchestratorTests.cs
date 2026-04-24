@@ -126,6 +126,40 @@ public class EventOrchestratorTests
     }
 
     [Fact]
+    public async Task OrchestrateAsync_PassesStructuralFieldsThroughToExecutionSpec()
+    {
+        var evaluation = new EvaluationResult(
+            Inputs: new Dictionary<string, object?>
+            {
+                ["platform"]        = "github",
+                ["repository-url"]  = "https://github.com/acme/app.git",
+                ["repository-name"] = "acme/app",
+                ["git-ref"]         = "feat/auth",
+            },
+            Plugins: [],
+            Prompt: "review acme/app",
+            ExecutionBlockName: "github-pr",
+            WithEnvs: null,
+            Platform: "github",
+            RepositoryUrl: "https://github.com/acme/app.git",
+            RepositoryName: "acme/app",
+            GitRef: "feat/auth");
+
+        _evaluator.EvaluateAsync("Default", Arg.Any<object?>())
+                  .Returns(Task.FromResult(EvaluationOutcome.Match(evaluation)));
+
+        var batch = await _sut.OrchestrateAsync("Default", new { }, "tenant-1");
+
+        Assert.True(batch.Handled);
+        var execution = batch.Matches[0].Execution;
+        Assert.NotNull(execution);
+        Assert.Equal("github", execution!.Platform);
+        Assert.Equal("https://github.com/acme/app.git", execution.RepositoryUrl);
+        Assert.Equal("acme/app", execution.RepositoryName);
+        Assert.Equal("feat/auth", execution.GitRef);
+    }
+
+    [Fact]
     public async Task OrchestrateAsync_WhenMultipleExecutionsMatch_ReturnsAll()
     {
         var a = new EvaluationResult(

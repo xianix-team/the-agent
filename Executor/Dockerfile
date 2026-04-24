@@ -35,8 +35,11 @@ COPY requirements.txt /workspace/requirements.txt
 RUN pip install --no-cache-dir -r /workspace/requirements.txt
 
 COPY execute_plugin.py /workspace/execute_plugin.py
+COPY _common.sh /workspace/_common.sh
+COPY prepare_repo.sh /workspace/prepare_repo.sh
+COPY run_prompt.sh /workspace/run_prompt.sh
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /entrypoint.sh /workspace/prepare_repo.sh /workspace/run_prompt.sh
 
 RUN groupadd -r xianix && useradd -r -g xianix -d /workspace xianix \
     && mkdir -p /workspace/repo \

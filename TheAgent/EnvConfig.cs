@@ -51,42 +51,18 @@ public static class EnvConfig
     public static string XiansServerUrl => GetRequired("XIANS-SERVER-URL");
     public static string XiansApiKey    => GetRequired("XIANS-API-KEY");
 
+    // Agent identity (display name shown when registering with the Xians platform).
+    // Note: workflow type names still derive from <see cref="Xianix.Constants.AgentName"/>
+    // because [Workflow(...)] attributes require compile-time constants.
+    public static string AgentName => Get("AGENT-NAME", Xianix.Constants.AgentName);
+
     // LLM / Anthropic
     public static string AnthropicApiKey         => GetRequired("ANTHROPIC-API-KEY");
     public static string AnthropicDeploymentName => Get("ANTHROPIC-DEPLOYMENT-NAME", "claude-haiku-4-5");
 
-    // CM Platform tokens (shared across all tenants)
-    public static string GithubToken        => Get("GITHUB-TOKEN");
-    public static string AzureDevOpsToken   => Get("AZURE-DEVOPS-TOKEN");
-
-    /// <summary>
-    /// Tenant-scoped lookup: checks <c>&lt;TENANTID&gt;-&lt;key&gt;</c> first, then
-    /// falls back to the global <paramref name="key"/>.
-    /// </summary>
-    public static string GetForTenant(string tenantId, string key, string defaultValue = "")
-        => Get(TenantKey(tenantId, key), Get(key, defaultValue));
-
-    public static string GetGithubToken(string tenantId)
-        => GetForTenant(tenantId, "GITHUB-TOKEN");
-
-    public static string GetAzureDevOpsToken(string tenantId)
-        => GetForTenant(tenantId, "AZURE-DEVOPS-TOKEN");
-
-    public static string GetAnthropicApiKey(string tenantId)
-        => GetForTenant(tenantId, "ANTHROPIC-API-KEY", AnthropicApiKey);
-
-    /// <summary>
-    /// Builds a tenant-scoped env-var key: upper-cases the tenant ID, replaces
-    /// non-alphanumeric characters (including underscores) with dashes, then
-    /// appends the base key.
-    /// e.g. tenantId="my_org" + baseKey="GITHUB-TOKEN" → "MY-ORG-GITHUB-TOKEN"
-    /// </summary>
-    private static string TenantKey(string tenantId, string baseKey)
-    {
-        var sanitised = new string(
-            tenantId.Select(c => char.IsLetterOrDigit(c) ? char.ToUpperInvariant(c) : '-').ToArray());
-        return $"{sanitised}-{baseKey}";
-    }
+    // CM platform tokens (GITHUB-TOKEN, AZURE-DEVOPS-TOKEN, etc.) are NOT read from the host
+    // environment. Tenants must supply their own through the Xians Secret Vault and reference
+    // them from rules.json as 'secrets.<KEY>' — see TheAgent/Activities/ContainerActivities.cs.
 
     // Docker executor
     public static string ExecutorImage      => Get("EXECUTOR-IMAGE", "99xio/xianix-executor:latest");

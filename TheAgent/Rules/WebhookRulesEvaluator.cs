@@ -157,6 +157,24 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
                     missingMandatory.Add(input.Name);
             }
 
+            // Resolve structural execution context (platform / repository) BEFORE the
+            // mandatory check so that any failure to resolve a declared structural field is
+            // reported alongside the use-inputs failures in a single, actionable error.
+            // Every declared sub-field of `repository` is mandatory — if you bothered to
+            // declare it, you meant it; omit the field entirely to opt out. The short
+            // `repository-name` identifier is *always* derived from the resolved URL via
+            // RepositoryNaming.DeriveName — there is no schema knob for it, so a clone URL
+            // and its display name can never drift.
+            var (repoUrl, repoUrlMissing) = ResolveStructuralBinding(
+                root, execution.Repository?.Url, "repository.url", treatAsMandatory: true);
+            var (gitRef, gitRefMissing) = ResolveStructuralBinding(
+                root, execution.Repository?.Ref, "repository.ref", treatAsMandatory: true);
+
+            var repoName = string.IsNullOrEmpty(repoUrl) ? "" : RepositoryNaming.DeriveName(repoUrl);
+
+            if (repoUrlMissing is not null) missingMandatory.Add(repoUrlMissing);
+            if (gitRefMissing is not null)  missingMandatory.Add(gitRefMissing);
+
             if (missingMandatory.Count > 0)
             {
                 failedExecutionOrdinal++;
@@ -174,13 +192,40 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
                 continue;
             }
 
+            // Auto-inject the structural fields into the inputs dict so the wire-format
+            // contract for the executor (XIANIX_INPUTS) keeps the canonical kebab-case keys
+            // plugin prompts and entrypoint.sh expect — even though they're declared at the
+            // execution level, not under use-inputs.
+            var platform = execution.Platform?.Trim() ?? "";
+            if (!string.IsNullOrEmpty(platform))
+                dict["platform"] = platform;
+            if (!string.IsNullOrEmpty(repoUrl))
+                dict["repository-url"] = repoUrl;
+            if (!string.IsNullOrEmpty(repoName))
+                dict["repository-name"] = repoName;
+            if (!string.IsNullOrEmpty(gitRef))
+                dict["git-ref"] = gitRef;
+
             var prompt = InterpolatePrompt(execution.Prompt, dict);
             var hasPrompt = !string.IsNullOrWhiteSpace(prompt);
             var blockName = string.IsNullOrWhiteSpace(execution.Name) ? null : execution.Name.Trim();
             _logger.LogInformation(
-                "Rules matched execution '{ExecutionBlock}' for webhook '{WebhookName}': {InputCount} input(s), {PluginCount} plugin(s), executePrompt={HasPrompt}.",
-                blockName ?? "(unnamed)", webhookName, dict.Count, execution.Plugins.Count, hasPrompt);
-            matches.Add(new EvaluationResult(dict, execution.Plugins, prompt, blockName));
+                "Rules matched execution '{ExecutionBlock}' for webhook '{WebhookName}': {InputCount} input(s), {PluginCount} plugin(s), {WithEnvsCount} with-envs entry/entries, platform='{Platform}', repo='{RepoName}', gitRef='{GitRef}', executePrompt={HasPrompt}.",
+                blockName ?? "(unnamed)", webhookName, dict.Count, execution.Plugins.Count, execution.WithEnvs.Count,
+                platform.Length == 0 ? "(none)" : platform,
+                string.IsNullOrEmpty(repoName) ? (string.IsNullOrEmpty(repoUrl) ? "(none)" : repoUrl) : repoName,
+                string.IsNullOrEmpty(gitRef) ? "(none)" : gitRef,
+                hasPrompt);
+            matches.Add(new EvaluationResult(
+                Inputs:               dict,
+                Plugins:              execution.Plugins,
+                Prompt:               prompt,
+                ExecutionBlockName:   blockName,
+                WithEnvs:             execution.WithEnvs,
+                Platform:             platform,
+                RepositoryUrl:        repoUrl,
+                RepositoryName:       repoName,
+                GitRef:               gitRef));
         }
 
         if (matches.Count > 0)
@@ -483,6 +528,55 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
         }
 
         return $"'{path}' (no array element whose value starts with '{prefix}')";
+    }
+
+    /// <summary>
+    /// Resolves a structural execution-level binding (currently <c>repository.url</c> and
+    /// <c>repository.ref</c>). When the binding is in <see cref="RepoFieldBinding.Constant"/>
+    /// mode the value is taken verbatim — the webhook payload is not consulted, so rules
+    /// pinned to a fixed repository or branch work even on payloads that don't carry that
+    /// info. Otherwise the value is treated as a JSON path resolved against the payload
+    /// (the original schema). Returns the resolved string and an optional missing-mandatory
+    /// token to surface in the same error path as missing <c>use-inputs</c>.
+    /// <para/>
+    /// Note: <c>repository-name</c> is intentionally not routed through here — it is
+    /// derived from the resolved URL by <see cref="RepositoryNaming.DeriveName"/>.
+    /// </summary>
+    /// <param name="binding">Binding declared on the rule, or <c>null</c> if the field
+    /// wasn't declared at all (in which case nothing is resolved and nothing is missing).</param>
+    /// <param name="diagnosticName">Friendly name for the missing-mandatory error (e.g.
+    /// <c>"repository.url"</c>).</param>
+    /// <param name="treatAsMandatory">When <c>true</c>, an unresolvable / empty result counts
+    /// as a mandatory failure and skips the execution block — declared structural fields are
+    /// always required.</param>
+    private static (string Resolved, string? MissingToken) ResolveStructuralBinding(
+        JsonElement root, RepoFieldBinding? binding, string diagnosticName, bool treatAsMandatory)
+    {
+        if (binding is null || binding.IsEmpty)
+            return ("", null);
+
+        if (binding.Constant)
+        {
+            // Literal values can't really "fail to resolve" — the only failure mode is an
+            // explicitly-empty literal, which the IsEmpty guard above already short-circuits.
+            // So a constant binding never contributes a missing-mandatory token.
+            return (binding.Value, null);
+        }
+
+        if (!TryGetElementAtPath(root, binding.Value, out var el))
+            return ("", treatAsMandatory ? diagnosticName : null);
+
+        var resolved = el.ValueKind switch
+        {
+            JsonValueKind.String => el.GetString() ?? "",
+            JsonValueKind.Null or JsonValueKind.Undefined => "",
+            _ => el.ToString(),
+        };
+
+        if (treatAsMandatory && string.IsNullOrWhiteSpace(resolved))
+            return ("", diagnosticName);
+
+        return (resolved, null);
     }
 
     /// <summary>
