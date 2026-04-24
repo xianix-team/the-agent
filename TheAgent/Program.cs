@@ -103,8 +103,6 @@ static ServiceProvider ConfigureServices()
 
     services.AddSingleton<IWebhookRulesEvaluator, WebhookRulesEvaluator>();
     services.AddSingleton<IEventOrchestrator, EventOrchestrator>();
-    services.AddSingleton<IScheduleEvaluator, ScheduleEvaluator>();
-    services.AddSingleton<CognitiveDispatcher>();
     services.AddSingleton<XianixAgent>();
 
     return services.BuildServiceProvider();
