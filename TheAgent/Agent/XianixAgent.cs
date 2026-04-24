@@ -2,7 +2,7 @@ using System.Reflection.Metadata;
 using Microsoft.Extensions.Logging;
 using TheAgent;
 using Xianix.Activities;
-using Xianix.Dispatcher;
+using Xianix.Workflows;
 using Xianix.Orchestrator;
 using Xianix.Workflows;
 using Xians.Lib.Agents.Core;
@@ -98,9 +98,11 @@ public class XianixAgent(
             typeName: EnvConfig.AgentName + ":OnboardRepository Workflow")
             .AddActivity<ContainerActivities>();
 
-        xiansAgent.Workflows.DefineCustom<CognitiveDispatcher>(new WorkflowOptions { Activable = true });
+        xiansAgent.Workflows.DefineCustom<CognitiveDispatcher>(new WorkflowOptions { Activable = true },
+            typeName: EnvConfig.AgentName + ":CognitiveDispatcher Workflow");
 
-        xiansAgent.Workflows.DefineCustom<JobDispatcherWorkflow>(new WorkflowOptions { Activable = false });
+        xiansAgent.Workflows.DefineCustom<JobDispatcherWorkflow>(new WorkflowOptions { Activable = false },
+            typeName: EnvConfig.AgentName + ":JobDispatcher Workflow");
     }
 
     private void ConfigureWebhookWorkflow(XiansAgent xiansAgent, CancellationToken cancellationToken)

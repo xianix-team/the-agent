@@ -3,12 +3,11 @@ using Microsoft.Extensions.Logging;
 using Temporalio.Exceptions;
 using Xianix.Rules.Schedule;
 using Xians.Lib.Agents.Core;
-using Xianix.Workflows;
 using Xianix.Orchestrator;
 
-namespace Xianix.Dispatcher;
+namespace Xianix.Workflows;
 
-[Workflow(Constants.AgentName + ":Job Dispatcher Workflow")]
+[Workflow]
 public class JobDispatcherWorkflow
 {
     [WorkflowRun]

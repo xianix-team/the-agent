@@ -3,9 +3,9 @@ using Temporalio.Workflows;
 using Xianix.Rules.Schedule;
 using Xians.Lib.Agents.Core;
 
-namespace Xianix.Dispatcher;
+namespace Xianix.Workflows;
 
-[Workflow(Constants.AgentName + ":Cognitive Dispatcher Workflow")]
+[Workflow]
 public sealed class CognitiveDispatcher
 {
     private readonly ScheduleEvaluator _scheduleEvaluator;
