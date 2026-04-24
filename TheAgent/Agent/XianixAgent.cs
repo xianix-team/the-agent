@@ -1,9 +1,8 @@
-using System.Reflection.Metadata;
 using Microsoft.Extensions.Logging;
 using TheAgent;
 using Xianix.Activities;
-using Xianix.Orchestrator;
 using Xianix.Workflows;
+using Xianix.Orchestrator;
 using Xians.Lib.Agents.Core;
 using Xians.Lib.Agents.Knowledge;
 using Xians.Lib.Agents.Workflows.Models;
@@ -96,6 +95,14 @@ public class XianixAgent(
             .DefineCustom<OnboardRepositoryWorkflow>(new WorkflowOptions { Activable = false },
             typeName: EnvConfig.AgentName + ":OnboardRepository Workflow")
             .AddActivity<ContainerActivities>();
+
+        xiansAgent.Workflows
+            .DefineCustom<CognitiveDispatcher>(new WorkflowOptions { Activable = true },
+            typeName: EnvConfig.AgentName + ":CognitiveDispatcher Workflow");
+
+        xiansAgent.Workflows
+            .DefineCustom<JobDispatcherWorkflow>(new WorkflowOptions { Activable = false },
+            typeName: EnvConfig.AgentName + ":JobDispatcher Workflow");
     }
 
     private void ConfigureWebhookWorkflow(XiansAgent xiansAgent, CancellationToken cancellationToken)
@@ -182,6 +189,12 @@ public class XianixAgent(
         await xiansAgent.Knowledge.UploadEmbeddedResourceAsync(
             resourcePath: "Knowledge/rules.json",
             knowledgeName: Constants.RulesKnowledgeName,
+            knowledgeType: "json"
+        );
+
+        await xiansAgent.Knowledge.UploadEmbeddedResourceAsync(
+            resourcePath: "Knowledge/schedules.json",
+            knowledgeName: Constants.SchedulesKnowledgeName,
             knowledgeType: "json"
         );
 
