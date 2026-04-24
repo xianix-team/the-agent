@@ -3,9 +3,8 @@ using Xians.Lib.Agents.Core;
 
 namespace Xianix.Rules.Schedule;
 
-public sealed class ScheduleEvaluator() : IScheduleEvaluator
+public sealed class ScheduleEvaluator()
 {
-    // private readonly ILogger<ScheduleEvaluator> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     private static readonly JsonSerializerOptions RulesJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -23,7 +22,6 @@ public sealed class ScheduleEvaluator() : IScheduleEvaluator
         var rulesKnowledge = await XiansContext.CurrentAgent.Knowledge.GetAsync(Constants.SchedulesKnowledgeName);
         if (rulesKnowledge == null)
         {
-            // _logger.LogError("Rules knowledge document '{RulesName}' is missing — cannot evaluate webhooks.", Constants.SchedulesKnowledgeName);
             throw new InvalidOperationException("No rules knowledge document found.");
         }
 
@@ -36,19 +34,11 @@ public sealed class ScheduleEvaluator() : IScheduleEvaluator
 
         try
         {
-            var sets = JsonSerializer.Deserialize<List<ScheduleEntry>>(rulesJson, RulesJsonOptions) ?? [];
-            // _logger.LogDebug(
-            //     "Parsed {ScheduleSetCount} schedule set(s) from knowledge ({ScheduleNames}).",
-            //     sets.Count,
-            //     sets.Count == 0 ? "none" : string.Join(", ", sets.Select(s => s.ScheduleName).Where(n => !string.IsNullOrEmpty(n))));
-            // if (sets.Count == 0)
-            //     _logger.LogWarning("Rules knowledge deserialized to zero schedule sets — check schedulea JSON.");
-            return sets;
+            return JsonSerializer.Deserialize<List<ScheduleEntry>>(rulesJson, RulesJsonOptions) ?? [];
         }
-        catch (JsonException ex)
+        catch (JsonException)
         {
-            // _logger.LogError(ex, "Failed to parse rules JSON — returning empty rule set.");
-            return [];
+            throw new InvalidOperationException("Schedules knowledge document contains invalid JSON.");
         }
     }
 }
