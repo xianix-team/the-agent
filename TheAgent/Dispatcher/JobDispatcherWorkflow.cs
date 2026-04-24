@@ -1,6 +1,5 @@
 using Temporalio.Workflows;
 using Microsoft.Extensions.Logging;
-using Xianix;
 using Temporalio.Exceptions;
 using Xianix.Rules.Schedule;
 using Xians.Lib.Agents.Core;
@@ -13,13 +12,13 @@ namespace Xianix.Dispatcher;
 public class JobDispatcherWorkflow
 {
     [WorkflowRun]
-    public async Task WorkflowRun(string tenantId, ScheduleEntry scheduleEntry)
+    public async Task WorkflowRun(ScheduleEntry scheduleEntry)
     {
         try
         {
             OrchestrationResult orchestrationResult = OrchestrationResult.Matched(
                 scheduleEntry.ScheduleName,
-                tenantId,
+                XiansContext.TenantId,
                 scheduleEntry.Inputs,
                 execution: new ExecutionSpec(scheduleEntry.Plugins, scheduleEntry.Prompt)
             );

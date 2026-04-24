@@ -3,7 +3,6 @@ using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Xianix;
 using Xians.Lib.Agents.Core;
 using Xians.Lib.Agents.Messaging;
 

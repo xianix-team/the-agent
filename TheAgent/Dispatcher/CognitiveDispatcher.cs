@@ -1,4 +1,3 @@
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Temporalio.Workflows;
 using Xianix.Rules.Schedule;
@@ -15,7 +14,7 @@ public sealed class CognitiveDispatcher
         _scheduleEvaluator = new ScheduleEvaluator();
     }
     [WorkflowRun]
-    public async Task Orchestrate()
+    public async Task RunAsync()
     {
         Workflow.Logger.LogDebug("Cognitive Dispatcher started for tenant '{TenantId}'.", XiansContext.TenantId);
 
@@ -26,7 +25,7 @@ public sealed class CognitiveDispatcher
                 await XiansContext.CurrentAgent.Schedules
                 .Create<JobDispatcherWorkflow>(schedule.ScheduleName)
                 .WithCronSchedule(schedule.cronExpression, timezone: schedule.timezone)
-                .WithInput(XiansContext.TenantId, schedule)
+                .WithInput(schedule)
                 .CreateIfNotExistsAsync();
             }
         }

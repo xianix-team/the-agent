@@ -2,7 +2,6 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Temporalio.Exceptions;
 using Temporalio.Workflows;
-using TheAgent;
 using Xianix.Activities;
 using Xianix.Containers;
 using Xianix.Orchestrator;
