@@ -98,10 +98,12 @@ public class XianixAgent(
             typeName: EnvConfig.AgentName + ":OnboardRepository Workflow")
             .AddActivity<ContainerActivities>();
 
-        xiansAgent.Workflows.DefineCustom<CognitiveDispatcher>(new WorkflowOptions { Activable = true },
+        xiansAgent.Workflows
+            .DefineCustom<CognitiveDispatcher>(new WorkflowOptions { Activable = true },
             typeName: EnvConfig.AgentName + ":CognitiveDispatcher Workflow");
 
-        xiansAgent.Workflows.DefineCustom<JobDispatcherWorkflow>(new WorkflowOptions { Activable = false },
+        xiansAgent.Workflows
+            .DefineCustom<JobDispatcherWorkflow>(new WorkflowOptions { Activable = false },
             typeName: EnvConfig.AgentName + ":JobDispatcher Workflow");
     }
 
