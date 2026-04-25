@@ -406,7 +406,7 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
         env[name]  = value;
         prov[name] = new EnvProvenance(
             EnvSource.Runtime, Detail: null, Resolved: !string.IsNullOrEmpty(value),
-            Length: value.Length, Mandatory: false, Override: false);
+            Length: value.Length, Mandatory: false, Override: false, Value: value);
     }
 
     /// <summary>
@@ -465,9 +465,13 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
 
             var isOverride = env.ContainsKey(name);
             env[name] = resolved;
+            // Only record the resolved value for `constant: true` entries — never for
+            // host.* / secrets.* references, so the env summary log can never reveal
+            // a credential value.
             prov[name] = new EnvProvenance(
                 source, detail, Resolved: !string.IsNullOrEmpty(resolved),
-                Length: resolved.Length, Mandatory: mandatory, Override: isOverride);
+                Length: resolved.Length, Mandatory: mandatory, Override: isOverride,
+                Value: source == EnvSource.Constant ? resolved : null);
         }
 
         if (missingMandatory.Count > 0)
@@ -620,7 +624,7 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
     private enum EnvSource { Runtime, Constant, HostEnv, Secret }
 
     /// <summary>
-    /// Captured per-env metadata used only for logging; never holds the resolved value.
+    /// Captured per-env metadata used only for logging.
     /// </summary>
     /// <param name="Detail">Source identifier — host var name (for <see cref="EnvSource.HostEnv"/>),
     /// secret key (for <see cref="EnvSource.Secret"/>), or null/empty for the others.</param>
@@ -629,14 +633,27 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
     /// sources (<see cref="EnvSource.Runtime"/>, <see cref="EnvSource.Constant"/>) so we don't
     /// fingerprint secrets via length.</param>
     /// <param name="Override">True when a rules.json entry replaced a host-seeded default.</param>
+    /// <param name="Value">Resolved value — populated ONLY for <see cref="EnvSource.Runtime"/>
+    /// and <see cref="EnvSource.Constant"/>. Always null for <see cref="EnvSource.HostEnv"/> and
+    /// <see cref="EnvSource.Secret"/> so credentials can never appear in the env summary log.</param>
     private sealed record EnvProvenance(
         EnvSource Source,
         string? Detail,
         bool Resolved,
         int Length,
         bool Mandatory,
-        bool Override)
+        bool Override,
+        string? Value = null)
     {
+        // Inline values up to this length are shown on the same line as the env entry.
+        // Longer values are rendered on a continuation block (still capped — see MaxBlockValueChars).
+        private const int MaxInlineValueChars = 80;
+
+        // Hard cap on the value text written to the log. Prevents a 50KB prompt or a
+        // huge XIANIX-INPUTS JSON from drowning out the env summary; the container itself
+        // still receives the full value untouched.
+        private const int MaxBlockValueChars = 800;
+
         public string Format(string name)
         {
             // Pad name column so columns line up in logs (longest expected key ~22 chars).
@@ -651,12 +668,15 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
                 _                  => "unknown",
             };
 
-            // For credential sources we deliberately don't log length — only resolved/empty —
-            // to avoid leaking length-based fingerprints of tenant secrets.
+            // For credential sources we deliberately do NOT log the value or its length —
+            // only resolved/empty — to avoid leaking length-based fingerprints of secrets.
+            // For Runtime / Constant entries the actual value is shown so operators can
+            // verify what the executor actually received (this is the most common cause of
+            // "why did my prompt get the wrong inputs" support tickets).
             string status = Source switch
             {
-                EnvSource.Runtime  => $"{Length} chars",
-                EnvSource.Constant => $"{Length} chars",
+                EnvSource.Runtime  => FormatValueStatus(),
+                EnvSource.Constant => FormatValueStatus(),
                 _                  => Resolved ? "set" : "EMPTY",
             };
 
@@ -666,6 +686,22 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
             var flagSuffix = flags.Count == 0 ? "" : " [" + string.Join(",", flags) + "]";
 
             return $"{paddedName} <- {sourceLabel,-32} ({status}){flagSuffix}";
+        }
+
+        private string FormatValueStatus()
+        {
+            if (Length == 0 || string.IsNullOrEmpty(Value))
+                return "0 chars: <empty>";
+
+            var hasNewline = Value.Contains('\n') || Value.Contains('\r');
+            if (!hasNewline && Length <= MaxInlineValueChars)
+                return $"{Length} chars: {Value}";
+
+            // Long or multi-line value — render on a continuation block, indented to
+            // line up under the value column for grep-friendly output.
+            var truncated = Length <= MaxBlockValueChars ? Value : Value[..MaxBlockValueChars] + "…";
+            var indented  = truncated.Replace("\r\n", "\n").Replace("\n", "\n      ");
+            return $"{Length} chars:\n      {indented}";
         }
     }
 
