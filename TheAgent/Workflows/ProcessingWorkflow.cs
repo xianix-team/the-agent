@@ -5,6 +5,7 @@ using Temporalio.Workflows;
 using Xianix.Activities;
 using Xianix.Containers;
 using Xianix.Orchestrator;
+using Xianix.Rules;
 using Xians.Lib.Agents.Core;
 
 namespace Xianix.Workflows;
@@ -24,8 +25,10 @@ public class ProcessingWorkflow
             if (orchestrationResult.Execution is null)
             {
                 Workflow.Logger.LogWarning(
-                    "No execution spec for webhook '{WebhookName}'. Skipping.",
-                    orchestrationResult.WebhookName);
+                    "[skip] No execution spec for webhook '{WebhookName}' (tenant={TenantId}, block={Block}). Skipping.",
+                    orchestrationResult.WebhookName,
+                    orchestrationResult.TenantId,
+                    orchestrationResult.ExecutionBlockName ?? "—");
                 return;
             }
 
@@ -33,7 +36,11 @@ public class ProcessingWorkflow
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Workflow.Logger.LogError(ex, "ProcessingWorkflow failed fatally for tenant={TenantId}.", orchestrationResult.TenantId);
+            Workflow.Logger.LogError(ex,
+                "[fatal] ProcessingWorkflow failed for tenant={TenantId}, webhook='{WebhookName}', block='{Block}'.",
+                orchestrationResult.TenantId,
+                orchestrationResult.WebhookName,
+                orchestrationResult.ExecutionBlockName ?? "—");
             throw new ApplicationFailureException(
                 $"Processing workflow failed: {ex.Message}", ex, nonRetryable: true);
         }
@@ -41,24 +48,36 @@ public class ProcessingWorkflow
 
     private static async Task ExecuteContainerPipelineAsync(OrchestrationResult orchestrationResult)
     {
-        var block = string.IsNullOrWhiteSpace(orchestrationResult.ExecutionBlockName)
-            ? ""
-            : $", block={orchestrationResult.ExecutionBlockName}";
-        var executionLabel = $"webhook={orchestrationResult.WebhookName}{block}";
         var execution      = orchestrationResult.Execution!;
         var repositoryUrl  = execution.RepositoryUrl;
+        var blockName      = orchestrationResult.ExecutionBlockName ?? "—";
+        var executionLabel = string.IsNullOrWhiteSpace(orchestrationResult.ExecutionBlockName)
+            ? $"webhook={orchestrationResult.WebhookName}"
+            : $"webhook={orchestrationResult.WebhookName}, block={orchestrationResult.ExecutionBlockName}";
+
+        var input         = BuildContainerInput(orchestrationResult);
+        var executionId   = input.ExecutionId;
+        var keyInputs     = FormatKeyInputs(orchestrationResult.Inputs);
+        var pluginSummary = FormatPluginSummary(execution.Plugins);
+        var repoLabel     = string.IsNullOrEmpty(execution.RepositoryName)
+            ? (string.IsNullOrEmpty(repositoryUrl) ? "(none)" : repositoryUrl)
+            : execution.RepositoryName;
+        var refLabel      = string.IsNullOrEmpty(execution.GitRef) ? "(default)" : execution.GitRef;
+        var platformLabel = string.IsNullOrEmpty(execution.Platform) ? "(none)" : execution.Platform;
 
         Workflow.Logger.LogInformation(
-            "ProcessingWorkflow starting: tenant={TenantId}, platform={Platform}, repo={Repo}, block={Block}, plugins={PluginCount}.",
+            "[start] exec={ExecutionId} block='{Block}' tenant={TenantId} repo={Repo}@{Ref} platform={Platform} " +
+            "webhook='{WebhookName}' inputs=[{KeyInputs}] plugins={PluginCount}{PluginList}.",
+            executionId,
+            blockName,
             orchestrationResult.TenantId,
-            string.IsNullOrEmpty(execution.Platform) ? "(none)" : execution.Platform,
-            string.IsNullOrEmpty(execution.RepositoryName)
-                ? (string.IsNullOrEmpty(repositoryUrl) ? "(none)" : repositoryUrl)
-                : execution.RepositoryName,
-            orchestrationResult.ExecutionBlockName ?? "—",
-            execution.Plugins.Count);
-
-        var input = BuildContainerInput(orchestrationResult);
+            repoLabel,
+            refLabel,
+            platformLabel,
+            orchestrationResult.WebhookName,
+            keyInputs,
+            execution.Plugins.Count,
+            pluginSummary);
 
         var volumeName = await Workflow.ExecuteActivityAsync(
             (ContainerActivities a) => a.EnsureWorkspaceVolumeAsync(orchestrationResult.TenantId, repositoryUrl),
@@ -81,7 +100,7 @@ public class ProcessingWorkflow
                 ContainerWorkflowOptions.Wait);
 
             ContainerOutputParser.Parse(executionResult);
-            LogOutcome(executionResult, executionLabel, orchestrationResult.TenantId);
+            LogOutcome(executionResult, executionLabel, executionId, orchestrationResult.TenantId, repoLabel, keyInputs);
             await ReportExecutionMetricsAsync(orchestrationResult, executionResult);
         }
         finally
@@ -113,35 +132,111 @@ public class ProcessingWorkflow
     }
 
     private static void LogOutcome(
-        ContainerExecutionResult executionResult, string executionLabel, string tenantId)
+        ContainerExecutionResult executionResult,
+        string executionLabel,
+        string executionId,
+        string tenantId,
+        string repoLabel,
+        string keyInputs)
     {
         if (executionResult.Succeeded)
         {
-            var reviewText = ContainerOutputParser.ExtractField(executionResult.StdOut, "result");
+            // One concise summary line — easy to scan in chat / Temporal UI — followed
+            // by the full result text as a separate log entry so the metrics line
+            // doesn't get drowned out when the output is large (e.g. PR reviews).
             Workflow.Logger.LogInformation(
-                "Execution '{Label}' completed for tenant={TenantId}. " +
-                "Duration={Duration:F1}s, Cost=${CostUsd:F4}, tokens(in={InputTokens}, out={OutputTokens}, " +
-                "cacheRead={CacheRead}, cacheCreate={CacheCreate}), session={SessionId}.\n{Output}",
-                executionLabel, tenantId,
+                "[done] exec={ExecutionId} '{Label}' tenant={TenantId} repo={Repo} inputs=[{KeyInputs}] — " +
+                "duration={Duration:F1}s, cost=${CostUsd:F4}, " +
+                "tokens(in={InputTokens}, out={OutputTokens}, cacheRead={CacheRead}, cacheCreate={CacheCreate}), " +
+                "session={SessionId}.",
+                executionId, executionLabel, tenantId, repoLabel, keyInputs,
                 executionResult.DurationSeconds ?? 0,
                 executionResult.CostUsd ?? 0,
                 executionResult.InputTokens ?? 0,
                 executionResult.OutputTokens ?? 0,
                 executionResult.CacheReadTokens ?? 0,
                 executionResult.CacheCreationTokens ?? 0,
-                executionResult.SessionId ?? "n/a",
-                reviewText);
+                executionResult.SessionId ?? "n/a");
+
+            var reviewText = ContainerOutputParser.ExtractField(executionResult.StdOut, "result");
+            if (!string.IsNullOrWhiteSpace(reviewText))
+            {
+                Workflow.Logger.LogInformation(
+                    "[output] exec={ExecutionId} '{Label}' tenant={TenantId} ({Length} chars):\n{Output}",
+                    executionId, executionLabel, tenantId, reviewText.Length, reviewText);
+            }
         }
         else
         {
             var errorDetail = ContainerOutputParser.ExtractField(executionResult.StdOut, "error") ?? executionResult.StdErr;
             Workflow.Logger.LogError(
-                "Execution '{Label}' failed (exit={ExitCode}) for tenant={TenantId}. " +
-                "Duration={Duration:F1}s, Cost=${CostUsd:F4}.\nError: {Error}",
-                executionLabel, executionResult.ExitCode, tenantId,
+                "[fail] exec={ExecutionId} '{Label}' tenant={TenantId} repo={Repo} inputs=[{KeyInputs}] — " +
+                "exit={ExitCode}, duration={Duration:F1}s, cost=${CostUsd:F4}.\nError: {Error}",
+                executionId, executionLabel, tenantId, repoLabel, keyInputs,
+                executionResult.ExitCode,
                 executionResult.DurationSeconds ?? 0,
-                executionResult.CostUsd ?? 0, errorDetail);
+                executionResult.CostUsd ?? 0,
+                errorDetail);
         }
+    }
+
+    // ── Input/plugin formatting helpers ──────────────────────────────────────
+
+    /// <summary>
+    /// Picks a small set of high-signal inputs (PR/issue numbers, action, ref) and
+    /// renders them as a compact "k=v, k=v" string for the start/done/fail headlines.
+    /// Falls back to "—" when nothing useful is present so the log column stays stable.
+    /// </summary>
+    private static string FormatKeyInputs(IReadOnlyDictionary<string, object?> inputs)
+    {
+        if (inputs is null || inputs.Count == 0)
+            return "—";
+
+        // Order matters: most operator-relevant identifiers first so they're easy to
+        // spot when scanning logs.
+        string[] preferredKeys =
+        [
+            "pr-number", "pr-title",
+            "issue-number", "issue-title",
+            "work-item-id", "work-item-title",
+            "action", "trigger-label",
+            "git-ref", "branch",
+        ];
+
+        var parts = new List<string>(preferredKeys.Length);
+        foreach (var key in preferredKeys)
+        {
+            var value = OrchestrationResult.GetInputString(inputs, key);
+            if (string.IsNullOrWhiteSpace(value))
+                continue;
+
+            parts.Add($"{key}={Truncate(value, 60)}");
+        }
+
+        return parts.Count == 0 ? "—" : string.Join(", ", parts);
+    }
+
+    private static string FormatPluginSummary(IReadOnlyList<PluginEntry> plugins)
+    {
+        if (plugins is null || plugins.Count == 0)
+            return string.Empty;
+
+        var names = plugins
+            .Select(p => string.IsNullOrWhiteSpace(p.PluginName) ? "(unnamed)" : p.PluginName)
+            .ToList();
+
+        // Cap the inline list so a flow with many plugins doesn't blow up the headline.
+        const int maxInline = 3;
+        var shown   = names.Take(maxInline);
+        var trailer = names.Count > maxInline ? $", +{names.Count - maxInline} more" : "";
+        return $" [{string.Join(", ", shown)}{trailer}]";
+    }
+
+    private static string Truncate(string value, int maxLength)
+    {
+        if (string.IsNullOrEmpty(value) || value.Length <= maxLength)
+            return value;
+        return value[..maxLength] + "…";
     }
 
     // ── Metrics ──────────────────────────────────────────────────────────────
