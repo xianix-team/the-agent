@@ -262,6 +262,32 @@ public class ProcessingWorkflow
             if (executionResult.CostUsd.HasValue)
                 builder = builder.WithMetric("actions", orchestrationResult.WebhookName, 1, "count");
 
+            // Per-execution-block metrics: lets us rank which rules.json execution blocks
+            // fire most often (e.g. "azuredevops-pull-request-review" vs
+            // "github-pr-review"), and which tend to succeed/fail. Generic
+            // called/succeeded/failed counters live alongside per-name counters so a
+            // dashboard can either chart totals or break down by execution name.
+            // Skipped when no block name is set (chat-driven / unnamed runs).
+            var blockName = orchestrationResult.ExecutionBlockName;
+            if (!string.IsNullOrWhiteSpace(blockName))
+            {
+                builder = builder
+                    .WithMetric("executions", "called",                 1,         "count")
+                    .WithMetric("executions", "succeeded",              succeeded, "count")
+                    .WithMetric("executions", "failed",                 failed,    "count")
+                    .WithMetric("executions", blockName,                1,         "count")
+                    .WithMetric("executions", $"{blockName}.succeeded", succeeded, "count")
+                    .WithMetric("executions", $"{blockName}.failed",    failed,    "count");
+
+                if (executionResult.CostUsd.HasValue)
+                    builder = builder.WithMetric(
+                        "executions", $"{blockName}.cost", executionResult.CostUsd.Value, "usd");
+
+                if (executionResult.DurationSeconds.HasValue)
+                    builder = builder.WithMetric(
+                        "executions", $"{blockName}.duration", executionResult.DurationSeconds.Value, "seconds");
+            }
+
             if (executionResult.CostUsd.HasValue)
                 builder = builder.WithMetric("cost", "usd", executionResult.CostUsd.Value, "usd");
 
@@ -282,8 +308,9 @@ public class ProcessingWorkflow
         catch (Exception ex)
         {
             Workflow.Logger.LogWarning(ex,
-                "Failed to report execution metrics for webhook '{WebhookName}'. Metrics are non-critical.",
-                orchestrationResult.WebhookName);
+                "Failed to report execution metrics for webhook '{WebhookName}', block '{Block}'. Metrics are non-critical.",
+                orchestrationResult.WebhookName,
+                orchestrationResult.ExecutionBlockName ?? "—");
         }
     }
 
