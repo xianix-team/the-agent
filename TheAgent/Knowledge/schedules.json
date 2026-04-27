@@ -1,9 +1,9 @@
 [
     {
         "schedule": "github-pull-request-review-schedule",
-        "cron": "*/2 * * * *",
+        "cron": "0 0 * * *",
         "use-inputs": {
-            "pr-number": "193",
+            "pr-number": "194",
             "repository-url": "https://github.com/99x-Projects/qib.git",
             "repository-name": "99x-Projects/qib",
             "pr-title": "Test",
@@ -13,14 +13,14 @@
         "use-plugins": [
             {
                 "plugin-name": "pr-reviewer@xianix-plugins-official",
-                "marketplace": "xianix-team/plugins-official",
-                "envs": [
-                    {
-                        "name": "GITHUB-TOKEN",
-                        "value": "env.GITHUB-TOKEN",
-                        "mandatory": true
-                    }
-                ]
+                "marketplace": "xianix-team/plugins-official"
+            }
+        ],
+        "with-envs": [
+            {
+                "name": "GITHUB-TOKEN",
+                "value": "host.GITHUB-TOKEN",
+                "mandatory": true
             }
         ],
         "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."

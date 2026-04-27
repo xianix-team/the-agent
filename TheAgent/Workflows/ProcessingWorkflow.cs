@@ -4,64 +4,60 @@ using Temporalio.Exceptions;
 using Temporalio.Workflows;
 using Xianix.Activities;
 using Xianix.Containers;
-using Xianix.Orchestrator;
 using Xians.Lib.Agents.Core;
 
 namespace Xianix.Workflows;
 
-//[Workflow(Constants.AgentName + ":Processing Workflow")]
 [Workflow]
 public class ProcessingWorkflow
 {
 
     [WorkflowRun]
-    public async Task WorkflowRun(OrchestrationResult orchestrationResult)
+    public async Task WorkflowRun(ProcessingRequest request)
     {
-        ArgumentNullException.ThrowIfNull(orchestrationResult);
+        ArgumentNullException.ThrowIfNull(request);
 
         try
         {
-            if (orchestrationResult.Execution is null)
+            if (request.Execution is null)
             {
-                Workflow.Logger.LogWarning(
-                    "No execution spec for webhook '{WebhookName}'. Skipping.",
-                    orchestrationResult.WebhookName);
+                Workflow.Logger.LogWarning("No execution spec for '{Name}'. Skipping.", request.Name);
                 return;
             }
 
-            await ExecuteContainerPipelineAsync(orchestrationResult);
+            await ExecuteContainerPipelineAsync(request);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Workflow.Logger.LogError(ex, "ProcessingWorkflow failed fatally for tenant={TenantId}.", orchestrationResult.TenantId);
+            Workflow.Logger.LogError(ex, "ProcessingWorkflow failed fatally for tenant={TenantId}.", request.TenantId);
             throw new ApplicationFailureException(
                 $"Processing workflow failed: {ex.Message}", ex, nonRetryable: true);
         }
     }
 
-    private static async Task ExecuteContainerPipelineAsync(OrchestrationResult orchestrationResult)
+    private static async Task ExecuteContainerPipelineAsync(ProcessingRequest request)
     {
-        var block = string.IsNullOrWhiteSpace(orchestrationResult.ExecutionBlockName)
+        var block = string.IsNullOrWhiteSpace(request.ExecutionBlockName)
             ? ""
-            : $", block={orchestrationResult.ExecutionBlockName}";
-        var executionLabel = $"webhook={orchestrationResult.WebhookName}{block}";
-        var execution      = orchestrationResult.Execution!;
+            : $", block={request.ExecutionBlockName}";
+        var executionLabel = $"{request.Type}={request.Name}{block}";
+        var execution      = request.Execution!;
         var repositoryUrl  = execution.RepositoryUrl;
 
         Workflow.Logger.LogInformation(
             "ProcessingWorkflow starting: tenant={TenantId}, platform={Platform}, repo={Repo}, block={Block}, plugins={PluginCount}.",
-            orchestrationResult.TenantId,
+            request.TenantId,
             string.IsNullOrEmpty(execution.Platform) ? "(none)" : execution.Platform,
             string.IsNullOrEmpty(execution.RepositoryName)
                 ? (string.IsNullOrEmpty(repositoryUrl) ? "(none)" : repositoryUrl)
                 : execution.RepositoryName,
-            orchestrationResult.ExecutionBlockName ?? "—",
+            request.ExecutionBlockName ?? "—",
             execution.Plugins.Count);
 
-        var input = BuildContainerInput(orchestrationResult);
+        var input = BuildContainerInput(request);
 
         var volumeName = await Workflow.ExecuteActivityAsync(
-            (ContainerActivities a) => a.EnsureWorkspaceVolumeAsync(orchestrationResult.TenantId, repositoryUrl),
+            (ContainerActivities a) => a.EnsureWorkspaceVolumeAsync(request.TenantId, repositoryUrl),
             ContainerWorkflowOptions.Standard);
 
         input = input with { VolumeName = volumeName };
@@ -75,14 +71,14 @@ public class ProcessingWorkflow
             var executionResult = await Workflow.ExecuteActivityAsync(
                 (ContainerActivities a) => a.WaitAndCollectOutputAsync(
                     containerId,
-                    orchestrationResult.TenantId,
+                    request.TenantId,
                     executionLabel,
                     (int)ContainerWorkflowOptions.ContainerExecutionTimeout.TotalSeconds),
                 ContainerWorkflowOptions.Wait);
 
             ContainerOutputParser.Parse(executionResult);
-            LogOutcome(executionResult, executionLabel, orchestrationResult.TenantId);
-            await ReportExecutionMetricsAsync(orchestrationResult, executionResult);
+            LogOutcome(executionResult, executionLabel, request.TenantId);
+            await ReportExecutionMetricsAsync(request, executionResult);
         }
         finally
         {
@@ -95,7 +91,7 @@ public class ProcessingWorkflow
 
     // ── Pipeline steps ───────────────────────────────────────────────────────
 
-    private static ContainerExecutionInput BuildContainerInput(OrchestrationResult result)
+    private static ContainerExecutionInput BuildContainerInput(ProcessingRequest result)
     {
         var inputsJson  = JsonSerializer.Serialize(result.Inputs);
         var pluginsJson = ContainerPluginSerialization.Serialize(result.Execution!.Plugins);
@@ -147,7 +143,7 @@ public class ProcessingWorkflow
     // ── Metrics ──────────────────────────────────────────────────────────────
 
     private static async Task ReportExecutionMetricsAsync(
-        OrchestrationResult orchestrationResult,
+        ProcessingRequest orchestrationResult,
         ContainerExecutionResult executionResult)
     {
         try
@@ -157,7 +153,7 @@ public class ProcessingWorkflow
 
             var builder = XiansContext.Metrics
                 .ForModel("claude")
-                .WithCustomIdentifier(orchestrationResult.WebhookName)
+                .WithCustomIdentifier(orchestrationResult.Name)
                 .WithMetrics(
                     ("actions", "called",    1,         "count"),
                     ("actions", "succeeded", succeeded, "count"),
@@ -165,7 +161,7 @@ public class ProcessingWorkflow
                 );
 
             if (executionResult.CostUsd.HasValue)
-                builder = builder.WithMetric("actions", orchestrationResult.WebhookName, 1, "count");
+                builder = builder.WithMetric("actions", orchestrationResult.Name, 1, "count");
 
             if (executionResult.CostUsd.HasValue)
                 builder = builder.WithMetric("cost", "usd", executionResult.CostUsd.Value, "usd");
@@ -187,8 +183,8 @@ public class ProcessingWorkflow
         catch (Exception ex)
         {
             Workflow.Logger.LogWarning(ex,
-                "Failed to report execution metrics for webhook '{WebhookName}'. Metrics are non-critical.",
-                orchestrationResult.WebhookName);
+                "Failed to report execution metrics for '{Name}'. Metrics are non-critical.",
+                orchestrationResult.Name);
         }
     }
 

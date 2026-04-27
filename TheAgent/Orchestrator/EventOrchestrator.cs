@@ -1,5 +1,7 @@
+using Anthropic.Models.Beta.Messages;
 using Microsoft.Extensions.Logging;
 using Xianix.Rules;
+using Xianix.Workflows;
 
 namespace Xianix.Orchestrator;
 
@@ -50,7 +52,7 @@ public sealed class EventOrchestrator : IEventOrchestrator
             return new OrchestrateWebhookResult { SkipReason = outcome.SkipReason };
         }
 
-        var matches = new List<OrchestrationResult>();
+        var matches = new List<ProcessingRequest>();
         foreach (var evaluation in outcome.Results!)
         {
             var execution = !string.IsNullOrWhiteSpace(evaluation.Prompt)
@@ -64,12 +66,13 @@ public sealed class EventOrchestrator : IEventOrchestrator
                     evaluation.GitRef)
                 : null;
 
-            matches.Add(OrchestrationResult.Matched(
-                webhookName,
-                tenantId,
-                evaluation.Inputs,
-                execution,
-                evaluation.ExecutionBlockName));
+            matches.Add(new ProcessingRequest(){
+                Name = webhookName,
+                TenantId = tenantId,
+                Inputs = evaluation.Inputs,
+                Execution = execution,
+                ExecutionBlockName = evaluation.ExecutionBlockName
+            });
         }
 
         _logger.LogInformation(

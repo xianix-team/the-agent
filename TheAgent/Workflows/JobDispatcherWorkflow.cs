@@ -15,13 +15,14 @@ public class JobDispatcherWorkflow
     {
         try
         {
-            OrchestrationResult orchestrationResult = OrchestrationResult.Matched(
-                scheduleEntry.ScheduleName,
-                XiansContext.TenantId,
-                scheduleEntry.Inputs,
-                execution: new ExecutionSpec(scheduleEntry.Plugins, scheduleEntry.Prompt)
-            );
-            await XiansContext.Workflows.StartAsync<ProcessingWorkflow>(new object[] { orchestrationResult }, Guid.NewGuid().ToString());
+            ProcessingRequest request = new ProcessingRequest(){
+                Name = scheduleEntry.ScheduleName,
+                Type = ProcessingType.Schedule,
+                TenantId = XiansContext.TenantId,
+                Inputs = scheduleEntry.Inputs,
+                Execution = new ExecutionSpec(scheduleEntry.Plugins, scheduleEntry.Prompt, withEnvs: scheduleEntry.EnvVars),
+            };
+            await XiansContext.Workflows.StartAsync<ProcessingWorkflow>(new object[] { request }, Guid.NewGuid().ToString());
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Xianix.Rules;
+using Xianix.Workflows;
 
 namespace Xianix.Orchestrator;
 
@@ -81,7 +82,7 @@ public sealed record OrchestrationResult
 /// </summary>
 public sealed record OrchestrateWebhookResult
 {
-    public IReadOnlyList<OrchestrationResult> Matches { get; init; } = [];
+    public IReadOnlyList<ProcessingRequest> Matches { get; init; } = [];
 
     /// <summary>Set when <see cref="Matches"/> is empty.</summary>
     public string? SkipReason { get; init; }
