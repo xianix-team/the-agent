@@ -145,10 +145,18 @@ public class ProcessingWorkflow
             // by the full result text as a separate log entry so the metrics line
             // doesn't get drowned out when the output is large (e.g. PR reviews).
             Workflow.Logger.LogInformation(
-                "[done] exec={ExecutionId} '{Label}' tenant={TenantId} repo={Repo} inputs=[{KeyInputs}] — " +
-                "duration={Duration:F1}s, cost=${CostUsd:F4}, " +
-                "tokens(in={InputTokens}, out={OutputTokens}, cacheRead={CacheRead}, cacheCreate={CacheCreate}), " +
-                "session={SessionId}.",
+                "## Execution Complete\n\n" +
+                "| Field       | Value |\n" +
+                "|-------------|-------|\n" +
+                "| **Exec**    | `{ExecutionId}` |\n" +
+                "| **Label**   | {Label} |\n" +
+                "| **Tenant**  | {TenantId} |\n" +
+                "| **Repo**    | {Repo} |\n" +
+                "| **Inputs**  | {KeyInputs} |\n" +
+                "| **Duration**| {Duration:F1}s |\n" +
+                "| **Cost**    | ${CostUsd:F4} |\n" +
+                "| **Tokens**  | in={InputTokens}, out={OutputTokens}, cacheRead={CacheRead}, cacheCreate={CacheCreate} |\n" +
+                "| **Session** | `{SessionId}` |",
                 executionId, executionLabel, tenantId, repoLabel, keyInputs,
                 executionResult.DurationSeconds ?? 0,
                 executionResult.CostUsd ?? 0,
@@ -162,7 +170,7 @@ public class ProcessingWorkflow
             if (!string.IsNullOrWhiteSpace(reviewText))
             {
                 Workflow.Logger.LogInformation(
-                    "[output] exec={ExecutionId} '{Label}' tenant={TenantId} ({Length} chars):\n{Output}",
+                    "## Output\n**Exec:** `{ExecutionId}` · **Label:** {Label} · **Tenant:** {TenantId} · {Length} chars\n\n---\n\n{Output}",
                     executionId, executionLabel, tenantId, reviewText.Length, reviewText);
             }
         }
@@ -170,20 +178,30 @@ public class ProcessingWorkflow
         {
             var errorDetail = ContainerOutputParser.ExtractField(executionResult.StdOut, "error") ?? executionResult.StdErr;
             Workflow.Logger.LogError(
-                "[fail] exec={ExecutionId} '{Label}' tenant={TenantId} repo={Repo} inputs=[{KeyInputs}] — " +
-                "exit={ExitCode}, duration={Duration:F1}s, cost=${CostUsd:F4}.\nError: {Error}",
+                "## Execution Failed\n\n" +
+                "| Field      | Value |\n" +
+                "|------------|-------|\n" +
+                "| **Exec**   | `{ExecutionId}` |\n" +
+                "| **Label**  | {Label} |\n" +
+                "| **Tenant** | {TenantId} |\n" +
+                "| **Repo**   | {Repo} |\n" +
+                "| **Inputs** | {KeyInputs} |\n" +
+                "| **Exit**   | {ExitCode} |\n" +
+                "| **Duration**| {Duration:F1}s |\n" +
+                "| **Cost**   | ${CostUsd:F4} |\n\n" +
+                "### Error\n```\n{Error}\n```",
                 executionId, executionLabel, tenantId, repoLabel, keyInputs,
                 executionResult.ExitCode,
                 executionResult.DurationSeconds ?? 0,
                 executionResult.CostUsd ?? 0,
                 errorDetail);
-        }
 
-        if (!string.IsNullOrWhiteSpace(executionResult.StdErr))
-        {
-            Workflow.Logger.LogInformation(
-                "[container-log] exec={ExecutionId} '{Label}' tenant={TenantId}:\n{ContainerLog}",
-                executionId, executionLabel, tenantId, executionResult.StdErr);
+            if (!string.IsNullOrWhiteSpace(executionResult.StdErr))
+            {
+                Workflow.Logger.LogInformation(
+                    "## Container Log\n**Exec:** `{ExecutionId}` · **Label:** {Label} · **Tenant:** {TenantId}\n\n```\n{ContainerLog}\n```",
+                    executionId, executionLabel, tenantId, executionResult.StdErr);
+            }
         }
     }
 
