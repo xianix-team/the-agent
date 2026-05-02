@@ -276,7 +276,21 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         if (resolution is ResolutionResult.Missing missing)
             return BuildMissingInputsError(missing);
 
-        var effectiveInputs = ((ResolutionResult.Success)resolution).Inputs;
+        // Force `platform` to the URL-inferred value so the executor's _common.sh picks the
+        // correct credential helper. PluginInputResolver only injects `platform` as a side
+        // effect of a winning plugin usage example carrying it as a Constant — so a no-plugin
+        // chat (or a plugin whose rules don't declare a platform) would otherwise leave
+        // XIANIX_INPUTS.platform unset, causing _common.sh to fall back to its "github"
+        // default and run the github credential path against (potentially) an ADO URL. The
+        // URL is the authoritative source of truth here, so we override even the plugin
+        // constant: a plugin tagged `platform=github` against an ADO URL would auth-fail in
+        // exactly the same way.
+        var effectiveInputs = new Dictionary<string, string>(
+            ((ResolutionResult.Success)resolution).Inputs,
+            StringComparer.OrdinalIgnoreCase)
+        {
+            [AvailablePluginsCatalog.PlatformInput] = platform,
+        };
 
         // Chat-driven runs have no matched WebhookExecution to source `with-envs` from, so
         // we treat rules.json as the manifest of "every credential this agent ever needs"

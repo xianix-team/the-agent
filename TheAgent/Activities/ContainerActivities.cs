@@ -268,11 +268,11 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
             if (!string.IsNullOrWhiteSpace(stderr))
             {
                 if (exitCode != 0)
-                    logger.LogInformation(
+                    logger.LogError(
                         "## Container Log\n**Container:** `{ContainerId}` · **Exit:** {ExitCode}\n\n```\n{Stderr}\n```",
                         shortId, exitCode, stderr);
                 else
-                    logger.LogDebug("Container '{ContainerId}' stderr:\n{Stderr}", shortId, stderr);
+                    logger.LogInformation("Container '{ContainerId}' stderr:\n{Stderr}", shortId, stderr);
             }
 
             if (exitCode != 0 && !string.IsNullOrWhiteSpace(stdout))
