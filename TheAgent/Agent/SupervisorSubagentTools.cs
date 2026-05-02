@@ -278,18 +278,20 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
 
         var effectiveInputs = ((ResolutionResult.Success)resolution).Inputs;
 
-        // Pick only the with-envs the chosen plugins declared on executions targeting THIS
-        // platform (plus any platform-agnostic ones). The plugin catalog deliberately keeps
-        // a per-platform breakdown so a plugin reused across GitHub and Azure DevOps rules
-        // doesn't drag both `secrets.GITHUB-TOKEN` and `secrets.AZURE-DEVOPS-TOKEN` into a
-        // single-platform run — that would force the tenant to have a credential they don't
-        // need and fail at the secret-resolution step. Then we merge in the platform-
-        // required credential envs (GITHUB-TOKEN / AZURE-DEVOPS-TOKEN) so the executor can
-        // clone the repo on its own even if the user picked no plugin or a plugin that
-        // happens not to declare the matching platform PAT — without these the lazy-clone
-        // path would fail at git auth time. Plugin-declared entries win on ties.
-        var withEnvs = resolvedPlugins
-            .SelectMany(p => SelectEnvsForPlatform(p, platform))
+        // Chat-driven runs have no matched WebhookExecution to source `with-envs` from, so
+        // we treat rules.json as the manifest of "every credential this agent ever needs"
+        // and ship the platform-relevant subset every dispatch — irrespective of which
+        // (if any) plugin the model picked. Without this, a no-plugin chat (or a chat with
+        // a plugin that doesn't happen to be referenced by the rule that declares the
+        // needed secret) would only get the platform PAT and would fail the moment Claude
+        // Code reached for any other tenant credential.
+        //
+        // The platform filter is preserved so a single-platform run never inherits the
+        // *other* platform's mandatory PATs and trips the missing-secret fail-fast in
+        // ContainerActivities.InjectExecutionEnvVarsAsync. The platform-required
+        // credential envs are still merged in last so the executor can clone the repo
+        // even when no rule declares the matching PAT. Rules.json entries win on ties.
+        var withEnvs = (await RulesEnvCatalog.LoadEnvsForPlatformAsync(platform))
             .Concat(RepositoryPlatform.RequiredCredentialEnvs(platform))
             .GroupBy(e => e.Name, StringComparer.Ordinal)
             .Select(g => g.First())
@@ -331,30 +333,6 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
             ? ""
             : "Will clone the repository first (this is the first run on this URL). ";
         return $"{clonePrefix}Started Claude Code on `{repoName}`{pluginSuffix}. Output will be streamed in subsequent messages — do not repeat it back to the user.";
-    }
-
-    /// <summary>
-    /// Picks the with-envs from a catalog plugin that are relevant to the dispatch's
-    /// platform: entries declared on executions targeting <paramref name="platform"/> plus
-    /// entries from platform-agnostic executions (those with an empty Platform binding,
-    /// stored under the empty-string key). Lookup is case-insensitive on platform.
-    /// Returns an empty sequence when the plugin has no executions on this platform and
-    /// no platform-agnostic executions — the caller still merges in the
-    /// <see cref="RepositoryPlatform.RequiredCredentialEnvs(string)"/> baseline so the
-    /// clone can authenticate regardless.
-    /// </summary>
-    internal static IEnumerable<EnvEntry> SelectEnvsForPlatform(CatalogPlugin plugin, string platform)
-    {
-        var key = (platform ?? string.Empty).Trim().ToLowerInvariant();
-        if (plugin.EnvsByPlatform.TryGetValue(key, out var matched))
-        {
-            foreach (var e in matched) yield return e;
-        }
-        if (key.Length > 0
-            && plugin.EnvsByPlatform.TryGetValue(string.Empty, out var agnostic))
-        {
-            foreach (var e in agnostic) yield return e;
-        }
     }
 
     /// <summary>

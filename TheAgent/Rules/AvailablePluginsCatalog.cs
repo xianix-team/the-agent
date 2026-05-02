@@ -183,14 +183,6 @@ internal static class AvailablePluginsCatalog
         // keep one entry.
         private readonly Dictionary<string, EnvEntry> _envs = new(StringComparer.Ordinal);
 
-        // Per-platform breakdown of with-envs, so the chat tool can ship only the credentials
-        // a given dispatch actually needs (rather than the union of every platform the plugin
-        // happens to support). Keys are normalised to lowercase platform identifiers from
-        // <c>WebhookExecution.Platform</c> ("github", "azuredevops", or "" for executions
-        // without a platform binding). Within a key, dedup is by env name (first-wins).
-        private readonly Dictionary<string, Dictionary<string, EnvEntry>> _envsByPlatform =
-            new(StringComparer.Ordinal);
-
         public CatalogPluginBuilder(PluginEntry source)
         {
             _source = source;
@@ -256,18 +248,10 @@ internal static class AvailablePluginsCatalog
                 ExecutePrompt: execution.Prompt?.Trim() ?? "",
                 Inputs:        inputs));
 
-            var platformKey = (execution.Platform ?? string.Empty).Trim().ToLowerInvariant();
-            if (!_envsByPlatform.TryGetValue(platformKey, out var platformEnvs))
-            {
-                platformEnvs = new Dictionary<string, EnvEntry>(StringComparer.Ordinal);
-                _envsByPlatform[platformKey] = platformEnvs;
-            }
-
             foreach (var env in execution.WithEnvs)
             {
                 if (string.IsNullOrWhiteSpace(env.Name)) continue;
                 _envs.TryAdd(env.Name, env);
-                platformEnvs.TryAdd(env.Name, env);
             }
         }
 
@@ -309,10 +293,6 @@ internal static class AvailablePluginsCatalog
             RequiredEnvs:    _envs.Values
                 .Select(e => new CatalogEnvRequirement(e.Name, e.Mandatory))
                 .ToList(),
-            EnvsByPlatform:  _envsByPlatform.ToDictionary(
-                kv => kv.Key,
-                kv => (IReadOnlyList<EnvEntry>)kv.Value.Values.ToList(),
-                StringComparer.Ordinal),
             UsageExamples:   _usages,
             Source:          _source);
     }
@@ -324,15 +304,9 @@ internal static class AvailablePluginsCatalog
 /// </summary>
 /// <param name="RequiredEnvs">Names + mandatory flags of every env declared on at least one
 /// execution that uses this plugin. Surfaced to the model so it knows which envs the tenant
-/// must have configured (typically via <c>secrets.*</c>).</param>
-/// <param name="EnvsByPlatform">The full <see cref="EnvEntry"/> records (with values like
-/// <c>secrets.GITHUB-TOKEN</c>) grouped by the <see cref="WebhookExecution.Platform"/> of
-/// the executions that declared them. Keys are normalised to lowercase
-/// (<c>"github"</c>, <c>"azuredevops"</c>, or <c>""</c> for platform-agnostic executions).
-/// <c>RunClaudeCodeOnRepository</c> uses this to forward only the credentials a given
-/// dispatch actually needs — so a GitHub-targeted run does not get blocked by an Azure
-/// DevOps PAT requirement that the same plugin happens to declare on its ADO usage.
-/// Within a key, dedup is by env name. Not surfaced to the model.</param>
+/// must have configured (typically via <c>secrets.*</c>). The actual env values forwarded to
+/// a chat dispatch are sourced rule-wide via <see cref="RulesEnvCatalog"/> — this list is
+/// purely informational for the catalog UI.</param>
 /// <param name="Source">The original <see cref="PluginEntry"/> from <c>rules.json</c>; used
 /// internally by <c>RunClaudeCodeOnRepository</c> to forward the plugin spec to the
 /// container. Not surfaced to the model.</param>
@@ -340,7 +314,6 @@ internal sealed record CatalogPlugin(
     string PluginName,
     string Marketplace,
     IReadOnlyList<CatalogEnvRequirement> RequiredEnvs,
-    IReadOnlyDictionary<string, IReadOnlyList<EnvEntry>> EnvsByPlatform,
     IReadOnlyList<CatalogUsageExample> UsageExamples,
     PluginEntry Source);
 

@@ -178,6 +178,13 @@ public class ProcessingWorkflow
                 executionResult.CostUsd ?? 0,
                 errorDetail);
         }
+
+        if (!string.IsNullOrWhiteSpace(executionResult.StdErr))
+        {
+            Workflow.Logger.LogInformation(
+                "[container-log] exec={ExecutionId} '{Label}' tenant={TenantId}:\n{ContainerLog}",
+                executionId, executionLabel, tenantId, executionResult.StdErr);
+        }
     }
 
     // ── Input/plugin formatting helpers ──────────────────────────────────────
@@ -249,43 +256,51 @@ public class ProcessingWorkflow
         {
             var succeeded = executionResult.Succeeded ? 1 : 0;
             var failed    = executionResult.Succeeded ? 0 : 1;
+            var blockName = orchestrationResult.ExecutionBlockName;
 
             var builder = XiansContext.Metrics
                 .ForModel("claude")
                 .WithCustomIdentifier(orchestrationResult.WebhookName)
-                .WithMetrics(
-                    ("actions", "called",    1,         "count"),
-                    ("actions", "succeeded", succeeded, "count"),
-                    ("actions", "failed",    failed,    "count")
-                );
+                .WithMetadata(new Dictionary<string, string> {
+                    { "repository_url", orchestrationResult.Execution?.RepositoryUrl ?? string.Empty },
+                    { "git_ref", orchestrationResult.Execution?.GitRef ?? string.Empty },
+                    { "prompt", orchestrationResult.Execution?.Prompt ?? string.Empty },
+                    { "execution_block_name", orchestrationResult.ExecutionBlockName ?? string.Empty } });
 
-            if (executionResult.CostUsd.HasValue)
-                builder = builder.WithMetric("actions", orchestrationResult.WebhookName, 1, "count");
-
-            // Per-execution-block metrics: lets us rank which rules.json execution blocks
-            // fire most often (e.g. "azuredevops-pull-request-review" vs
-            // "github-pr-review"), and which tend to succeed/fail. Generic
-            // called/succeeded/failed counters live alongside per-name counters so a
-            // dashboard can either chart totals or break down by execution name.
-            // Skipped when no block name is set (chat-driven / unnamed runs).
-            var blockName = orchestrationResult.ExecutionBlockName;
+            // Named webhook-driven runs: track totals and per-block breakdown so a
+            // dashboard can chart overall throughput or drill into individual execution
+            // blocks (e.g. "azuredevops-pull-request-review" vs "github-pr-review").
             if (!string.IsNullOrWhiteSpace(blockName))
             {
                 builder = builder
-                    .WithMetric("executions", "called",                 1,         "count")
-                    .WithMetric("executions", "succeeded",              succeeded, "count")
-                    .WithMetric("executions", "failed",                 failed,    "count")
-                    .WithMetric("executions", blockName,                1,         "count")
-                    .WithMetric("executions", $"{blockName}.succeeded", succeeded, "count")
-                    .WithMetric("executions", $"{blockName}.failed",    failed,    "count");
+                    .WithMetric("webhook-executions", "called",                 1,         "count")
+                    .WithMetric("webhook-executions", "succeeded",              succeeded, "count")
+                    .WithMetric("webhook-executions", "failed",                 failed,    "count")
+                    .WithMetric("webhook-executions", blockName,                1,         "count")
+                    .WithMetric("webhook-executions", $"{blockName}.succeeded", succeeded, "count")
+                    .WithMetric("webhook-executions", $"{blockName}.failed",    failed,    "count");
 
                 if (executionResult.CostUsd.HasValue)
                     builder = builder.WithMetric(
-                        "executions", $"{blockName}.cost", executionResult.CostUsd.Value, "usd");
+                        "webhook-executions", $"{blockName}.cost", executionResult.CostUsd.Value, "usd");
 
                 if (executionResult.DurationSeconds.HasValue)
                     builder = builder.WithMetric(
-                        "executions", $"{blockName}.duration", executionResult.DurationSeconds.Value, "seconds");
+                        "webhook-executions", $"{blockName}.duration", executionResult.DurationSeconds.Value, "seconds");
+            }
+            // Unnamed/chat-driven runs: tracked separately so they don't pollute
+            // webhook-executions totals and can be monitored independently.
+            else
+            {
+                builder = builder
+                    .WithMetric("chat-executions", "called",                         1,         "count")
+                    .WithMetric("chat-executions", "succeeded",                      succeeded, "count")
+                    .WithMetric("chat-executions", "failed",                         failed,    "count")
+                    .WithMetric("chat-executions", orchestrationResult.WebhookName,  1,         "count");
+
+                if (executionResult.CostUsd.HasValue)
+                    builder = builder.WithMetric(
+                        "chat-executions", "cost", executionResult.CostUsd.Value, "usd");
             }
 
             if (executionResult.CostUsd.HasValue)
