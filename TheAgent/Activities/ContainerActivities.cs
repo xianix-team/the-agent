@@ -213,6 +213,18 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
             await _docker.Containers.StartContainerAsync(containerId, new ContainerStartParameters());
             logger.LogInformation("Container '{ContainerId}' started for tenant={TenantId}.", ShortId(containerId), input.TenantId);
 
+            // If a proxy sidecar is running, connect the executor to the same bridge network
+            // so it can reach the proxy by container name (Docker DNS on user-defined bridges).
+            if (!string.IsNullOrEmpty(input.ProxyNetworkId))
+            {
+                await _docker.Networks.ConnectNetworkAsync(
+                    input.ProxyNetworkId,
+                    new NetworkConnectParameters { Container = containerId });
+                logger.LogInformation(
+                    "Executor container '{ContainerId}' connected to proxy network '{NetworkId}'.",
+                    ShortId(containerId), input.ProxyNetworkId);
+            }
+
             return containerId;
         }
         catch (DockerImageNotFoundException)
@@ -301,6 +313,128 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
                 StdErr         = $"Container timed out after {timeoutSeconds} seconds.",
             };
         }
+    }
+
+    /// <summary>
+    /// Creates a per-execution Docker bridge network, starts the LLM proxy sidecar container
+    /// on that network, and returns the container ID, network ID, and base URL to inject into
+    /// the executor. Auto-pulls the image if it is not present on the local Docker daemon.
+    /// On any failure the network is removed before re-throwing.
+    /// </summary>
+    [Activity]
+    public async Task<ProxyStartResult> StartProxyContainerAsync(ProxyStartInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        var logger = ActivityExecutionContext.Current.Logger;
+
+        var networkName   = $"xianix-net-{input.ExecutionId}";
+        var containerName = $"xianix-proxy-{input.ExecutionId}";
+
+        logger.LogInformation(
+            "Creating proxy network '{Network}' and starting proxy container '{Container}' " +
+            "for tenant={TenantId}, image={Image}.",
+            networkName, containerName, input.TenantId, input.Image);
+
+        // 1 — Create the per-execution bridge network.
+        var networkResponse = await _docker.Networks.CreateNetworkAsync(new NetworksCreateParameters
+        {
+            Name   = networkName,
+            Driver = "bridge",
+            Labels = new Dictionary<string, string>
+            {
+                ["xianix.tenant"]      = input.TenantId,
+                ["xianix.execution"]   = input.ExecutionId,
+                ["xianix.managed"]     = "true",
+            },
+        });
+        var networkId = networkResponse.ID;
+        logger.LogInformation("Proxy network '{Network}' created (id={NetworkId}).", networkName, networkId);
+
+        try
+        {
+            // 2 — Ensure the image is available locally (pull if missing).
+            await EnsureImagePulledAsync(input.Image, logger);
+
+            // 3 — Resolve proxy env vars (same rules as executor with-envs).
+            var proxyEnv = await BuildProxyEnvVarsAsync(input);
+
+            // 4 — Start the proxy container on the bridge network.
+            var createResponse = await _docker.Containers.CreateContainerAsync(
+                new CreateContainerParameters
+                {
+                    Name  = containerName,
+                    Image = input.Image,
+                    Env   = proxyEnv,
+                    Labels = new Dictionary<string, string>
+                    {
+                        ["xianix.tenant"]    = input.TenantId,
+                        ["xianix.execution"] = input.ExecutionId,
+                        ["xianix.managed"]   = "true",
+                        ["xianix.role"]      = "proxy",
+                    },
+                    HostConfig = new HostConfig
+                    {
+                        NetworkMode    = networkName,
+                        AutoRemove     = false,
+                        SecurityOpt    = ["no-new-privileges"],
+                    },
+                });
+
+            var containerId = createResponse.ID;
+            await _docker.Containers.StartContainerAsync(containerId, new ContainerStartParameters());
+            logger.LogInformation(
+                "Proxy container '{Container}' started (id={ContainerId}) on network '{Network}'.",
+                containerName, ShortId(containerId), networkName);
+
+            var proxyBaseUrl = $"http://{containerName}:{input.Port}";
+            return new ProxyStartResult
+            {
+                ContainerId  = containerId,
+                NetworkId    = networkId,
+                ProxyBaseUrl = proxyBaseUrl,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex,
+                "Failed to start proxy container for tenant={TenantId}. Cleaning up network '{Network}'.",
+                input.TenantId, networkName);
+            await TryRemoveNetworkAsync(networkId, logger);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Force-removes the proxy container and the per-execution Docker bridge network.
+    /// Idempotent — ignores 404 errors so it is safe to call even after a partial failure.
+    /// </summary>
+    [Activity]
+    public async Task CleanupProxyAsync(string proxyContainerId, string networkId)
+    {
+        var logger = ActivityExecutionContext.Current.Logger;
+
+        if (!string.IsNullOrWhiteSpace(proxyContainerId))
+        {
+            logger.LogInformation("Removing proxy container '{ContainerId}'.", ShortId(proxyContainerId));
+            try
+            {
+                await _docker.Containers.RemoveContainerAsync(
+                    proxyContainerId,
+                    new ContainerRemoveParameters { Force = true });
+            }
+            catch (DockerContainerNotFoundException)
+            {
+                // Already removed — idempotent.
+            }
+            catch (DockerApiException ex)
+            {
+                logger.LogWarning(ex,
+                    "Docker API error removing proxy container '{ContainerId}'.", ShortId(proxyContainerId));
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(networkId))
+            await TryRemoveNetworkAsync(networkId, logger);
     }
 
     /// <summary>
@@ -401,10 +535,47 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
 
         if (!string.IsNullOrEmpty(anthropic))
         {
-            env["ANTHROPIC-API-KEY"]  = anthropic;
-            prov["ANTHROPIC-API-KEY"] = new EnvProvenance(
-                EnvSource.HostEnv, Detail: "ANTHROPIC-API-KEY", Resolved: true,
-                Length: anthropic.Length, Mandatory: false, Override: false);
+            // Inject BOTH the dash form (Xianix convention) and the underscore form
+            // (Python SDK / Claude CLI read ANTHROPIC_API_KEY). On Linux these are
+            // distinct environment variable names — only setting one form means the
+            // SDK that reads the other form sees nothing.
+            foreach (var keyForm in new[] { "ANTHROPIC-API-KEY", "ANTHROPIC_API_KEY" })
+            {
+                env[keyForm]  = anthropic;
+                prov[keyForm] = new EnvProvenance(
+                    EnvSource.HostEnv, Detail: "ANTHROPIC-API-KEY", Resolved: true,
+                    Length: anthropic.Length, Mandatory: false, Override: false);
+            }
+        }
+
+        // When a proxy sidecar is running, override the Anthropic base URL so every LLM
+        // call from the executor is intercepted and forwarded to the configured backend.
+        if (!string.IsNullOrEmpty(input.ProxyBaseUrl))
+        {
+            foreach (var proxyEnvName in new[] { "ANTHROPIC_BASE_URL", "ANTHROPIC-BASE-URL" })
+            {
+                env[proxyEnvName]  = input.ProxyBaseUrl;
+                prov[proxyEnvName] = new EnvProvenance(
+                    EnvSource.Runtime, Detail: null, Resolved: true,
+                    Length: input.ProxyBaseUrl.Length, Mandatory: false, Override: false,
+                    Value: input.ProxyBaseUrl);
+            }
+
+            // If no real Anthropic key is set on the host the proxy will intercept and
+            // use its own upstream key, but the Claude CLI still checks that ANTHROPIC_API_KEY
+            // is present. Inject a placeholder so the auth check passes.
+            if (string.IsNullOrEmpty(anthropic))
+            {
+                const string placeholder = "proxy-intercepted";
+                foreach (var keyForm in new[] { "ANTHROPIC-API-KEY", "ANTHROPIC_API_KEY" })
+                {
+                    env[keyForm]  = placeholder;
+                    prov[keyForm] = new EnvProvenance(
+                        EnvSource.Constant, Detail: null, Resolved: true,
+                        Length: placeholder.Length, Mandatory: false, Override: false,
+                        Value: placeholder);
+                }
+            }
         }
 
         await InjectExecutionEnvVarsAsync(input.WithEnvsJson, env, prov, input.TenantId);
@@ -621,7 +792,9 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
         var runtimeOrder = new[]
         {
             "TENANT-ID", "EXECUTION-ID", "XIANIX-INPUTS",
-            "CLAUDE-CODE-PLUGINS", "PROMPT", "ANTHROPIC-API-KEY",
+            "CLAUDE-CODE-PLUGINS", "PROMPT",
+            "ANTHROPIC-API-KEY", "ANTHROPIC_API_KEY",
+            "ANTHROPIC_BASE_URL", "ANTHROPIC-BASE-URL",
         };
         var ordered = prov
             .OrderBy(kv => Array.IndexOf(runtimeOrder, kv.Key) is var idx && idx >= 0 ? idx : int.MaxValue)
@@ -719,6 +892,68 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
             var truncated = Length <= MaxBlockValueChars ? Value : Value[..MaxBlockValueChars] + "…";
             var indented  = truncated.Replace("\r\n", "\n").Replace("\n", "\n      ");
             return $"{Length} chars:\n      {indented}";
+        }
+    }
+
+    /// <summary>
+    /// Checks whether <paramref name="image"/> is present on the local Docker daemon; pulls
+    /// it if not. Logs pull progress at Debug level to avoid flooding the activity log.
+    /// </summary>
+    private async Task EnsureImagePulledAsync(string image, ILogger logger)
+    {
+        try
+        {
+            await _docker.Images.InspectImageAsync(image);
+            logger.LogDebug("Docker image '{Image}' already present locally.", image);
+            return;
+        }
+        catch (DockerImageNotFoundException)
+        {
+            // Image not present — fall through to pull.
+        }
+
+        logger.LogInformation("Docker image '{Image}' not found locally — pulling...", image);
+        await _docker.Images.CreateImageAsync(
+            new ImagesCreateParameters { FromImage = image },
+            authConfig: null,
+            new Progress<JSONMessage>(msg =>
+            {
+                if (!string.IsNullOrWhiteSpace(msg.Status))
+                    logger.LogDebug("Pull [{Image}] {Status} {ProgressDetail}",
+                        image, msg.Status, msg.ProgressMessage);
+            }));
+        logger.LogInformation("Docker image '{Image}' pulled successfully.", image);
+    }
+
+    /// <summary>
+    /// Resolves env vars for the proxy container using the same <c>with-envs</c> pipeline
+    /// as the executor, then returns them as a <c>KEY=VALUE</c> list.
+    /// </summary>
+    private async Task<List<string>> BuildProxyEnvVarsAsync(ProxyStartInput input)
+    {
+        var env  = new Dictionary<string, string>(StringComparer.Ordinal);
+        var prov = new Dictionary<string, EnvProvenance>(StringComparer.Ordinal);
+        await InjectExecutionEnvVarsAsync(input.WithEnvsJson, env, prov, input.TenantId);
+        return [.. env.Select(kv => $"{kv.Key}={kv.Value}")];
+    }
+
+    /// <summary>
+    /// Removes a Docker network, ignoring 404 errors (already removed / never existed).
+    /// </summary>
+    private async Task TryRemoveNetworkAsync(string networkId, ILogger logger)
+    {
+        try
+        {
+            await _docker.Networks.DeleteNetworkAsync(networkId);
+            logger.LogInformation("Proxy network '{NetworkId}' removed.", networkId);
+        }
+        catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // Already removed — idempotent.
+        }
+        catch (DockerApiException ex)
+        {
+            logger.LogWarning(ex, "Docker API error removing network '{NetworkId}'.", networkId);
         }
     }
 
