@@ -231,7 +231,8 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
                 Platform:             platform,
                 RepositoryUrl:        repoUrl,
                 RepositoryName:       repoName,
-                GitRef:               gitRef));
+                GitRef:               gitRef,
+                Proxy:                execution.Proxy));
         }
 
         if (matches.Count > 0)

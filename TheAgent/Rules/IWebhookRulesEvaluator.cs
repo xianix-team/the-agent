@@ -32,7 +32,8 @@ public sealed record EvaluationResult(
     string Platform = "",
     string RepositoryUrl = "",
     string RepositoryName = "",
-    string GitRef = "");
+    string GitRef = "",
+    ProxyConfig? Proxy = null);
 
 /// <summary>
 /// Outcome of a rules evaluation: zero or more matching execution blocks, or a skip reason.

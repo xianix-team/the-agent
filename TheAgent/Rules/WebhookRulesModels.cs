@@ -91,6 +91,37 @@ public sealed class WebhookExecution
     /// </summary>
     [JsonPropertyName("execute-prompt")]
     public string Prompt { get; init; } = "";
+
+    /// <summary>
+    /// Optional proxy sidecar configuration. When present, the agent spins up the proxy
+    /// container on a private Docker bridge network before the executor starts, injects
+    /// <c>ANTHROPIC_BASE_URL</c> so the executor routes every LLM call through the proxy,
+    /// and tears the proxy down after the executor finishes.
+    /// </summary>
+    [JsonPropertyName("proxy")]
+    public ProxyConfig? Proxy { get; init; }
+}
+
+/// <summary>
+/// Describes the LLM proxy sidecar to run alongside an executor container.
+/// </summary>
+public sealed class ProxyConfig
+{
+    /// <summary>Docker image to run as the proxy sidecar (e.g. <c>99xio/llm-model-proxy:latest</c>).</summary>
+    [JsonPropertyName("image")]
+    public string Image { get; init; } = "";
+
+    /// <summary>Container port the proxy listens on. Defaults to 8766.</summary>
+    [JsonPropertyName("port")]
+    public int Port { get; init; } = 8766;
+
+    /// <summary>
+    /// Environment variables to inject into the proxy container (same syntax as execution-level
+    /// <c>with-envs</c>: <c>host.VAR</c>, <c>secrets.KEY</c>, or <c>"constant": true</c>).
+    /// Typically contains the upstream API key (e.g. <c>Proxy__Providers__OpenAI__ApiKey</c>).
+    /// </summary>
+    [JsonPropertyName("with-envs")]
+    public List<EnvEntry> WithEnvs { get; init; } = [];
 }
 
 /// <summary>

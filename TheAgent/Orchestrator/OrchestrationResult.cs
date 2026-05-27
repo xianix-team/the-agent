@@ -143,6 +143,12 @@ public sealed class ExecutionSpec
 
     public string Prompt { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Optional proxy sidecar configuration threaded from rules.json via
+    /// <see cref="WebhookExecution.Proxy"/>. Null when no proxy is declared for this execution.
+    /// </summary>
+    public ProxyConfig? Proxy { get; init; }
+
     public ExecutionSpec() { }
 
     public ExecutionSpec(
@@ -152,7 +158,8 @@ public sealed class ExecutionSpec
         string platform = "",
         string repositoryUrl = "",
         string repositoryName = "",
-        string gitRef = "")
+        string gitRef = "",
+        ProxyConfig? proxy = null)
     {
         Plugins        = [.. plugins];
         WithEnvs       = withEnvs is null ? [] : [.. withEnvs];
@@ -161,5 +168,6 @@ public sealed class ExecutionSpec
         RepositoryUrl  = repositoryUrl ?? "";
         RepositoryName = repositoryName ?? "";
         GitRef         = gitRef ?? "";
+        Proxy          = proxy;
     }
 }

@@ -61,7 +61,8 @@ public sealed class EventOrchestrator : IEventOrchestrator
                     evaluation.Platform,
                     evaluation.RepositoryUrl,
                     evaluation.RepositoryName,
-                    evaluation.GitRef)
+                    evaluation.GitRef,
+                    evaluation.Proxy)
                 : null;
 
             matches.Add(OrchestrationResult.Matched(
