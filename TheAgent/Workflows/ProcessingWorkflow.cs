@@ -85,31 +85,86 @@ public class ProcessingWorkflow
 
         input = input with { VolumeName = volumeName };
 
-        var containerId = await Workflow.ExecuteActivityAsync(
-            (ContainerActivities a) => a.StartContainerAsync(input),
-            ContainerWorkflowOptions.Standard);
-
-        try
+        // ── Proxy sidecar (optional) ────────────────────────────────────────
+        // When the matched execution block declares a "proxy" section in rules.json, spin up
+        // the LLM proxy container on a private Docker bridge network before the executor
+        // starts. The executor's ANTHROPIC_BASE_URL is pointed at the proxy so every LLM call
+        // is intercepted and forwarded to the configured backend (OpenAI, Azure, Ollama …).
+        ProxyStartResult? proxyResult = null;
+        if (execution.Proxy is { Image.Length: > 0 } proxyCfg)
         {
-            var executionResult = await Workflow.ExecuteActivityAsync(
-                (ContainerActivities a) => a.WaitAndCollectOutputAsync(
-                    containerId,
-                    orchestrationResult.TenantId,
-                    executionLabel,
-                    (int)ContainerWorkflowOptions.ContainerExecutionTimeout.TotalSeconds),
-                ContainerWorkflowOptions.Wait);
+            var proxyInput = BuildProxyInput(executionId, orchestrationResult.TenantId, proxyCfg);
+            proxyResult = await Workflow.ExecuteActivityAsync(
+                (ContainerActivities a) => a.StartProxyContainerAsync(proxyInput),
+                ContainerWorkflowOptions.Standard);
 
-            ContainerOutputParser.Parse(executionResult);
-            LogOutcome(executionResult, executionLabel, executionId, orchestrationResult.TenantId, repoLabel, keyInputs);
-            await ReportExecutionMetricsAsync(orchestrationResult, executionResult);
+            input = input with
+            {
+                ProxyBaseUrl   = proxyResult.ProxyBaseUrl,
+                ProxyNetworkId = proxyResult.NetworkId,
+            };
+
+            Workflow.Logger.LogInformation(
+                "[proxy] exec={ExecutionId} proxy container started, base_url={ProxyBaseUrl}.",
+                executionId, proxyResult.ProxyBaseUrl);
+        }
+
+        try  // outer: ensures proxy cleanup even if executor fails to start
+        {
+            var containerId = await Workflow.ExecuteActivityAsync(
+                (ContainerActivities a) => a.StartContainerAsync(input),
+                ContainerWorkflowOptions.Standard);
+
+            try
+            {
+                var executionResult = await Workflow.ExecuteActivityAsync(
+                    (ContainerActivities a) => a.WaitAndCollectOutputAsync(
+                        containerId,
+                        orchestrationResult.TenantId,
+                        executionLabel,
+                        (int)ContainerWorkflowOptions.ContainerExecutionTimeout.TotalSeconds),
+                    ContainerWorkflowOptions.Wait);
+
+                ContainerOutputParser.Parse(executionResult);
+                LogOutcome(executionResult, executionLabel, executionId, orchestrationResult.TenantId, repoLabel, keyInputs);
+                await ReportExecutionMetricsAsync(orchestrationResult, executionResult);
+            }
+            finally
+            {
+                await Workflow.DelayAsync(TimeSpan.FromMinutes(2));
+                await Workflow.ExecuteActivityAsync(
+                    (ContainerActivities a) => a.CleanupContainerAsync(containerId),
+                    ContainerWorkflowOptions.Cleanup);
+            }
         }
         finally
         {
-            await Workflow.DelayAsync(TimeSpan.FromMinutes(2));
-            await Workflow.ExecuteActivityAsync(
-                (ContainerActivities a) => a.CleanupContainerAsync(containerId),
-                ContainerWorkflowOptions.Cleanup);
+            // Always tear down the proxy sidecar + bridge network, even when the executor
+            // container failed to start. This ensures no orphaned containers or networks.
+            if (proxyResult is not null)
+            {
+                await Workflow.ExecuteActivityAsync(
+                    (ContainerActivities a) => a.CleanupProxyAsync(
+                        proxyResult.ContainerId, proxyResult.NetworkId),
+                    ContainerWorkflowOptions.Cleanup);
+            }
         }
+    }
+
+    private static ProxyStartInput BuildProxyInput(
+        string executionId,
+        string tenantId,
+        Xianix.Rules.ProxyConfig cfg)
+    {
+        var envsJson = Xianix.Containers.ContainerEnvSerialization.Serialize(cfg.WithEnvs);
+        return new ProxyStartInput
+        {
+            ExecutionId  = executionId,
+            TenantId     = tenantId,
+            Image        = cfg.Image,
+            Port         = cfg.Port,
+            WithEnvsJson = envsJson,
+        };
     }
 
     // ── Pipeline steps ───────────────────────────────────────────────────────
