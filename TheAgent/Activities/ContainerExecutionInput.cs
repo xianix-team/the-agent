@@ -41,6 +41,22 @@ public sealed record ContainerExecutionInput
     public string VolumeName { get; init; } = string.Empty;
 
     /// <summary>
+    /// When set, injected as the <c>ANTHROPIC_BASE_URL</c> environment variable so the
+    /// executor routes every LLM call through the proxy sidecar instead of hitting the
+    /// Anthropic API directly. Set by the workflow after <c>StartProxyContainerAsync</c>
+    /// succeeds; null when no proxy is configured for this execution.
+    /// </summary>
+    public string? ProxyBaseUrl { get; init; }
+
+    /// <summary>
+    /// Docker network ID of the per-execution bridge network shared with the proxy sidecar.
+    /// When set, <c>StartContainerAsync</c> connects the executor container to this network
+    /// after start so it can reach the proxy by container name.
+    /// Null when no proxy is configured.
+    /// </summary>
+    public string? ProxyNetworkId { get; init; }
+
+    /// <summary>
     /// Phase selector forwarded as the <c>XIANIX-MODE</c> env var to the executor container.
     /// One of:
     /// <list type="bullet">
