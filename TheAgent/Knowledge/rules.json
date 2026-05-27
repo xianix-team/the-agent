@@ -42,6 +42,17 @@
                         "marketplace": "xianix-team/plugins-official"
                     }
                 ],
+                "proxy": {
+                    "image": "99xio/llm-model-proxy:latest",
+                    "port": 8766,
+                    "with-envs": [
+                        {
+                            "name": "Proxy__Providers__OpenAI__ApiKey",
+                            "value": "secrets.OPENAI-API-KEY",
+                            "mandatory": true
+                        }
+                    ]
+                },
                 "execute-prompt": "You are reviewing pull request {{pr-link}}. Run /pr-review to perform the automated review."
             },
             {
@@ -84,6 +95,17 @@
                         "mandatory": true
                     }
                 ],
+                "proxy": {
+                    "image": "99xio/llm-model-proxy:latest",
+                    "port": 8766,
+                    "with-envs": [
+                        {
+                            "name": "Proxy__Providers__OpenAI__ApiKey",
+                            "value": "secrets.OPENAI-API-KEY",
+                            "mandatory": true
+                        }
+                    ]
+                },
                 "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}} (branch: {{git-ref}}).\n\nRun /pr-review to perform the automated review. "
             },
             {
@@ -111,6 +133,17 @@
                         "marketplace": "xianix-team/plugins-official"
                     }
                 ],
+                "proxy": {
+                    "image": "99xio/llm-model-proxy:latest",
+                    "port": 8766,
+                    "with-envs": [
+                        {
+                            "name": "Proxy__Providers__OpenAI__ApiKey",
+                            "value": "secrets.OPENAI-API-KEY",
+                            "mandatory": true
+                        }
+                    ]
+                },
                 "execute-prompt": "Issue #{{issue-number}} in the repository {{repository-name}} has been assigned to xianix-agent for requirement analysis.\n\nRun /requirement-analysis {{issue-number}} to perform the automated requirement analysis and elaboration."
             },
             {
@@ -141,6 +174,17 @@
                         "mandatory": true
                     }
                 ],
+                "proxy": {
+                    "image": "99xio/llm-model-proxy:latest",
+                    "port": 8766,
+                    "with-envs": [
+                        {
+                            "name": "Proxy__Providers__OpenAI__ApiKey",
+                            "value": "secrets.OPENAI-API-KEY",
+                            "mandatory": true
+                        }
+                    ]
+                },
                 "execute-prompt": "Work item #{{workitem-id}} has been assigned to xianix-agent for requirement analysis.\n\nRun /requirement-analysis {{workitem-id}} to perform the automated requirement analysis and elaboration."
             }
         ]
