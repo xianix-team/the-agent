@@ -18,12 +18,24 @@ public sealed class EventOrchestrator : IEventOrchestrator
         string webhookName,
         object? payload,
         string tenantId,
+        IReadOnlyDictionary<string, string>? headers = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(webhookName);
         ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
 
-        _logger.LogDebug("Orchestrating event '{WebhookName}' for tenant '{TenantId}'.", webhookName, tenantId);
+        if (headers is { Count: > 0 })
+        {
+            _logger.LogDebug(
+                "Orchestrating event '{WebhookName}' for tenant '{TenantId}' with inbound header keys: {HeaderKeys}.",
+                webhookName,
+                tenantId,
+                string.Join(", ", headers.Keys));
+        }
+        else
+        {
+            _logger.LogDebug("Orchestrating event '{WebhookName}' for tenant '{TenantId}'.", webhookName, tenantId);
+        }
 
         EvaluationOutcome outcome;
         try

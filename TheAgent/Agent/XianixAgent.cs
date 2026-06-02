@@ -136,6 +136,7 @@ public class XianixAgent(
                     context.Webhook.Name,
                     context.Webhook.Payload,
                     context.Webhook.TenantId,
+                    context.Metadata,
                     cancellationToken);
 
                 if (!batch.Handled)

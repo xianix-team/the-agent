@@ -9,5 +9,6 @@ public interface IEventOrchestrator
         string webhookName,
         object? payload,
         string tenantId,
+        IReadOnlyDictionary<string, string>? headers = null,
         CancellationToken cancellationToken = default);
 }
