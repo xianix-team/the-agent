@@ -15,7 +15,7 @@ public class ProcessingWorkflow
 {
 
     [WorkflowRun]
-    public async Task WorkflowRun(OrchestrationResult orchestrationResult)
+    public async Task WorkflowRun(ProcessingRequest orchestrationResult)
     {
         ArgumentNullException.ThrowIfNull(orchestrationResult);
 
@@ -24,8 +24,8 @@ public class ProcessingWorkflow
             if (orchestrationResult.Execution is null)
             {
                 Workflow.Logger.LogWarning(
-                    "[skip] No execution spec for webhook '{WebhookName}' (tenant={TenantId}, block={Block}). Skipping.",
-                    orchestrationResult.WebhookName,
+                    "[skip] No execution spec for '{Name}' (tenant={TenantId}, block={Block}). Skipping.",
+                    orchestrationResult.Name,
                     orchestrationResult.TenantId,
                     orchestrationResult.ExecutionBlockName ?? "—");
                 return;
@@ -36,44 +36,44 @@ public class ProcessingWorkflow
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Workflow.Logger.LogError(ex,
-                "[fatal] ProcessingWorkflow failed for tenant={TenantId}, webhook='{WebhookName}', block='{Block}'.",
+                "[fatal] ProcessingWorkflow failed for tenant={TenantId}, name='{Name}', block='{Block}'.",
                 orchestrationResult.TenantId,
-                orchestrationResult.WebhookName,
+                orchestrationResult.Name,
                 orchestrationResult.ExecutionBlockName ?? "—");
             throw new ApplicationFailureException(
                 $"Processing workflow failed: {ex.Message}", ex, nonRetryable: true);
         }
     }
 
-    private static async Task ExecuteContainerPipelineAsync(OrchestrationResult orchestrationResult)
+    private static async Task ExecuteContainerPipelineAsync(ProcessingRequest orchestrationResult)
     {
-        var execution      = orchestrationResult.Execution!;
-        var repositoryUrl  = execution.RepositoryUrl;
-        var blockName      = orchestrationResult.ExecutionBlockName ?? "—";
+        var execution = orchestrationResult.Execution!;
+        var repositoryUrl = execution.RepositoryUrl;
+        var blockName = orchestrationResult.ExecutionBlockName ?? "—";
         var executionLabel = string.IsNullOrWhiteSpace(orchestrationResult.ExecutionBlockName)
-            ? $"webhook={orchestrationResult.WebhookName}"
-            : $"webhook={orchestrationResult.WebhookName}, block={orchestrationResult.ExecutionBlockName}";
+            ? $"name={orchestrationResult.Name}"
+            : $"name={orchestrationResult.Name}, block={orchestrationResult.ExecutionBlockName}";
 
-        var input         = BuildContainerInput(orchestrationResult);
-        var executionId   = input.ExecutionId;
-        var keyInputs     = FormatKeyInputs(orchestrationResult.Inputs);
+        var input = BuildContainerInput(orchestrationResult);
+        var executionId = input.ExecutionId;
+        var keyInputs = FormatKeyInputs(orchestrationResult.Inputs);
         var pluginSummary = FormatPluginSummary(execution.Plugins);
-        var repoLabel     = string.IsNullOrEmpty(execution.RepositoryName)
+        var repoLabel = string.IsNullOrEmpty(execution.RepositoryName)
             ? (string.IsNullOrEmpty(repositoryUrl) ? "(none)" : repositoryUrl)
             : execution.RepositoryName;
-        var refLabel      = string.IsNullOrEmpty(execution.GitRef) ? "(default)" : execution.GitRef;
+        var refLabel = string.IsNullOrEmpty(execution.GitRef) ? "(default)" : execution.GitRef;
         var platformLabel = string.IsNullOrEmpty(execution.Platform) ? "(none)" : execution.Platform;
 
         Workflow.Logger.LogInformation(
             "[start] exec={ExecutionId} block='{Block}' tenant={TenantId} repo={Repo}@{Ref} platform={Platform} " +
-            "webhook='{WebhookName}' inputs=[{KeyInputs}] plugins={PluginCount}{PluginList}.",
+            "name='{Name}' inputs=[{KeyInputs}] plugins={PluginCount}{PluginList}.",
             executionId,
             blockName,
             orchestrationResult.TenantId,
             repoLabel,
             refLabel,
             platformLabel,
-            orchestrationResult.WebhookName,
+            orchestrationResult.Name,
             keyInputs,
             execution.Plugins.Count,
             pluginSummary);
@@ -113,26 +113,26 @@ public class ProcessingWorkflow
 
     // ── Pipeline steps ───────────────────────────────────────────────────────
 
-    private static ContainerExecutionInput BuildContainerInput(OrchestrationResult result)
+    private static ContainerExecutionInput BuildContainerInput(ProcessingRequest result)
     {
-        var inputsJson  = JsonSerializer.Serialize(result.Inputs);
+        var inputsJson = JsonSerializer.Serialize(result.Inputs);
         var pluginsJson = ContainerPluginSerialization.Serialize(result.Execution!.Plugins);
-        var envsJson    = ContainerEnvSerialization.Serialize(result.Execution.WithEnvs);
+        var envsJson = ContainerEnvSerialization.Serialize(result.Execution.WithEnvs);
 
         return new ContainerExecutionInput
         {
-            TenantId          = result.TenantId,
-            ExecutionId       = Workflow.Random.Next().ToString("x8"),
-            InputsJson        = inputsJson,
+            TenantId = result.TenantId,
+            ExecutionId = Workflow.Random.Next().ToString("x8"),
+            InputsJson = inputsJson,
             ClaudeCodePlugins = pluginsJson,
-            WithEnvsJson      = envsJson,
-            Prompt            = result.Execution.Prompt,
-            Model             = result.Execution.Model,
-            MaxTurns          = result.Execution.MaxTurns,
-            AllowedTools      = result.Execution.AllowedTools,
-            DisallowedTools   = result.Execution.DisallowedTools,
-            MaxBudgetUsd      = result.Execution.MaxBudgetUsd,
-            ResumeSessions    = result.Execution.ResumeSessions,
+            WithEnvsJson = envsJson,
+            Prompt = result.Execution.Prompt,
+            Model = result.Execution.Model,
+            MaxTurns = result.Execution.MaxTurns,
+            AllowedTools = result.Execution.AllowedTools,
+            DisallowedTools = result.Execution.DisallowedTools,
+            MaxBudgetUsd = result.Execution.MaxBudgetUsd,
+            ResumeSessions = result.Execution.ResumeSessions,
         };
     }
 
@@ -257,7 +257,7 @@ public class ProcessingWorkflow
 
         // Cap the inline list so a flow with many plugins doesn't blow up the headline.
         const int maxInline = 3;
-        var shown   = names.Take(maxInline);
+        var shown = names.Take(maxInline);
         var trailer = names.Count > maxInline ? $", +{names.Count - maxInline} more" : "";
         return $" [{string.Join(", ", shown)}{trailer}]";
     }
@@ -272,34 +272,30 @@ public class ProcessingWorkflow
     // ── Metrics ──────────────────────────────────────────────────────────────
 
     private static async Task ReportExecutionMetricsAsync(
-        OrchestrationResult orchestrationResult,
+        ProcessingRequest orchestrationResult,
         ContainerExecutionResult executionResult)
     {
         try
         {
             var execution = orchestrationResult.Execution;
 
-            // All runs reaching this workflow are webhook-driven (ProcessingWorkflow is only
-            // started by the webhook handler), so they always land in webhook-executions.
-            // Named runs additionally get a per-block breakdown via BlockName. Chat-initiated
-            // runs report their own chat-executions metrics from ClaudeCodeChatWorkflow.
             var ctx = new ExecutionMetricsContext
             {
-                Category         = ExecutionMetrics.WebhookCategory,
-                Source           = ExecutionMetrics.WebhookSource,
-                CustomIdentifier = orchestrationResult.WebhookName,
-                TenantId         = orchestrationResult.TenantId,
-                RepositoryUrl    = execution?.RepositoryUrl  ?? string.Empty,
-                RepositoryName   = execution?.RepositoryName ?? string.Empty,
-                GitRef           = execution?.GitRef         ?? string.Empty,
-                Platform         = execution?.Platform       ?? string.Empty,
-                Prompt           = execution?.Prompt         ?? string.Empty,
-                BlockName        = orchestrationResult.ExecutionBlockName,
-                MaxBudgetUsd     = execution?.MaxBudgetUsd,
-                Plugins          = execution?.Plugins ?? (IReadOnlyList<PluginEntry>)[],
-                ExtraMetadata    = new Dictionary<string, string>
+                Category = orchestrationResult.Type == ProcessingType.Webhook ? ExecutionMetrics.WebhookCategory : ExecutionMetrics.ScheduleCategory,
+                Source = orchestrationResult.Type == ProcessingType.Webhook ? ExecutionMetrics.WebhookSource : ExecutionMetrics.ScheduleSource,
+                CustomIdentifier = orchestrationResult.Name,
+                TenantId = orchestrationResult.TenantId,
+                RepositoryUrl = execution?.RepositoryUrl ?? string.Empty,
+                RepositoryName = execution?.RepositoryName ?? string.Empty,
+                GitRef = execution?.GitRef ?? string.Empty,
+                Platform = execution?.Platform ?? string.Empty,
+                Prompt = execution?.Prompt ?? string.Empty,
+                BlockName = orchestrationResult.ExecutionBlockName,
+                MaxBudgetUsd = execution?.MaxBudgetUsd,
+                Plugins = execution?.Plugins ?? (IReadOnlyList<PluginEntry>)[],
+                ExtraMetadata = new Dictionary<string, string>
                 {
-                    ["webhook_name"] = orchestrationResult.WebhookName,
+                    ["name"] = orchestrationResult.Name,
                 },
             };
 
@@ -308,8 +304,8 @@ public class ProcessingWorkflow
         catch (Exception ex)
         {
             Workflow.Logger.LogWarning(ex,
-                "Failed to report execution metrics for webhook '{WebhookName}', block '{Block}'. Metrics are non-critical.",
-                orchestrationResult.WebhookName,
+                "Failed to report execution metrics for '{Name}', block '{Block}'. Metrics are non-critical.",
+                orchestrationResult.Name,
                 orchestrationResult.ExecutionBlockName ?? "—");
         }
     }
