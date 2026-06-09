@@ -220,12 +220,6 @@ public class XianixAgent(
         );
 
         await xiansAgent.Knowledge.UploadEmbeddedResourceAsync(
-            resourcePath: "Knowledge/schedules.json",
-            knowledgeName: Constants.SchedulesKnowledgeName,
-            knowledgeType: "json"
-        );
-
-        await xiansAgent.Knowledge.UploadEmbeddedResourceAsync(
             resourcePath: "Knowledge/system-prompt.md",
             knowledgeName: Constants.SystemPromptKnowledgeName,
             knowledgeType: "markdown"
