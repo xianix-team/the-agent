@@ -250,6 +250,9 @@ public sealed class RepositoryBindingTemplate
     /// </summary>
     [JsonPropertyName("ref")]
     public RepoFieldBinding? Ref { get; init; }
+    /// </summary>
+    [JsonPropertyName("name")]
+    public RepoFieldBinding? Name { get; init; }
 }
 
 /// <summary>
