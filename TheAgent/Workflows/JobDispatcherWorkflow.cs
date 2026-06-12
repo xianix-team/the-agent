@@ -18,11 +18,24 @@ public class JobDispatcherWorkflow
         {
             foreach (WebhookExecution execution in scheduleEntry.Executions)
             {
+                var inputs = new Dictionary<string, object?>(StringComparer.Ordinal);
+                if (!string.IsNullOrEmpty(execution.Platform))
+                    inputs["platform"] = execution.Platform;
+                if (!string.IsNullOrEmpty(execution.Repository?.Url?.Value.ToString()))
+                    inputs["repository-url"] = execution.Repository.Url.Value.ToString();
+                if (!string.IsNullOrEmpty(execution.Repository?.Name?.Value.ToString()))
+                    inputs["repository-name"] = execution.Repository.Name.Value.ToString();
+                if (!string.IsNullOrEmpty(execution.Repository?.Ref?.Value.ToString()))
+                    inputs["git-ref"] = execution.Repository.Ref.Value.ToString();
+
+                execution.WithEnvs.AddRange(scheduleEntry.EnvVars);
+
                 ProcessingRequest request = new ProcessingRequest()
                 {
                     Name = scheduleEntry.ScheduleName,
                     Type = ProcessingType.Schedule,
                     TenantId = XiansContext.TenantId,
+                    Inputs = inputs,
                     Execution = new ExecutionSpec(
                     execution.Plugins,
                     execution.Prompt,
