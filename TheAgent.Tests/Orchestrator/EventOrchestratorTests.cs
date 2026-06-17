@@ -61,6 +61,23 @@ public class EventOrchestratorTests
     }
 
     [Fact]
+    public async Task OrchestrateAsync_WithInboundHeaders_DoesNotThrowAndStillEvaluatesRules()
+    {
+        var headers = new Dictionary<string, string>
+        {
+            ["X-GitHub-Event"] = "push",
+            ["X-Hub-Signature-256"] = "sha256=abc"
+        };
+        _evaluator.EvaluateAsync(Arg.Any<string>(), Arg.Any<object?>())
+                  .Returns(Task.FromResult(EvaluationOutcome.Skip("no match")));
+
+        var batch = await _sut.OrchestrateAsync("github-pr", new { }, "tenant-1", headers);
+
+        Assert.False(batch.Handled);
+        await _evaluator.Received(1).EvaluateAsync("github-pr", Arg.Any<object?>());
+    }
+
+    [Fact]
     public async Task OrchestrateAsync_PassesWebhookNameAndPayloadToEvaluator()
     {
         var payload = new { action = "closed" };

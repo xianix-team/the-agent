@@ -9,6 +9,28 @@ public sealed class WebhookRuleSet
     public string WebhookName { get; init; } = "";
 
     /// <summary>
+    /// Optional tenant-secret key used to verify inbound GitHub webhook signatures.
+    /// When present, the webhook ingress path validates <c>X-Hub-Signature-256</c>
+    /// against the raw payload before orchestrating any executions.
+    /// </summary>
+    [JsonPropertyName("github-webhook-verification-secret")]
+    public string GithubWebhookVerificationSecret { get; init; } = "";
+
+    /// <summary>
+    /// Optional tenant-secret key whose <em>value</em> must match the shared secret
+    /// Azure DevOps sends in a custom HTTP header on service hook deliveries.
+    /// </summary>
+    [JsonPropertyName("azuredevops-webhook-verification-secret")]
+    public string AzureDevOpsWebhookVerificationSecret { get; init; } = "";
+
+    /// <summary>
+    /// HTTP header name Azure DevOps includes via service hook <c>httpHeaders</c>.
+    /// Defaults to <c>X-Hook-Secret</c> when omitted.
+    /// </summary>
+    [JsonPropertyName("azuredevops-webhook-verification-header")]
+    public string AzureDevOpsWebhookVerificationHeader { get; init; } = "";
+
+    /// <summary>
     /// Rule-set-wide common environment variables that apply to <em>every</em> execution
     /// in this rule set. Use these for credentials or settings every execution shares
     /// (e.g. a <c>GITHUB-TOKEN</c> consumed by every GitHub-driven execution) so the same
@@ -309,7 +331,7 @@ internal sealed class RepoFieldBindingJsonConverter : JsonConverter<RepoFieldBin
                     if (reader.TokenType == JsonTokenType.EndObject)
                         return new RepoFieldBinding
                         {
-                            Value    = value ?? "",
+                            Value = value ?? "",
                             Constant = constant ?? false,
                         };
 
@@ -328,7 +350,7 @@ internal sealed class RepoFieldBindingJsonConverter : JsonConverter<RepoFieldBin
                     {
                         constant = reader.TokenType switch
                         {
-                            JsonTokenType.True  => true,
+                            JsonTokenType.True => true,
                             JsonTokenType.False => false,
                             _ => throw new JsonException(
                                 $"Repository field binding 'constant' must be boolean, got '{reader.TokenType}'."),

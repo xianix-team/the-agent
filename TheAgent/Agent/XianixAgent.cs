@@ -18,6 +18,8 @@ public class XianixAgent(
     ILogger<SupervisorSubagentTools> supervisorToolsLogger,
     ILoggerFactory loggerFactory)
 {
+    private readonly WebhookVerificationGate _webhookVerificationGate = new(logger);
+
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
         logger.LogDebug("Initializing Xians platform connection.");
@@ -139,10 +141,46 @@ public class XianixAgent(
         {
             try
             {
+                var verification = await _webhookVerificationGate.VerifyAsync(
+                    context.Webhook.Name,
+                    context.Webhook.Payload ?? "",
+                    context.Metadata,
+                    cancellationToken);
+                if (verification.IsSkipped)
+                {
+                    logger.LogDebug(
+                        "Webhook verification skipped for '{WebhookName}', tenant='{TenantId}', reason='{Reason}'.",
+                        context.Webhook.Name,
+                        context.Webhook.TenantId,
+                        verification.Reason);
+                }
+                else if (verification.IsPassed)
+                {
+                    logger.LogInformation(
+                        "Webhook verification passed for '{WebhookName}', tenant='{TenantId}'.",
+                        context.Webhook.Name,
+                        context.Webhook.TenantId);
+                }
+                else
+                {
+                    LogWebhookVerificationFailure(
+                        context.Webhook.Name,
+                        context.Webhook.TenantId,
+                        context.Webhook.RequestId,
+                        verification.Reason);
+                    context.Respond(new
+                    {
+                        status = "ignored",
+                        reason = "Webhook could not be verified."
+                    });
+                    return;
+                }
+
                 var batch = await orchestrator.OrchestrateAsync(
                     context.Webhook.Name,
                     context.Webhook.Payload,
                     context.Webhook.TenantId,
+                    context.Metadata,
                     cancellationToken);
 
                 if (!batch.Handled)
@@ -229,5 +267,41 @@ public class XianixAgent(
             knowledgeName: Constants.SystemPromptKnowledgeName,
             knowledgeType: "markdown"
         );
+    }
+
+    private void LogWebhookVerificationFailure(
+        string webhookName,
+        string tenantId,
+        string requestId,
+        string reason)
+    {
+        switch (reason)
+        {
+            case WebhookVerificationReasons.MissingVerificationHeader:
+                logger.LogWarning(
+                    "Azure DevOps webhook verification failed for '{WebhookName}', tenant='{TenantId}', requestId='{RequestId}', reason='{Reason}': verification header not found in request (check Service Hook HTTP headers and azuredevops-webhook-verification-header in rules). Skipping workflow execution.",
+                    webhookName, tenantId, requestId, reason);
+                break;
+            case WebhookVerificationReasons.VerificationSecretMismatch:
+                logger.LogWarning(
+                    "Azure DevOps webhook verification failed for '{WebhookName}', tenant='{TenantId}', requestId='{RequestId}', reason='{Reason}': shared secret in request header does not match the configured vault value. Skipping workflow execution.",
+                    webhookName, tenantId, requestId, reason);
+                break;
+            case WebhookVerificationReasons.MissingSignatureHeader:
+                logger.LogWarning(
+                    "GitHub webhook verification failed for '{WebhookName}', tenant='{TenantId}', requestId='{RequestId}', reason='{Reason}': X-Hub-Signature-256 header not found in request. Skipping workflow execution.",
+                    webhookName, tenantId, requestId, reason);
+                break;
+            case WebhookVerificationReasons.SignatureMismatch:
+                logger.LogWarning(
+                    "GitHub webhook verification failed for '{WebhookName}', tenant='{TenantId}', requestId='{RequestId}', reason='{Reason}': HMAC signature does not match the configured webhook secret. Skipping workflow execution.",
+                    webhookName, tenantId, requestId, reason);
+                break;
+            default:
+                logger.LogWarning(
+                    "Webhook verification failed for '{WebhookName}', tenant='{TenantId}', requestId='{RequestId}', reason='{Reason}'. Skipping workflow execution.",
+                    webhookName, tenantId, requestId, reason);
+                break;
+        }
     }
 }
