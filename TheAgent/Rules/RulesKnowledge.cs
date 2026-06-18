@@ -83,8 +83,8 @@ public static class RulesKnowledge
 
         try
         {
-            return JsonSerializer.Deserialize<List<WebhookRuleSet>>(doc.Content, RulesJsonOptions)
-                   ?? [];
+            return [.. (JsonSerializer.Deserialize<List<WebhookRuleSet>>(doc.Content, RulesJsonOptions)
+                   ?? []).Where(e => !string.IsNullOrWhiteSpace(e.WebhookName))];
         }
         catch (JsonException ex)
         {

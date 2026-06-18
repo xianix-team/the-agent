@@ -15,9 +15,6 @@ public sealed class ScheduleEntry
     [JsonPropertyName("with-envs")]
     public List<EnvEntry> EnvVars { get; init; } = [];
 
-    [JsonPropertyName("execute-prompt")]
-    public string Prompt { get; init; } = string.Empty;
-
-    [JsonPropertyName("use-inputs")]
-    public Dictionary<string, object?> Inputs { get; init; } = new Dictionary<string, object?>();
+    [JsonPropertyName("executions")]
+    public List<WebhookExecution> Executions { get; init; } = [];
 }

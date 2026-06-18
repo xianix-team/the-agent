@@ -22,6 +22,7 @@ internal static class ExecutionMetrics
     public const string ModelName = "claude";
 
     public const string WebhookCategory = "webhook-executions";
+    public const string ScheduleCategory = "schedule-executions";
     public const string ChatCategory    = "chat-executions";
 
     /// <summary>
@@ -32,6 +33,7 @@ internal static class ExecutionMetrics
     public const string ChatConversationCategory = "chat-conversations";
 
     public const string WebhookSource          = "webhook";
+    public const string ScheduleSource         = "schedule";
     public const string ChatSource             = "chat";
     public const string ChatConversationSource = "chat-conversation";
 

@@ -19,7 +19,7 @@ public sealed class ScheduleEvaluator()
     public async Task<List<ScheduleEntry>> Evaluate()
     {
 
-        var rulesKnowledge = await XiansContext.CurrentAgent.Knowledge.GetAsync(Constants.SchedulesKnowledgeName);
+        var rulesKnowledge = await XiansContext.CurrentAgent.Knowledge.GetAsync(Constants.RulesKnowledgeName);
         if (rulesKnowledge == null)
         {
             throw new InvalidOperationException("No rules knowledge document found.");
@@ -34,7 +34,8 @@ public sealed class ScheduleEvaluator()
 
         try
         {
-            return JsonSerializer.Deserialize<List<ScheduleEntry>>(rulesJson, RulesJsonOptions) ?? [];
+            return [.. (JsonSerializer.Deserialize<List<ScheduleEntry>>(rulesJson, RulesJsonOptions) ?? [])
+                .Where(e => !string.IsNullOrWhiteSpace(e.ScheduleName))];
         }
         catch (JsonException)
         {
