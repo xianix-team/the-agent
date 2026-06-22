@@ -34,7 +34,9 @@ public sealed class ScheduleEvaluator()
 
         try
         {
-            return [.. (JsonSerializer.Deserialize<List<ScheduleEntry>>(rulesJson, RulesJsonOptions) ?? [])
+            List<ScheduleEntryWrapper> wrappers = JsonSerializer.Deserialize<List<ScheduleEntryWrapper>>(rulesJson, RulesJsonOptions) ?? [];
+            var executions = wrappers.SelectMany(w => w.Executions).ToList() ?? [];
+            return [.. executions
                 .Where(e => !string.IsNullOrWhiteSpace(e.ScheduleName))];
         }
         catch (JsonException)

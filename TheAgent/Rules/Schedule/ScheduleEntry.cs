@@ -18,3 +18,9 @@ public sealed class ScheduleEntry
     [JsonPropertyName("executions")]
     public List<WebhookExecution> Executions { get; init; } = [];
 }
+
+public sealed class ScheduleEntryWrapper
+{
+    [JsonPropertyName("executions")]
+    public List<ScheduleEntry> Executions { get; init; } = [];
+}
