@@ -37,20 +37,20 @@ public class JobDispatcherWorkflow
                     TenantId = XiansContext.TenantId,
                     Inputs = inputs,
                     Execution = new ExecutionSpec(
-                    execution.Plugins,
-                    execution.Prompt,
-                    execution.WithEnvs,
-                    execution.Platform,
-                    execution.Repository?.Url?.Value.ToString() ?? string.Empty,
-                    execution.Repository?.Name?.Value.ToString() ?? string.Empty,
-                    execution.Repository?.Ref?.Value.ToString() ?? string.Empty,
-                    execution.Model,
-                    execution.MaxTurns,
-                    execution.AllowedTools,
-                    execution.DisallowedTools,
-                    execution.MaxBudgetUsd,
-                    execution.ResumeSessions
-                ),
+                        execution.Plugins,
+                        execution.Prompt,
+                        execution.WithEnvs,
+                        execution.Platform,
+                        execution.Repository?.Url?.Value.ToString() ?? string.Empty,
+                        execution.Repository?.Name?.Value.ToString() ?? string.Empty,
+                        execution.Repository?.Ref?.Value.ToString() ?? string.Empty,
+                        execution.Model,
+                        execution.MaxTurns,
+                        execution.AllowedTools,
+                        execution.DisallowedTools,
+                        execution.MaxBudgetUsd,
+                        execution.ResumeSessions
+                    ),
                 };
                 await XiansContext.Workflows.StartAsync<ProcessingWorkflow>(new object[] { request }, Guid.NewGuid().ToString());
 
