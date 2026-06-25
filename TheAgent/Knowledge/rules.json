@@ -55,16 +55,12 @@
                 },
                 "match-any": [
                     {
-                        "name": "azuredevops-pr-created-with-tag",
-                        "rule": "eventType==git.pullrequest.created&&resource.labels.*.name=='ai-dlc/pr/pr-review'"
-                    },
-                    {
-                        "name": "azuredevops-pr-source-branch-updated-with-tag",
-                        "rule": "eventType==git.pullrequest.updated&&resource.labels.*.name=='ai-dlc/pr/pr-review'&&message.text*='updated the source branch'"
-                    },
-                    {
                         "name": "azuredevops-pr-agent-added-as-reviewer",
                         "rule": "eventType==git.pullrequest.updated&&message.text*='changed the reviewer list'&&resource.reviewers.*.uniqueName=='xianix-agent@99x.io'"
+                    },
+                    {
+                        "name": "azuredevops-pr-source-branch-updated-agent-reviewer",
+                        "rule": "eventType==git.pullrequest.updated&&message.text*='updated the source branch'&&resource.reviewers.*.uniqueName=='xianix-agent@99x.io'"
                     }
                 ],
                 "use-inputs": [
@@ -88,7 +84,42 @@
                 ],
                 "model": "claude-sonnet-4-5",
                 "max-budget-usd": 5.0,
-                "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}} (branch: {{git-ref}}).\n\nRun /pr-review to perform the automated review. "
+                "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}} (branch: {{git-ref}}).\n\nRun /pr-review to perform the automated review."
+            },
+            {
+                "name": "azuredevops-pr-review-comment-trigger",
+                "platform": "azuredevops",
+                "repository": {
+                    "url": "resource.repository.remoteUrl"
+                },
+                "match-any": [
+                    {
+                        "name": "azuredevops-pr-comment-with-trigger-phrase",
+                        "rule": "eventType==ms.vss-code.git-pullrequest-comment-event&&resource.comment.parentCommentId==0&&resource.comment.content*='ai-dlc/pr/pr-review'&&message.text*='commented on a pull request'"
+                    }
+                ],
+                "use-inputs": [
+                    {
+                        "name": "pr-number",
+                        "value": "resource.pullRequestId"
+                    }
+                ],
+                "use-plugins": [
+                    {
+                        "plugin-name": "pr-reviewer@xianix-plugins-official",
+                        "marketplace": "xianix-team/plugins-official"
+                    }
+                ],
+                "with-envs": [
+                    {
+                        "name": "AZURE-DEVOPS-TOKEN",
+                        "value": "secrets.AZURE-DEVOPS-TOKEN",
+                        "mandatory": true
+                    }
+                ],
+                "model": "claude-sonnet-4-5",
+                "max-budget-usd": 5.0,
+                "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}}.\n\nRun /pr-review to perform the automated review."
             },
             {
                 "name": "github-issue-requirement-analysis",
