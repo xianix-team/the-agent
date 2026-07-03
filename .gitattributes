@@ -1,0 +1,13 @@
+# Shell scripts and the executor entrypoint MUST use LF line endings. On Windows
+# with core.autocrlf=true, a CRLF checkout bakes `#!/usr/bin/env bash\r` into the
+# image and the container fails to start with `env: 'bash\r': No such file or directory`.
+# Forcing eol=lf keeps every checkout (and every docker build) Linux-safe.
+*.sh   text eol=lf
+*.bash text eol=lf
+
+# The executor also ships Python helpers that run under a Linux interpreter.
+*.py   text eol=lf
+
+# Dockerfiles and shell-adjacent config are parsed on Linux — keep them LF too.
+Dockerfile       text eol=lf
+*.Dockerfile     text eol=lf

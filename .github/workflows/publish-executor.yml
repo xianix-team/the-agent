@@ -50,6 +50,8 @@ jobs:
       with:
         context: ./Executor
         file: ./Executor/Dockerfile
+        build-args: |
+          INSTALL_INFRA_TOOLS=1
         platforms: linux/amd64,linux/arm64
         push: true
         tags: ${{ steps.meta.outputs.tags }}
