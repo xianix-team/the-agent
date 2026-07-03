@@ -6,6 +6,11 @@
                 "name": "GITHUB-TOKEN",
                 "value": "secrets.GITHUB-TOKEN",
                 "mandatory": true
+            },
+            {
+                "name": "ANTHROPIC-API-KEY",
+                "value": "secrets.ANTHROPIC-API-KEY",
+                "mandatory": true
             }
         ],
         "executions": [
@@ -119,6 +124,80 @@
                 "execute-prompt": "Issue #{{issue-number}} in the repository {{repository-name}} has been assigned to xianix-agent for requirement analysis.\n\nRun /requirement-analysis {{issue-number}} to perform the automated requirement analysis and elaboration."
             },
             {
+                "name": "github-issue-impact-analysis",
+                "platform": "github",
+                "repository": {
+                    "url": "repository.clone_url"
+                },
+                "match-any": [
+                    {
+                        "name": "github-issue-tag-applied",
+                        "rule": "action==labeled&&label.name=='ai-dlc/issue/impact-analysis'"
+                    },
+                    {
+                        "name": "github-issue-opened-with-tag",
+                        "rule": "action==opened&&issue.labels.*.name=='ai-dlc/issue/impact-analysis'"
+                    }
+                ],
+                "use-inputs": [
+                    { "name": "issue-number", "value": "issue.number", "mandatory": true }
+                ],
+                "use-plugins": [
+                    {
+                        "plugin-name": "impact-analyst@xianix-plugins-official",
+                        "marketplace": "xianix-team/plugins-official"
+                    }
+                ],
+                "with-envs": [
+                    {
+                        "name": "GITHUB-TOKEN",
+                        "value": "secrets.GITHUB-TOKEN",
+                        "mandatory": true
+                    }
+                ],
+                "execute-prompt": "Issue #{{issue-number}} in the repository {{repository-name}} has been assigned to xianix-agent for impact analysis.\n\nRun /impact-analysis {{issue-number}} to perform the automated impact analysis."
+            },
+            {
+                "name": "azuredevops-work-item-impact-analysis",
+                "platform": "azuredevops",
+                "match-any": [
+                    {
+                        "name": "azuredevops-workitem-assigned-to-agent",
+                        "rule": "eventType==workitem.updated&&resource.revision.fields.\"System.State\"=='Development Review'"
+                    }
+                ],
+                "use-inputs": [
+                    {
+                        "name": "workitem-id",
+                        "value": "resource.workItemId"
+                    }
+                ],
+                "use-plugins": [
+                    {
+                        "plugin-name": "impact-analyst@xianix-plugins-official",
+                        "marketplace": "xianix-team/plugins-official"
+                    }
+                ],
+                "with-envs": [
+                    {
+                        "name": "AZURE-DEVOPS-TOKEN",
+                        "value": "secrets.AZURE-DEVOPS-TOKEN",
+                        "mandatory": true
+                    },
+                    {
+                        "name": "AZURE_ORG",
+                        "value": "compello",
+                        "constant": true
+                    },
+                    {
+                        "name": "AZURE_PROJECT",
+                        "value": "DevelopmentGIT",
+                        "constant": true
+                    }
+                ],
+                "execute-prompt": "Work item #{{workitem-id}} has been assigned to xianix-agent for impact analysis.\n\nRun /impact-analysis {{workitem-id}} to perform the automated impact analysis."
+            },
+            {
                 "name": "azuredevops-work-item-requirement-analysis",
                 "platform": "azuredevops",
                 "match-any": [
@@ -152,6 +231,96 @@
                     }
                 ],
                 "execute-prompt": "Work item #{{workitem-id}} has been assigned to xianix-agent for requirement analysis.\n\nRun /requirement-analysis {{workitem-id}} to perform the automated requirement analysis and elaboration."
+            }
+        ]
+    },
+    {
+        "executions": [
+            {
+                "schedule": "github-pentest-schedule",
+                "cron": "30 4 * * 1",
+                "timezone": "UTC",
+                "with-envs": [
+                    {
+                        "name": "GITHUB-TOKEN",
+                        "value": "secrets.AGENTRI-GITHUB-KEY",
+                        "mandatory": true
+                    },
+                    {
+                        "name": "ANTHROPIC-API-KEY",
+                        "value": "secrets.ANTHROPIC-API-KEY",
+                        "mandatory": true
+                    }
+                ],
+                "use-plugins": [
+                    {
+                        "plugin-name": "pentest-agent@xianix-plugins-official",
+                        "marketplace": "xianix-team/plugins-official"
+                    }
+                ],
+                "executions": [
+                    {
+                        "name": "github-pentest",
+                        "platform": "github",
+                        "repository": {
+                            "url": "https://github.com/XiansAiPlatform/agent-studio.git",
+                            "name": "XiansAiPlatform/agent-studio",
+                            "ref": "main"
+                        },
+                        "use-plugins": [
+                            {
+                                "plugin-name": "pentest-agent@xianix-plugins-official",
+                                "marketplace": "xianix-team/plugins-official"
+                            }
+                        ],
+                        "model": "claude-sonnet-4-5",
+                        "max-budget-usd": 30.0,
+                        "execute-prompt": "You are performing an authorized web-application penetration test of https://studio.agentri.ai (authorization is confirmed by the --authorized flag).\n\nStep 1 — Clone the private reports repository so reports are written straight into it. Git credentials for github.com are already configured globally, so a plain https clone/push authenticates automatically:\n  git clone https://github.com/XiansAiPlatform/commercial-support.git /tmp/reports-repo\n\nStep 2 — Invoke /pentest-agent:pentest https://studio.agentri.ai --authorized --fix --output-dir /tmp/reports-repo/pentest-reports/agent-studio and then ACTUALLY EXECUTE the full workflow yourself in this session: source-code recon, the parallel scanners (web-tester, sast-scanner, dependency-scanner, secrets-scanner), code-correlator, report-writer, and the --fix step. The skill does NOT run in the background — invoking it only gives you the instructions, which you must then carry out to completion. Do not announce that a scan is 'running' and stop.\n\nThe --fix step attempts to open a draft PR for the top mechanically-fixable finding against the scanned repository (agent-studio); attempt it and report the outcome (the PR URL, or the exact reason it was skipped).\n\nThe plugin writes a timestamped run folder plus a latest/ mirror under /tmp/reports-repo/pentest-reports/agent-studio/. Do not proceed to publishing until that newest run folder contains pentest-report.html, pentest-report.md and pentest-report.json.\n\nStep 3 — Publish by committing and pushing the reports repo:\n  cd /tmp/reports-repo && git config user.email 'xianix-agent@99x.io' && git config user.name 'xianix-agent' && git add -A && git commit -m \"pentest(agent-studio): <run-id>\" && git push origin HEAD\nUse the timestamped run folder name as <run-id> in the commit message.\n\nWhen finished, summarise the findings counts by severity, the run folder path under pentest-reports/agent-studio/, and the pushed commit hash/URL. If any step fails — especially the clone, scan, commit, or push — state exactly which step failed and why instead of claiming success."
+                    }
+                ]
+            },
+            {
+                "schedule": "github-infra-scan-schedule",
+                "cron": "0 5 * * 1",
+                "timezone": "UTC",
+                "with-envs": [
+                    {
+                        "name": "GITHUB-TOKEN",
+                        "value": "secrets.AGENTRI-GITHUB-KEY",
+                        "mandatory": true
+                    },
+                    {
+                        "name": "ANTHROPIC-API-KEY",
+                        "value": "secrets.ANTHROPIC-API-KEY",
+                        "mandatory": true
+                    }
+                ],
+                "use-plugins": [
+                    {
+                        "plugin-name": "infra-scanner@xianix-plugins-official",
+                        "marketplace": "xianix-team/plugins-official"
+                    }
+                ],
+                "executions": [
+                    {
+                        "name": "github-infra-scan",
+                        "platform": "github",
+                        "repository": {
+                            "url": "https://github.com/XiansAiPlatform/agent-studio.git",
+                            "name": "XiansAiPlatform/agent-studio",
+                            "ref": "main"
+                        },
+                        "use-plugins": [
+                            {
+                                "plugin-name": "infra-scanner@xianix-plugins-official",
+                                "marketplace": "xianix-team/plugins-official"
+                            }
+                        ],
+                        "model": "claude-sonnet-4-5",
+                        "max-budget-usd": 20.0,
+                        "execute-prompt": "You are performing an authorized infrastructure security scan of the agent-studio repository and its deployment https://studio.agentri.ai (authorization is confirmed by the --authorized flag).\n\nStep 1 — Clone the private reports repository. Git credentials for github.com are already configured globally, so a plain https clone/push authenticates automatically:\n  git clone https://github.com/XiansAiPlatform/commercial-support.git /tmp/reports-repo\n\nStep 2 — Invoke /infra-scanner:infra-scan https://studio.agentri.ai --authorized and then ACTUALLY EXECUTE the full workflow yourself in this session: the orchestrator coordinating iac-scanner (Dockerfiles, Terraform, Kubernetes, GitHub Actions), sbom-generator (CycloneDX SBOM), network-scanner (open ports + TLS on the target URL), and report-writer. The skill does NOT run in the background — invoking it only gives you the instructions, which you must then carry out to completion. Do not announce that a scan is 'running' and stop.\n\nThe reports are written to the current working directory: infra-report.html, infra-report.md, infra-report.json, infra-sbom.json (if generated) and the infra-evidence/ directory. Do not proceed to publishing until infra-report.html, infra-report.md and infra-report.json all exist.\n\nStep 3 — Publish the reports to the reports repo under a timestamped folder:\n  TS=$(date -u +%Y%m%dT%H%M%SZ)\n  mkdir -p /tmp/reports-repo/infra-reports/agent-studio/$TS\n  cp infra-report.html infra-report.md infra-report.json /tmp/reports-repo/infra-reports/agent-studio/$TS/\n  [ -f infra-sbom.json ] && cp infra-sbom.json /tmp/reports-repo/infra-reports/agent-studio/$TS/ || true\n  [ -d infra-evidence ] && cp -r infra-evidence /tmp/reports-repo/infra-reports/agent-studio/$TS/ || true\n  cd /tmp/reports-repo && git config user.email 'xianix-agent@99x.io' && git config user.name 'xianix-agent' && git add -A && git commit -m \"infra-scan(agent-studio): $TS\" && git push origin HEAD\n\nWhen finished, summarise the findings counts by severity, the destination path infra-reports/agent-studio/$TS/, and the pushed commit hash/URL. If any step fails — especially the clone, scan, copy, or push — state exactly which step failed and why instead of claiming success."
+                    }
+                ]
             }
         ]
     }
