@@ -67,6 +67,47 @@ WORKDIR /workspace
 COPY requirements.txt /workspace/requirements.txt
 RUN pip install --no-cache-dir -r /workspace/requirements.txt
 
+# pentest-agent v3.0+ tools (web-application pentesting).
+# - semgrep: primary SAST scanner used by sast-scanner.
+# - bandit: Python SAST fallback.
+# - pip-audit: Python dependency CVE check used by dependency-scanner.
+# - trivy: web-ecosystem CVE scanning (npm/pip/maven/gem/composer/go.mod).
+# - gitleaks: secrets detection used by secrets-scanner. Installed from a pinned
+#   release tarball — gitleaks ships no install.sh, and the old
+#   `curl .../install.sh | sh` 404'd silently and left the binary missing.
+# The trailing `command -v` checks fail the build loudly if any tool silently
+# failed to install (guards against the curl|sh no-op trap).
+# Added together so the layer is cached as a unit; ~200 MB combined.
+RUN pip install --no-cache-dir semgrep bandit pip-audit \
+    && curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+        | sh -s -- -b /usr/local/bin \
+    && curl -sfL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz \
+        | tar -xz -C /usr/local/bin gitleaks \
+    && chmod +x /usr/local/bin/gitleaks \
+    && command -v semgrep && command -v bandit && command -v pip-audit \
+    && command -v trivy && command -v gitleaks
+
+# Optional infra-scanner v1.0+ tools, gated by INSTALL_INFRA_TOOLS.
+# Pass --build-arg INSTALL_INFRA_TOOLS=1 to include nmap + hadolint + kubesec + syft
+# in the image. Skipped by default to keep the image slim for pentest-only deployments.
+# (tfsec/checkov are not bundled — install per-environment if needed.)
+# kubesec is installed from a pinned release tarball — it ships no install.sh, and
+# the old `curl .../install.sh | sh` 404'd silently and left the binary missing.
+# The trailing `command -v` checks fail the build loudly if any tool is missing.
+ARG INSTALL_INFRA_TOOLS=0
+RUN if [ "$INSTALL_INFRA_TOOLS" = "1" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends nmap \
+        && rm -rf /var/lib/apt/lists/* \
+        && curl -sfL https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64 \
+            -o /usr/local/bin/hadolint && chmod +x /usr/local/bin/hadolint \
+        && curl -sfL https://github.com/controlplaneio/kubesec/releases/download/v2.14.0/kubesec_linux_amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubesec \
+        && chmod +x /usr/local/bin/kubesec \
+        && curl -sfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+            | sh -s -- -b /usr/local/bin \
+        && command -v nmap && command -v hadolint && command -v kubesec && command -v syft ; \
+    fi
+
 COPY execute_plugin.py /workspace/execute_plugin.py
 COPY _common.sh /workspace/_common.sh
 COPY prepare_repo.sh /workspace/prepare_repo.sh
