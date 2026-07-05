@@ -119,6 +119,15 @@ FIXTURE_BARE="${FIXTURE_MOUNT_DIR}/fixture.git"
 # Path of the bare fixture as seen from inside the container.
 REPO_URL_IN_CONTAINER="/fixtures/fixture.git"
 
+# Global gitconfig handed to the container via GIT_CONFIG_GLOBAL. The fixture
+# is owned by the host user while the container runs as `xianix`, and recent
+# git refuses to read repos owned by someone else ("dubious ownership").
+# Crucially, git honors safe.directory ONLY from system/global config FILES —
+# GIT_CONFIG_COUNT/-c style config is deliberately ignored for this key — so
+# mounting a config file is the only env-driven way to whitelist the fixture.
+FIXTURE_GITCONFIG="${FIXTURE_MOUNT_DIR}/gitconfig"
+GITCONFIG_IN_CONTAINER="/fixtures/gitconfig"
+
 fixture_git() { git -C "${FIXTURE_SRC}" -c user.name=xianix-it -c user.email=it@xianix.test "$@"; }
 
 create_fixture_repo() {
@@ -140,6 +149,9 @@ EOF
     # keeps it as `origin` so later tests can push new commits to it.
     git clone -q --bare "${FIXTURE_SRC}" "${FIXTURE_BARE}"
     fixture_git remote add origin "${FIXTURE_BARE}"
+
+    printf '[safe]\n\tdirectory = *\n' > "${FIXTURE_GITCONFIG}"
+    chmod 444 "${FIXTURE_GITCONFIG}"
 }
 
 # ── Container runners ─────────────────────────────────────────────────────────
@@ -150,9 +162,9 @@ EOF
 # NAME=value` args are passed through. With SHOW_LOGS=1 the container's log
 # stream is also echoed live, dimmed and gutter-prefixed.
 #
-# GIT_CONFIG_* marks all paths as safe: the fixture is owned by the host user
-# while the container runs as `xianix`, and recent git refuses to read repos
-# owned by someone else ("dubious ownership") unless told otherwise.
+# GIT_CONFIG_GLOBAL points git at the mounted gitconfig whose safe.directory=*
+# marks all paths as safe (see FIXTURE_GITCONFIG above for why a config FILE is
+# required — GIT_CONFIG_COUNT/-c are ignored for this key).
 LAST_EXIT=0
 LAST_DURATION=0
 run_executor() {
@@ -165,9 +177,7 @@ run_executor() {
         --rm
         -v "${FIXTURE_MOUNT_DIR}:/fixtures:ro"
         -v "${volume}:/workspace/repo"
-        -e GIT_CONFIG_COUNT=1
-        -e GIT_CONFIG_KEY_0=safe.directory
-        -e GIT_CONFIG_VALUE_0='*'
+        -e "GIT_CONFIG_GLOBAL=${GITCONFIG_IN_CONTAINER}"
         "$@"
         "${IMAGE}"
     )
@@ -200,10 +210,9 @@ run_executor() {
 inspect_volume() {
     local volume="$1" cmd="$2"
     docker run --rm --entrypoint bash \
+        -v "${FIXTURE_MOUNT_DIR}:/fixtures:ro" \
         -v "${volume}:/workspace/repo" \
-        -e GIT_CONFIG_COUNT=1 \
-        -e GIT_CONFIG_KEY_0=safe.directory \
-        -e GIT_CONFIG_VALUE_0='*' \
+        -e "GIT_CONFIG_GLOBAL=${GITCONFIG_IN_CONTAINER}" \
         "${IMAGE}" -c "${cmd}"
 }
 
