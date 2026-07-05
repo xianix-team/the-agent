@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - 'v*'
+  pull_request:
+    paths:
+      - 'Executor/**'
+      - '.github/workflows/publish-executor.yml'
   workflow_dispatch:
 
 env:
@@ -13,8 +17,63 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+
+    # Lint the load-bearing bash before it ships in the image. Runs on PRs that
+    # touch Executor/ and as a gate before any tag-triggered publish.
+    - name: Run shellcheck on Executor scripts
+      run: shellcheck --severity=warning Executor/*.sh Executor/tests/*.sh
+
+  # End-to-end tests against the real image: build it, then run the executor
+  # the same way the control plane does (env vars in, JSON envelope out) using
+  # a locally generated fixture repository. See Executor/tests/integration_test.sh.
+  #
+  # The hermetic tier (clone / fetch / error-envelope tests) always runs. The
+  # live Claude Code test additionally needs the ANTHROPIC_API_KEY secret and
+  # is skipped automatically when it is absent (e.g. on fork PRs).
+  integration-test:
+    runs-on: ubuntu-latest
+    needs: shellcheck
+    timeout-minutes: 30
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    # Single-arch build for testing (fast); shares the GHA layer cache with the
+    # multi-arch publish build below. Infra tools are left out — they are not
+    # exercised by the tests and roughly double the build time.
+    - name: Build executor image for testing
+      uses: docker/build-push-action@v6
+      with:
+        context: ./Executor
+        file: ./Executor/Dockerfile
+        platforms: linux/amd64
+        load: true
+        push: false
+        tags: xianix-executor:integration-test
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Run integration tests
+      env:
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        SKIP_BUILD=1 IMAGE=xianix-executor:integration-test \
+          ./Executor/tests/integration_test.sh
+
   build-and-push:
     runs-on: ubuntu-latest
+    needs: [shellcheck, integration-test]
+    # Only publish on tag pushes / manual dispatch — never on pull_request events
+    # (which run shellcheck only and lack DockerHub push credentials).
+    if: github.event_name != 'pull_request'
 
     steps:
     - name: Checkout code

@@ -9,12 +9,14 @@ The `xianix-executor` Docker image runs inside an isolated container per tenant 
 | `Dockerfile` | Image definition — Python 3.12, Node.js 20, git, gh CLI, Claude Code CLI + SDK |
 | `entrypoint.sh` | Thin dispatcher — picks `prepare_repo.sh` and/or `run_prompt.sh` based on `XIANIX-MODE` |
 | `prepare_repo.sh` | Configures git credentials, bare-clone-or-fetches the repo into `/workspace/repo`, and **always pulls the upstream default branch** (so `git diff origin/<default>` and the no-`git-ref` worktree path see the freshest tip on every run, for both webhook and chat-driven executions). In `prepare-and-execute` mode it also creates the per-execution worktree at `/workspace/exec-${EXECUTION-ID}`. |
-| `run_prompt.sh` | Installs Claude Code plugins, prepares cached repo context, launches `execute_plugin.py`, then cleans up the worktree |
+| `run_prompt.sh` | Installs Claude Code plugins, prepares cached repo context, launches `execute_plugin.py`, then cleans up the worktree (from an `EXIT` trap, so cleanup runs even when the run exits non-zero) |
+| `maintain_volume.sh` | Best-effort volume housekeeping run during prepare — `git gc --auto` on the bare clone, prunes superseded plugin-cache versions, and expires old `xianix-sessions` pointers. Never fails a run; retention windows are tunable via `XIANIX-SESSION-RETENTION-DAYS` / `XIANIX-PLUGIN-CACHE-MAX-AGE-DAYS`. |
 | `_common.sh` | Shared helpers sourced by both phase scripts (env aliasing, `log`, input parsing, `configure_credentials`) |
 | `generate_context.sh` | Builds a cached `CLAUDE.md` + `.xianix/repomap.txt` (symbol map) for the repo so the agent doesn't re-explore the codebase cold on every run. The facts (overview, stack, layout, symbols) are deterministic and token-free; optionally (`XIANIX-CONTEXT-LLM=1`) a budget-/turn-capped Haiku pass appends an "Architecture & conventions" narrative. Cached on the volume keyed by HEAD (so the LLM pass runs at most once per HEAD change); never overwrites a tenant-authored `CLAUDE.md`, and the LLM pass is skipped entirely when one exists. |
 | `execute_plugin.py` | Invokes Claude Code SDK against the worktree; writes JSON result to stdout |
 | `requirements.txt` | Python dependencies (pinned) |
 | `.dockerignore` | Build context exclusions |
+| `tests/integration_test.sh` | Black-box integration tests against the built image (see *Integration tests* below) |
 
 ### Execution modes (`XIANIX-MODE`)
 
@@ -67,6 +69,43 @@ docker run --rm -e ... -v xianix-test-vol:/workspace/repo xianix-executor:latest
 # Second run — fetch + new worktree (previous clone reused)
 docker run --rm -e ... -v xianix-test-vol:/workspace/repo xianix-executor:latest
 ```
+
+## Integration tests
+
+`tests/integration_test.sh` verifies the executor end to end, treating the image exactly the way the control plane does: environment variables in, one JSON envelope on stdout, logs on stderr, exit code out.
+
+Instead of a real GitHub repository, the harness generates a small **local fixture repository** on the fly and mounts it into the container. The executor clones from that local path, so the tests need no network, no GitHub token, and no external test repo.
+
+The tests run in two tiers:
+
+| Tier | Needs | What it verifies |
+|------|-------|------------------|
+| 1 — hermetic (always runs, free) | Docker only | `prepare` mode clones onto the volume; a second run fetches instead of re-cloning; a new upstream commit is picked up (default-branch refresh contract); a bad repo URL emits the structured prepare error envelope with a non-zero exit |
+| 2 — live Claude Code (skipped without a key, costs ~$0.03) | `ANTHROPIC_API_KEY` | A full `prepare-and-execute` run. The fixture contains a `SECRET.md` with a **random token generated fresh per test run**; the prompt asks the agent to read the file and reply with the token. The test asserts the token appears in `.result` — which is only possible if the agent genuinely cloned the repo, created the worktree, and read the file. Also asserts stdout purity (exactly one line of valid JSON) and that `session_id` / `input_tokens` / `cost_usd` are populated. The run is cost-capped via `XIANIX-MODEL=claude-haiku-4-5`, `XIANIX-MAX-TURNS=10`, and `XIANIX-MAX-BUDGET-USD=0.25`. |
+
+### Running locally
+
+```bash
+# Tier 1 only (builds the image first):
+./Executor/tests/integration_test.sh
+
+# Both tiers:
+ANTHROPIC_API_KEY=sk-ant-... ./Executor/tests/integration_test.sh
+# (or put ANTHROPIC_API_KEY=... in the gitignored Executor/tests/.env —
+#  the harness loads it automatically when the env var isn't already set)
+
+# Reuse an image you already built:
+SKIP_BUILD=1 IMAGE=xianix-executor:latest ./Executor/tests/integration_test.sh
+
+# Quiet mode — container logs are hidden unless a check fails:
+SHOW_LOGS=0 ./Executor/tests/integration_test.sh
+```
+
+Each container's log stream (clone progress, plugin install, the executor's turn-by-turn Claude activity) is echoed live under the test it belongs to, dimmed and gutter-prefixed so the `PASS`/`FAIL` lines stay easy to scan. The Claude test also prints a short summary of the returned envelope (agent reply, model, cost, tokens, session id).
+
+### In CI
+
+The `integration-test` job in `.github/workflows/publish-executor.yml` runs on every PR that touches `Executor/` and gates every tag-triggered publish (`build-and-push` depends on it). It builds a single-arch test image (sharing the GHA layer cache with the publish build) and runs the harness; the live Claude test runs only when the `ANTHROPIC_API_KEY` repo secret is configured, and is skipped gracefully otherwise (e.g. on fork PRs).
 
 ### Capturing stdout vs stderr
 

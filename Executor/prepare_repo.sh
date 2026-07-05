@@ -27,6 +27,28 @@ source "${SCRIPT_DIR}/_common.sh"
 
 XIANIX_MODE="${XIANIX_MODE:-prepare-and-execute}"
 
+# ── Structured failure envelope for the prepare phase ────────────────────────
+# When prepare fails (missing token, clone failure, unparseable inputs) the
+# entrypoint's `&&` stops run_prompt.sh from running, so execute_plugin.py never
+# emits its JSON envelope and the control plane is left with only stderr text and
+# an exit code. Emit a minimal envelope to stdout on any non-zero exit so the
+# consumer parses ONE shape for both phases (ContainerOutputParser ignores
+# unknown fields and treats missing numeric fields as null, so the extra
+# `phase` field and absent cost/token fields are safe). Success (exit 0) prints
+# nothing — the run phase owns stdout from there on.
+_emit_prepare_error() {
+    local exit_code=$?
+    [ "${exit_code}" -eq 0 ] && return 0
+    local tid eid msg
+    tid=$(printf '%s' "${TENANT_ID:-unknown}"    | jq -Rs .)
+    eid=$(printf '%s' "${EXECUTION_ID:-unknown}" | jq -Rs .)
+    msg=$(printf '%s' "prepare phase failed (exit ${exit_code})" | jq -Rs .)
+    printf '{"tenant_id":%s,"execution_id":%s,"phase":"prepare","status":"error","error":%s}\n' \
+        "${tid}" "${eid}" "${msg}"
+    return "${exit_code}"
+}
+trap _emit_prepare_error EXIT
+
 log "=== Xianix Executor — prepare phase ==="
 log "Tenant:              ${TENANT_ID}"
 log "Execution ID:        ${EXECUTION_ID}"
@@ -35,13 +57,36 @@ log "Repository:          ${REPOSITORY_URL:-<none>}"
 log "Platform:            ${PLATFORM:-<none>}"
 [ -n "${GIT_REF}" ] && log "Git ref:             ${GIT_REF}"
 
+# True when the bare repo has linked worktrees beyond itself, i.e. another
+# concurrent execution is (or recently was) checked out against this volume.
+# `git worktree list` prints the bare repo as the first entry and one line per
+# linked worktree, so more than one entry means a peer worktree is registered.
+_other_worktrees_registered() {
+    local count
+    count=$(git -C "${REPO_DIR}" worktree list --porcelain 2>/dev/null \
+        | grep -c '^worktree ' || true)
+    [ "${count:-0}" -gt 1 ]
+}
+
 ensure_bare_repo() {
     if [ -d "${REPO_DIR}" ] && { [ -d "${REPO_DIR}/.git" ] || [ -f "${REPO_DIR}/HEAD" ]; }; then
         log "--- Fetching into existing repo ---"
         if ! git -C "${REPO_DIR}" fetch --all --prune >&2; then
-            log "--- Fetch failed, re-cloning ---"
-            find "${REPO_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-            git clone --bare "${REPOSITORY_URL}" "${REPO_DIR}" >&2
+            log "--- Fetch failed; retrying once ---"
+            if ! git -C "${REPO_DIR}" fetch --all --prune >&2; then
+                # A destructive re-clone wipes the shared object store, which would
+                # pull the rug out from under any worktree a concurrent execution is
+                # actively using on this volume. Only re-clone when we're sure no peer
+                # worktree is registered; otherwise proceed with the (possibly slightly
+                # stale) refs already present rather than risk corrupting a live run.
+                if _other_worktrees_registered; then
+                    log "WARNING: fetch failed after retry, but other worktrees are live on this volume — skipping re-clone and proceeding with existing refs."
+                else
+                    log "--- Fetch failed after retry, re-cloning ---"
+                    find "${REPO_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+                    git clone --bare "${REPOSITORY_URL}" "${REPO_DIR}" >&2
+                fi
+            fi
         fi
     else
         log "--- Cloning repository (bare, first run for this tenant+repo) ---"
@@ -49,7 +94,13 @@ ensure_bare_repo() {
         git clone --bare "${REPOSITORY_URL}" "${REPO_DIR}" >&2
     fi
 
-    git -C "${REPO_DIR}" worktree prune >&2 2>/dev/null || true
+    # Only prune worktree admin metadata that has been stale for a while. An
+    # unqualified prune would delete the bookkeeping for a peer container's LIVE
+    # worktree — that container's checkout lives in its own ephemeral filesystem
+    # and is invisible here, so git would consider it "missing" and reap it
+    # mid-run. The expiry window keeps genuinely orphaned (crashed-run) entries
+    # collectable while protecting concurrent executions.
+    git -C "${REPO_DIR}" worktree prune --expire=12.hours.ago >&2 2>/dev/null || true
 }
 
 # Always pull the upstream default branch into the bare clone, even if a GIT_REF
@@ -118,8 +169,16 @@ pull_default_branch() {
 create_worktree() {
     if [ -n "${GIT_REF}" ]; then
         log "--- Creating worktree for ref: ${GIT_REF} ---"
-        git -C "${REPO_DIR}" fetch origin "${GIT_REF}" >&2
-        git -C "${REPO_DIR}" worktree add "${WORK_DIR}" FETCH_HEAD --detach >&2
+        # Fetch into a per-execution ref rather than relying on FETCH_HEAD.
+        # FETCH_HEAD is a single shared file in the bare repo, so two concurrent
+        # executions fetching different refs can clobber each other and end up
+        # checking out the wrong commit. A unique ref keyed by EXECUTION_ID is
+        # race-free; the worktree is created detached from it and the temporary
+        # ref is deleted immediately afterwards (the checkout keeps the commit).
+        local exec_ref="refs/xianix/exec-${EXECUTION_ID}"
+        git -C "${REPO_DIR}" fetch origin "+${GIT_REF}:${exec_ref}" >&2
+        git -C "${REPO_DIR}" worktree add "${WORK_DIR}" "${exec_ref}" --detach >&2
+        git -C "${REPO_DIR}" update-ref -d "${exec_ref}" >&2 2>/dev/null || true
     else
         log "--- Creating worktree for HEAD ---"
         git -C "${REPO_DIR}" worktree add "${WORK_DIR}" HEAD --detach >&2
@@ -140,6 +199,12 @@ if [ -n "${REPOSITORY_URL}" ]; then
     # contract for every entry point. Done before create_worktree so the
     # no-GIT_REF path resolves HEAD to the freshly-refreshed default tip.
     pull_default_branch
+
+    # Best-effort volume housekeeping (git gc, stale plugin versions, old session
+    # pointers). Never fatal — an unbounded volume is the failure mode we're
+    # avoiding, not a reason to abort this run.
+    "${SCRIPT_DIR}/maintain_volume.sh" "${REPO_DIR}" \
+        || log "WARNING: volume maintenance failed — continuing."
 
     if [ "${XIANIX_MODE}" = "prepare" ]; then
         log "--- Skipping worktree (mode=prepare; bare clone only) ---"

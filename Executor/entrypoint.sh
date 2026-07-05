@@ -12,7 +12,13 @@
 #                          flow and by RunClaudeCodeOnRepository.
 set -euo pipefail
 
-MODE="${XIANIX_MODE:-prepare-and-execute}"
+# The control plane names every env var in dashed form (XIANIX-MODE). Bash
+# cannot reference dashed names as variables — the ${VAR} syntax silently sees
+# nothing — so read it via printenv. The underscored form wins when both are
+# set. (The child scripts get the same treatment from _common.sh, but this
+# dispatcher runs before any of them.)
+MODE="${XIANIX_MODE:-$(printenv 'XIANIX-MODE' || true)}"
+MODE="${MODE:-prepare-and-execute}"
 
 case "${MODE}" in
     prepare)

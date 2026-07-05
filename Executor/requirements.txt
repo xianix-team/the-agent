@@ -1,2 +1,2 @@
-claude-agent-sdk
+claude-agent-sdk==0.2.110
 playwright==1.49.0

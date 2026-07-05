@@ -28,6 +28,28 @@ if [ ! -d "${WORK_DIR}" ]; then
     exit 1
 fi
 
+# ── Crash-safe workspace cleanup ─────────────────────────────────────────────
+# execute_plugin.py exits 1 on an error envelope (e.g. a budget abort), and this
+# script runs under `set -e`, so a straight-line cleanup at the end would be
+# skipped on any failure — leaking worktree admin metadata onto the shared volume
+# (which then accumulates until a future prune reaps it). Running cleanup from an
+# EXIT trap guarantees the worktree is removed on both success and failure, while
+# preserving the original exit code so the control plane still sees the real
+# outcome.
+cleanup_workspace() {
+    local exit_code=$?
+    log "--- Cleaning up workspace ---"
+    cd /workspace 2>/dev/null || true
+    if [ -n "${REPOSITORY_URL:-}" ]; then
+        git -C "${REPO_DIR}" worktree remove "${WORK_DIR}" --force >&2 2>/dev/null || true
+    else
+        rm -rf "${WORK_DIR}" 2>/dev/null || true
+    fi
+    log "--- Execution complete ---"
+    return "${exit_code}"
+}
+trap cleanup_workspace EXIT
+
 cd "${WORK_DIR}"
 log "--- Workspace ready at ${WORK_DIR} ---"
 
@@ -113,6 +135,21 @@ if [ -n "${CLAUDE_CODE_PLUGINS:-}" ] && [ "${CLAUDE_CODE_PLUGINS}" != "[]" ]; th
         fi
     done
     log "--- Plugin installation complete ---"
+
+    # `claude plugin install --scope project` writes .claude/settings.json into the
+    # worktree. Left tracked, it pollutes a plugin's own `git status` / `git diff`
+    # (e.g. PR-review diffs would show a spurious .claude/ change). Add it to the
+    # worktree-local git exclude — mirroring how generate_context.sh hides its
+    # injected CLAUDE.md / .xianix/ — so plugin diffs stay clean.
+    if [ -n "${REPOSITORY_URL:-}" ]; then
+        _git_dir="$(git -C "${WORK_DIR}" rev-parse --absolute-git-dir 2>/dev/null || echo "")"
+        if [ -n "${_git_dir}" ]; then
+            mkdir -p "${_git_dir}/info" 2>/dev/null || true
+            _exclude_file="${_git_dir}/info/exclude"
+            grep -qxF ".claude/" "${_exclude_file}" 2>/dev/null \
+                || printf '%s\n' ".claude/" >> "${_exclude_file}" 2>/dev/null || true
+        fi
+    fi
 fi
 
 # ── Prepare cached repo context (CLAUDE.md + symbol map) ─────────────────────
@@ -138,15 +175,6 @@ else
     log "WARNING: PROMPT env var is empty"
 fi
 export WORK_DIR
+# Cleanup (and the final "Execution complete" log) runs from the EXIT trap
+# installed above, so it fires whether this succeeds or exits non-zero.
 python3 /workspace/execute_plugin.py
-
-# ── Cleanup workspace ────────────────────────────────────────────────────────
-log "--- Cleaning up workspace ---"
-cd /workspace
-if [ -n "${REPOSITORY_URL}" ]; then
-    git -C "${REPO_DIR}" worktree remove "${WORK_DIR}" --force >&2 2>/dev/null || true
-else
-    rm -rf "${WORK_DIR}"
-fi
-
-log "--- Execution complete ---"

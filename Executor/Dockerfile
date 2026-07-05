@@ -54,10 +54,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     NODE_PATH=/usr/lib/node_modules
+# Pin the global Node CLIs so image behaviour only changes on a deliberate bump.
+# Leaving @anthropic-ai/claude-code unpinned meant every rebuild silently pulled
+# whatever CLI was latest, so plugin/version resolution could drift with no code
+# change. Override at build time with --build-arg CLAUDE_CODE_VERSION=x.y.z.
+ARG CLAUDE_CODE_VERSION=2.1.201
+ARG PLAYWRIGHT_CLI_VERSION=0.1.15
+ARG PLAYWRIGHT_VERSION=1.49.0
 RUN npm install -g \
-        @anthropic-ai/claude-code \
-        @playwright/cli \
-        playwright@1.49.0 \
+        "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+        "@playwright/cli@${PLAYWRIGHT_CLI_VERSION}" \
+        "playwright@${PLAYWRIGHT_VERSION}" \
     && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0 playwright install --with-deps chromium \
     && chmod -R a+rX /ms-playwright \
     && rm -rf /var/lib/apt/lists/* /root/.npm
@@ -113,8 +120,10 @@ COPY _common.sh /workspace/_common.sh
 COPY prepare_repo.sh /workspace/prepare_repo.sh
 COPY run_prompt.sh /workspace/run_prompt.sh
 COPY generate_context.sh /workspace/generate_context.sh
+COPY maintain_volume.sh /workspace/maintain_volume.sh
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh /workspace/prepare_repo.sh /workspace/run_prompt.sh /workspace/generate_context.sh
+RUN chmod +x /entrypoint.sh /workspace/prepare_repo.sh /workspace/run_prompt.sh \
+        /workspace/generate_context.sh /workspace/maintain_volume.sh
 
 RUN groupadd -r xianix && useradd -r -g xianix -d /workspace xianix \
     && mkdir -p /workspace/repo \
