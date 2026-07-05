@@ -78,12 +78,25 @@ if [ -n "${CLAUDE_CODE_PLUGINS:-}" ] && [ "${CLAUDE_CODE_PLUGINS}" != "[]" ]; th
         fi
     done
 
+    # Registered marketplaces are cached on the persistent volume and are not
+    # refreshed by `marketplace add` when already present, so their clones can
+    # pin plugins to a stale version. Refresh all marketplaces from source so
+    # `plugin install`/`plugin update` below resolve the latest versions.
+    log "  Updating registered marketplaces to latest"
+    claude plugin marketplace update >&2 || \
+        log "  WARNING: marketplace update failed — plugin versions may be stale"
+
     echo "${CLAUDE_CODE_PLUGINS}" | jq -c ".[] | ${_plugin_entry}" | while IFS= read -r plugin; do
         name=$(echo "${plugin}" | jq -r '.["plugin-name"]' | cut -d@ -f1)
         url=$(echo "${plugin}"  | jq -r '.["plugin-name"]')
 
         log "  Installing plugin '${name}' (${url})"
         if claude plugin install "${url}" --scope project >&2; then
+            # A prior run may have cached an older version; `plugin install` is a
+            # no-op when already installed, so bump to the latest now available in
+            # the refreshed marketplace. Best-effort — a failure just leaves the
+            # currently installed version in place.
+            claude plugin update "${url}" --scope project >&2 || true
             installed_info=$(claude plugin list --json 2>/dev/null \
                 | jq -r --arg id "${url}" '
                     first(.[] | select(.id == $id) | "\(.version // "unknown")\t\(.installPath // "")")
