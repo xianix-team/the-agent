@@ -101,7 +101,16 @@ public class XianixAgent(
                 logger.LogError(ex,
                     "SupervisorSubagent failed for tenant '{TenantId}', participant '{ParticipantId}'.",
                     context.Message.TenantId, context.Message.ParticipantId);
-                await context.ReplyAsync("Sorry — I hit an error handling that message.");
+
+                // Surface the root cause to the user so actionable failures (e.g. a
+                // missing ANTHROPIC-API-KEY for this tenant) can be fixed without
+                // digging through server logs. GetBaseException unwraps wrapper
+                // exceptions so the innermost, most specific message is shown.
+                var reason = ex.GetBaseException().Message;
+                await context.ReplyAsync(
+                    string.IsNullOrWhiteSpace(reason)
+                        ? "Sorry — I hit an error handling that message."
+                        : $"Sorry — I hit an error handling that message.\n\nReason: {reason}");
             }
         });
     }

@@ -152,6 +152,72 @@
                     }
                 ],
                 "execute-prompt": "Work item #{{workitem-id}} has been assigned to xianix-agent for requirement analysis.\n\nRun /requirement-analysis {{workitem-id}} to perform the automated requirement analysis and elaboration."
+            },
+            {
+                "name": "e2e-github-echo",
+                "platform": "local",
+                "repository": {
+                    "url": "repository.clone_url",
+                    "ref": "pull_request.head.ref"
+                },
+                "match-any": [
+                    {
+                        "name": "e2e-github-pr-opened-with-tag",
+                        "rule": "action==opened&&pull_request.labels.*.name=='e2e/echo'"
+                    }
+                ],
+                "use-inputs": [
+                    {
+                        "name": "pr-number",
+                        "value": "pull_request.number",
+                        "mandatory": true
+                    }
+                ],
+                "with-envs": [
+                    {
+                        "name": "GITHUB-TOKEN",
+                        "value": "e2e-dummy-token",
+                        "constant": true
+                    }
+                ],
+                "model": "claude-haiku-4-5",
+                "max-turns": 8,
+                "allowed-tools": ["Read", "Glob"],
+                "max-budget-usd": 0.25,
+                "execute-prompt": "This is an automated end-to-end connectivity test (simulated GitHub pull request #{{pr-number}}). Read the file TOKEN.txt at the root of this repository and reply with its exact contents. Your final answer MUST include the token string from TOKEN.txt verbatim."
+            },
+            {
+                "name": "e2e-azuredevops-echo",
+                "platform": "local",
+                "repository": {
+                    "url": "resource.repository.remoteUrl",
+                    "ref": "resource.sourceRefName"
+                },
+                "match-any": [
+                    {
+                        "name": "e2e-azuredevops-pr-created-with-tag",
+                        "rule": "eventType==git.pullrequest.created&&resource.labels.*.name=='e2e/echo'"
+                    }
+                ],
+                "use-inputs": [
+                    {
+                        "name": "pr-number",
+                        "value": "resource.pullRequestId",
+                        "mandatory": true
+                    }
+                ],
+                "with-envs": [
+                    {
+                        "name": "GITHUB-TOKEN",
+                        "value": "e2e-dummy-token",
+                        "constant": true
+                    }
+                ],
+                "model": "claude-haiku-4-5",
+                "max-turns": 8,
+                "allowed-tools": ["Read", "Glob"],
+                "max-budget-usd": 0.25,
+                "execute-prompt": "This is an automated end-to-end connectivity test (simulated Azure DevOps pull request #{{pr-number}}). Read the file TOKEN.txt at the root of this repository and reply with its exact contents. Your final answer MUST include the token string from TOKEN.txt verbatim."
             }
         ]
     }
