@@ -8,12 +8,15 @@ namespace TheAgent.Tests.Orchestrator;
 public class EventOrchestratorTests
 {
     private readonly IWebhookRulesEvaluator _evaluator = Substitute.For<IWebhookRulesEvaluator>();
+    private readonly IWebhookDeduplicationGuard _dedup = Substitute.For<IWebhookDeduplicationGuard>();
     private readonly ILogger<EventOrchestrator> _logger = Substitute.For<ILogger<EventOrchestrator>>();
     private readonly EventOrchestrator _sut;
 
     public EventOrchestratorTests()
     {
-        _sut = new EventOrchestrator(_evaluator, _logger);
+        // Default: nothing is considered a duplicate, so every match flows through.
+        _dedup.IsDuplicate(Arg.Any<Xianix.Workflows.ProcessingRequest>()).Returns(false);
+        _sut = new EventOrchestrator(_evaluator, _dedup, _logger);
     }
 
     [Fact]
@@ -28,7 +31,7 @@ public class EventOrchestratorTests
 
         Assert.True(batch.Handled);
         Assert.Single(batch.Matches);
-        Assert.Equal("github-pr", batch.Matches[0].WebhookName);
+        Assert.Equal("github-pr", batch.Matches[0].Name);
         Assert.Equal(42L, batch.Matches[0].Inputs["pr_id"]);
         Assert.Equal("opened", batch.Matches[0].Inputs["action"]);
     }
