@@ -38,6 +38,12 @@ fi
 # outcome.
 cleanup_workspace() {
     local exit_code=$?
+    # Kill the per-run Headroom proxy (if started) BEFORE we touch the worktree, so it
+    # can't hold any file handles. Best-effort: never fail cleanup on this.
+    if [ -n "${HEADROOM_PID:-}" ]; then
+        kill "${HEADROOM_PID}" 2>/dev/null || true
+        wait "${HEADROOM_PID}" 2>/dev/null || true
+    fi
     log "--- Cleaning up workspace ---"
     cd /workspace 2>/dev/null || true
     if [ -n "${REPOSITORY_URL:-}" ]; then
@@ -175,6 +181,49 @@ else
     log "WARNING: PROMPT env var is empty"
 fi
 export WORK_DIR
+
+# ── Optional: Headroom compression proxy (Option B, per-container, fail-open) ──────────
+# When XIANIX-COMPRESSION=1 the executor starts a local Headroom proxy and points the
+# Claude Code CLI at it via ANTHROPIC_BASE_URL. If the proxy fails to come up healthy,
+# we log a warning and continue with ANTHROPIC_BASE_URL unset — compression is an
+# optimisation and must NEVER break a plugin run. `_common.sh` re-exports dashed env
+# vars as underscored aliases, but we also honour the raw XIANIX-COMPRESSION form for
+# safety in case this script is invoked stand-alone.
+_compression_flag="${XIANIX_COMPRESSION:-$(printenv 'XIANIX-COMPRESSION' 2>/dev/null || true)}"
+case "${_compression_flag:-}" in
+    1|true|TRUE|True|yes|YES)
+        log "--- Starting Headroom compression proxy (opt-in via XIANIX-COMPRESSION) ---"
+        export HEADROOM_TELEMETRY=off
+        export HEADROOM_SAVINGS_PATH="/tmp/headroom-${EXECUTION_ID}.json"
+        # Route all proxy output to stderr so it doesn't pollute the executor's stdout
+        # JSON envelope. Fail-open: if `headroom` isn't installed we log and skip.
+        if command -v headroom >/dev/null 2>&1; then
+            headroom proxy --host 127.0.0.1 --port 8787 --no-telemetry \
+                >&2 2>&1 &
+            HEADROOM_PID=$!
+            # Wait up to ~6s for /health before routing traffic through the proxy.
+            _healthy=0
+            for _ in $(seq 1 30); do
+                if curl -sf http://127.0.0.1:8787/health >/dev/null 2>&1; then
+                    _healthy=1
+                    break
+                fi
+                sleep 0.2
+            done
+            if [ "${_healthy}" = "1" ]; then
+                export ANTHROPIC_BASE_URL="http://127.0.0.1:8787"
+                log "Headroom proxy healthy (pid ${HEADROOM_PID}); ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}"
+            else
+                log "WARNING: Headroom proxy did not become healthy in time — continuing without compression."
+                kill "${HEADROOM_PID}" 2>/dev/null || true
+                unset HEADROOM_PID
+            fi
+        else
+            log "WARNING: XIANIX-COMPRESSION set but 'headroom' CLI not found in image — continuing without compression."
+        fi
+        ;;
+esac
+
 # Cleanup (and the final "Execution complete" log) runs from the EXIT trap
 # installed above, so it fires whether this succeeds or exits non-zero.
 python3 /workspace/execute_plugin.py

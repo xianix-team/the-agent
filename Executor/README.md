@@ -13,7 +13,7 @@ The `xianix-executor` Docker image runs inside an isolated container per tenant 
 | `maintain_volume.sh` | Best-effort volume housekeeping run during prepare — `git gc --auto` on the bare clone, prunes superseded plugin-cache versions, and expires old `xianix-sessions` pointers. Never fails a run; retention windows are tunable via `XIANIX-SESSION-RETENTION-DAYS` / `XIANIX-PLUGIN-CACHE-MAX-AGE-DAYS`. |
 | `_common.sh` | Shared helpers sourced by both phase scripts (env aliasing, `log`, input parsing, `configure_credentials`) |
 | `generate_context.sh` | Builds a cached `CLAUDE.md` + `.xianix/repomap.txt` (symbol map) for the repo so the agent doesn't re-explore the codebase cold on every run. The facts (overview, stack, layout, symbols) are deterministic and token-free; optionally (`XIANIX-CONTEXT-LLM=1`) a budget-/turn-capped Haiku pass appends an "Architecture & conventions" narrative. Cached on the volume keyed by HEAD (so the LLM pass runs at most once per HEAD change); never overwrites a tenant-authored `CLAUDE.md`, and the LLM pass is skipped entirely when one exists. |
-| `execute_plugin.py` | Invokes Claude Code SDK against the worktree; writes JSON result to stdout |
+| `execute_plugin.py` | Invokes Claude Code SDK against the worktree; writes JSON result to stdout. When `XIANIX-COMPRESSION=1` was set, also queries the local Headroom proxy at `http://127.0.0.1:8787/stats` and adds a normalised `compression` object to the envelope (see below). |
 | `requirements.txt` | Python dependencies (pinned) |
 | `.dockerignore` | Build context exclusions |
 | `tests/integration_test.sh` | Black-box integration tests against the built image (see *Integration tests* below) |
@@ -131,6 +131,7 @@ cat progress.log  # git + plugin + executor progress messages
 | `ANTHROPIC-API-KEY` | Yes | Anthropic API key (read by the Claude Code SDK) |
 | `GITHUB-TOKEN` | Conditional | GitHub PAT — required for GitHub workflows (clones, marketplace repos, `gh` CLI). Injected from the **tenant Secret Vault** via `"value": "secrets.GITHUB-TOKEN"` in `rules.json`; never read from the agent host. |
 | `AZURE-DEVOPS-TOKEN` | Conditional | Azure DevOps PAT — required when `platform=azuredevops`. Injected from the **tenant Secret Vault** via `"value": "secrets.AZURE-DEVOPS-TOKEN"` in `rules.json`; never read from the agent host. |
+| `XIANIX-COMPRESSION` | No | Opt-in per-run [Headroom](https://github.com/headroomlabs-ai/headroom) compression proxy (Option B, see [`Docs/headroom-compression-design.md`](../Docs/headroom-compression-design.md)). Set to `1` / `true` to start a local proxy on `127.0.0.1:8787` and route Claude Code through it via `ANTHROPIC_BASE_URL`. Fail-open — a proxy start-up or health-check failure logs a warning and continues without compression, so a plugin run is never broken by this flag. Sourced from the execution-level `compression: true` field in `rules.json`. |
 
 > **Note:** The entrypoint automatically re-exports dashed env vars as underscored aliases (e.g. `GITHUB-TOKEN` → `GITHUB_TOKEN`) for bash compatibility.
 

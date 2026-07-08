@@ -56,6 +56,13 @@ internal static class ExecutionMetrics
     public const string ModelCostCategory = "model-cost";
 
     /// <summary>
+    /// Cross-path category recording Headroom compression outcomes  Emitted only
+    /// when a run had compression enabled — absence of the block on non-compression runs is
+    /// a silent no-op, so this never pollutes the totals for tenants that don't opt in.
+    /// </summary>
+    public const string CompressionCategory = "compression";
+
+    /// <summary>
     /// Builds and reports the full metric set for one completed container execution.
     /// Deterministic (safe to call from workflow code) and does not catch — callers wrap
     /// this in their own try/catch so the path-specific logger carries the failure context.
@@ -186,6 +193,42 @@ internal static class ExecutionMetrics
             builder = builder.WithMetric(ctx.Category, "budget", budget, "usd");
             var overBudget = costUsd is { } cost && cost > budget ? 1 : 0;
             builder = builder.WithMetric(ctx.Category, "over_budget", overBudget, "count");
+        }
+
+        // ── Compression (Headroom, Option B) ──
+        // Reuses the same metadata dimensions as the other metrics so the dashboard can
+        // slice compression outcomes by tenant / repo / plugin / model / source / block.
+        // Only emitted for runs that actually enabled compression — non-compression runs
+        // report nothing under this category and never move the needle.
+        if (result.CompressionEnabled == true)
+        {
+            builder = builder.WithMetric(CompressionCategory, "enabled", 1, "count");
+            builder = builder.WithMetric(
+                CompressionCategory, "stats_available",
+                result.CompressionAvailable == true ? 1 : 0, "count");
+
+            if (result.CompressionTokensBefore.HasValue)
+                builder = builder.WithMetric(
+                    CompressionCategory, "tokens_before", result.CompressionTokensBefore.Value, "tokens");
+            if (result.CompressionTokensAfter.HasValue)
+                builder = builder.WithMetric(
+                    CompressionCategory, "tokens_after", result.CompressionTokensAfter.Value, "tokens");
+            if (result.CompressionTokensSaved.HasValue)
+                builder = builder.WithMetric(
+                    CompressionCategory, "tokens_saved", result.CompressionTokensSaved.Value, "tokens");
+            if (result.CompressionSavingsPercent.HasValue)
+                builder = builder.WithMetric(
+                    CompressionCategory, "savings_ratio",
+                    result.CompressionSavingsPercent.Value / 100.0, "ratio");
+            if (result.CompressionSavingsUsd.HasValue)
+                builder = builder.WithMetric(
+                    CompressionCategory, "savings_usd", result.CompressionSavingsUsd.Value, "usd");
+            if (result.CompressionRequests.HasValue)
+                builder = builder.WithMetric(
+                    CompressionCategory, "requests", result.CompressionRequests.Value, "count");
+            if (result.CompressionCacheHits.HasValue)
+                builder = builder.WithMetric(
+                    CompressionCategory, "cache_hits", result.CompressionCacheHits.Value, "count");
         }
 
         return builder.ReportAsync();

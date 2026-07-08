@@ -237,7 +237,8 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
                 AllowedTools:         execution.AllowedTools,
                 DisallowedTools:      execution.DisallowedTools,
                 MaxBudgetUsd:         execution.MaxBudgetUsd,
-                ResumeSessions:       execution.ResumeSessions));
+                ResumeSessions:       execution.ResumeSessions,
+                EnableCompression:    execution.EnableCompression));
         }
 
         if (matches.Count > 0)

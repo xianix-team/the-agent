@@ -165,6 +165,13 @@ public sealed class ExecutionSpec
     /// <summary>When true, resume the prior session for this conversation. Flows as <c>XIANIX-RESUME-SESSIONS</c>.</summary>
     public bool ResumeSessions { get; init; }
 
+    /// <summary>
+    /// When true, the executor starts a per-run Headroom compression proxy and routes Claude
+    /// Code through it. Flows as <c>XIANIX-COMPRESSION=1</c>. Fail-open — a proxy startup
+    /// failure never fails the plugin run. See <c>Docs/headroom-compression-design.md</c>.
+    /// </summary>
+    public bool EnableCompression { get; init; }
+
     public ExecutionSpec() { }
 
     public ExecutionSpec(
@@ -180,20 +187,22 @@ public sealed class ExecutionSpec
         IReadOnlyList<string>? allowedTools = null,
         IReadOnlyList<string>? disallowedTools = null,
         double? maxBudgetUsd = null,
-        bool resumeSessions = false)
+        bool resumeSessions = false,
+        bool enableCompression = false)
     {
-        Plugins         = [.. plugins];
-        WithEnvs        = withEnvs is null ? [] : [.. withEnvs];
-        Prompt          = prompt;
-        Platform        = platform ?? "";
-        RepositoryUrl   = repositoryUrl ?? "";
-        RepositoryName  = repositoryName ?? "";
-        GitRef          = gitRef ?? "";
-        Model           = model ?? "";
-        MaxTurns        = maxTurns;
-        AllowedTools    = allowedTools is null ? [] : [.. allowedTools];
-        DisallowedTools = disallowedTools is null ? [] : [.. disallowedTools];
-        MaxBudgetUsd    = maxBudgetUsd;
-        ResumeSessions  = resumeSessions;
+        Plugins           = [.. plugins];
+        WithEnvs          = withEnvs is null ? [] : [.. withEnvs];
+        Prompt            = prompt;
+        Platform          = platform ?? "";
+        RepositoryUrl     = repositoryUrl ?? "";
+        RepositoryName    = repositoryName ?? "";
+        GitRef            = gitRef ?? "";
+        Model             = model ?? "";
+        MaxTurns          = maxTurns;
+        AllowedTools      = allowedTools is null ? [] : [.. allowedTools];
+        DisallowedTools   = disallowedTools is null ? [] : [.. disallowedTools];
+        MaxBudgetUsd      = maxBudgetUsd;
+        ResumeSessions    = resumeSessions;
+        EnableCompression = enableCompression;
     }
 }

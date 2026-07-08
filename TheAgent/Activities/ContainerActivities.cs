@@ -508,6 +508,12 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
         if (input.ResumeSessions)
             SetRuntime(env, prov, "XIANIX-RESUME-SESSIONS", "1");
 
+        // Opt-in per-run Headroom compression proxy (Option B). Only seeded when the rule
+        // (or chat caller) enabled it — default off, and the executor treats proxy startup
+        // as fail-open so this can never break a plugin run.
+        if (input.EnableCompression)
+            SetRuntime(env, prov, "XIANIX-COMPRESSION", "1");
+
         // Host-wide opt-in for the hybrid LLM context narrative. Seeded only when enabled so the
         // env summary stays clean by default; a tenant can still flip it per rule-set via
         // with-envs (which is injected afterwards and overrides this runtime seed).
@@ -743,6 +749,7 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
             "XIANIX-MODEL", "XIANIX-MAX-TURNS", "XIANIX-DEFAULT-MAX-TURNS",
             "XIANIX-ALLOWED-TOOLS", "XIANIX-DISALLOWED-TOOLS", "XIANIX-MAX-BUDGET-USD",
             "XIANIX-RESUME-SESSIONS", "XIANIX-CONTEXT-LLM", "XIANIX-CONTEXT-LLM-MODEL",
+            "XIANIX-COMPRESSION",
         };
         var ordered = prov
             .OrderBy(kv => Array.IndexOf(runtimeOrder, kv.Key) is var idx && idx >= 0 ? idx : int.MaxValue)

@@ -20,6 +20,8 @@ import json
 import time
 import asyncio
 import traceback
+from urllib import request as _urlrequest
+from urllib import error as _urlerror
 
 from claude_agent_sdk import (
     query,
@@ -409,6 +411,67 @@ def process_result_message(message: ResultMessage) -> None:
 
 # ── Output ───────────────────────────────────────────────────────────────────
 
+def _compression_enabled() -> bool:
+    """True when the run was launched with Headroom compression opt-in."""
+    raw = os.environ.get("XIANIX_COMPRESSION", "")
+    return raw.strip().lower() in ("1", "true", "yes")
+
+
+def collect_compression_stats() -> dict | None:
+    """Best-effort readout of the per-run Headroom proxy stats.
+
+    Returns None when compression was not enabled (nothing to report). When enabled,
+    always returns a dict with at least ``enabled=True`` and ``available`` set — the
+    proxy may be unreachable (fail-open) and we still want the control plane to know
+    the run *had* compression on so the "runs with compression" denominator is correct.
+
+    Never raises: the stats readout is a metrics side-channel and must never break the
+    executor's stdout envelope.
+    """
+    if not _compression_enabled():
+        return None
+
+    envelope: dict = {"enabled": True, "available": False}
+    try:
+        req = _urlrequest.Request("http://127.0.0.1:8787/stats")
+        with _urlrequest.urlopen(req, timeout=2.0) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except (_urlerror.URLError, TimeoutError, OSError, json.JSONDecodeError, ValueError) as exc:
+        log(f"compression: stats unavailable ({type(exc).__name__}: {exc}) — reporting as unavailable.")
+        return envelope
+    except Exception as exc:  # noqa: BLE001 — must never raise from a metrics helper
+        log(f"compression: unexpected error reading stats ({type(exc).__name__}: {exc}).")
+        return envelope
+
+    if not isinstance(payload, dict):
+        return envelope
+
+    # Headroom's /stats layout differs slightly across versions; look for both the
+    # session-level fields and the durable `persistent_savings` rollup. Normalise to a
+    # stable envelope shape the C# parser can rely on.
+    persistent = payload.get("persistent_savings") if isinstance(payload.get("persistent_savings"), dict) else {}
+
+    def _pick(key: str, *fallbacks: str):
+        for src in (payload, persistent):
+            for k in (key, *fallbacks):
+                if isinstance(src, dict) and src.get(k) is not None:
+                    return src[k]
+        return None
+
+    envelope.update({
+        "available": True,
+        "tokens_before":            _pick("tokens_before", "total_tokens_before", "input_tokens_before"),
+        "tokens_after":             _pick("tokens_after", "total_tokens_after", "input_tokens_after"),
+        "tokens_saved":             _pick("tokens_saved", "total_tokens_saved"),
+        "savings_percent":          _pick("savings_percent", "savings_ratio_percent", "compression_ratio_percent"),
+        "compression_savings_usd":  _pick("cost_saved", "cost_saved_usd", "savings_usd"),
+        "requests":                 _pick("requests", "total_requests", "request_count"),
+        "cache_hits":               _pick("cache_hits", "total_cache_hits"),
+        "transforms":               payload.get("transforms") if isinstance(payload.get("transforms"), dict) else None,
+    })
+    return envelope
+
+
 def build_output(
     *,
     tenant_id: str,
@@ -425,6 +488,7 @@ def build_output(
     error_traceback: str | None = None,
     models: list[str] | None = None,
     model_usage: dict | None = None,
+    compression: dict | None = None,
 ) -> dict:
     """
     Consistent JSON envelope for both success and error cases.
@@ -452,6 +516,7 @@ def build_output(
         "cache_read_tokens": usage.get("cache_read_input_tokens"),
         "cache_creation_tokens": usage.get("cache_creation_input_tokens"),
         "model_usage": model_usage,
+        "compression": compression,
         "error": error,
         "error_traceback": error_traceback,
     }
@@ -568,6 +633,7 @@ async def main() -> None:
         usage=_run.final_usage(),
         models=sorted(_run.models_seen) if _run.models_seen else None,
         model_usage=_run.model_usage_envelope(),
+        compression=collect_compression_stats(),
     ))
 
 
@@ -595,6 +661,7 @@ if __name__ == "__main__":
             usage=_run.final_usage(),
             models=sorted(_run.models_seen) if _run.models_seen else None,
             model_usage=_run.model_usage_envelope(),
+            compression=collect_compression_stats(),
             error=f"{type(e).__name__}: {e}",
             error_traceback=traceback.format_exc(),
         ))

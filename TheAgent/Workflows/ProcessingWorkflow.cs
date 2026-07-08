@@ -133,6 +133,7 @@ public class ProcessingWorkflow
             DisallowedTools = result.Execution.DisallowedTools,
             MaxBudgetUsd = result.Execution.MaxBudgetUsd,
             ResumeSessions = result.Execution.ResumeSessions,
+            EnableCompression = result.Execution.EnableCompression,
         };
     }
 

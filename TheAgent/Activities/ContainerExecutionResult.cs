@@ -38,6 +38,26 @@ public sealed class ContainerExecutionResult
     /// report a breakdown.
     /// </summary>
     public IReadOnlyDictionary<string, ModelTokenUsage>? ModelUsage { get; set; }
+
+    // ── Compression (Headroom, Option B) ──────────────────────────────────
+    // Parsed from the executor's optional `compression` block. All fields are null when
+    // the run did not enable compression, so absence must always be treated as a no-op.
+
+    /// <summary>True when the run had compression enabled (XIANIX-COMPRESSION=1).</summary>
+    public bool? CompressionEnabled { get; set; }
+
+    /// <summary>True when the executor was able to read stats from the local Headroom proxy.
+    /// False when compression was enabled but the proxy was unreachable / returned no stats
+    /// (fail-open — the run itself still succeeded).</summary>
+    public bool? CompressionAvailable { get; set; }
+
+    public long?   CompressionTokensBefore   { get; set; }
+    public long?   CompressionTokensAfter    { get; set; }
+    public long?   CompressionTokensSaved    { get; set; }
+    public double? CompressionSavingsPercent { get; set; }
+    public double? CompressionSavingsUsd     { get; set; }
+    public long?   CompressionRequests       { get; set; }
+    public long?   CompressionCacheHits      { get; set; }
 }
 
 /// <summary>Token usage for a single model within one container execution.</summary>

@@ -76,6 +76,13 @@ public sealed record ContainerExecutionInput
     /// </summary>
     public bool ResumeSessions { get; init; }
 
+    /// <summary>
+    /// When true, the executor starts a per-run Headroom compression proxy and routes Claude
+    /// Code through it (opt-in, fail-open). Seeded as <c>XIANIX-COMPRESSION=1</c>. Defaults
+    /// to <c>false</c>; see <c>Docs/headroom-compression-design.md</c> (Option B).
+    /// </summary>
+    public bool EnableCompression { get; init; }
+
     public string VolumeName { get; init; } = string.Empty;
 
     /// <summary>

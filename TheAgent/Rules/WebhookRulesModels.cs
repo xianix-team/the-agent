@@ -161,6 +161,15 @@ public sealed class WebhookExecution
     public bool ResumeSessions { get; init; }
 
     /// <summary>
+    /// When true, the executor container starts a per-run Headroom compression proxy and
+    /// routes Claude Code through it (opt-in, fail-open). Surfaced to the container as
+    /// <c>XIANIX-COMPRESSION=1</c>. Defaults to <c>false</c>; see
+    /// <c>Docs/headroom-compression-design.md</c> (Option B).
+    /// </summary>
+    [JsonPropertyName("compression")]
+    public bool EnableCompression { get; init; }
+
+    /// <summary>
     /// Prompt template to execute after all plugins are installed.
     /// Supports <c>{{input-name}}</c> placeholders that are replaced with resolved input values.
     /// </summary>

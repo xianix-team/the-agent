@@ -72,6 +72,7 @@ public class ClaudeCodeChatWorkflow
             DisallowedTools   = req.DisallowedTools,
             MaxBudgetUsd      = req.MaxBudgetUsd,
             ResumeSessions    = req.ResumeSessions,
+            EnableCompression = req.EnableCompression,
             VolumeName        = volumeName,
         };
 

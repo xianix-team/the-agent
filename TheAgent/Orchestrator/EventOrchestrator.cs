@@ -86,7 +86,8 @@ public sealed class EventOrchestrator : IEventOrchestrator
                     evaluation.AllowedTools,
                     evaluation.DisallowedTools,
                     evaluation.MaxBudgetUsd,
-                    evaluation.ResumeSessions)
+                    evaluation.ResumeSessions,
+                    evaluation.EnableCompression)
                 : null;
 
             matches.Add(new ProcessingRequest(){

@@ -74,6 +74,18 @@ WORKDIR /workspace
 COPY requirements.txt /workspace/requirements.txt
 RUN pip install --no-cache-dir -r /workspace/requirements.txt
 
+# ── Headroom compression proxy (Option B, per-container, opt-in via XIANIX-COMPRESSION) ──
+# Only the `[proxy]` extra is installed — NOT `[all]` or `[llmlingua]`, which would pull
+# ~2 GB of torch/transformers and add 10–30 s cold start; the wrong trade for our short-lived
+# containers. `build-essential` is only needed at install time for a small C++ extension
+# (hnswlib) and is removed immediately after to keep the image lean. Override the pinned
+# version at build time with --build-arg HEADROOM_VERSION=x.y.z.
+ARG HEADROOM_VERSION=0.7.0
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+    && pip install --no-cache-dir "headroom-ai[proxy]==${HEADROOM_VERSION}" \
+    && apt-get purge -y build-essential && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+
 # pentest-agent v3.0+ tools (web-application pentesting).
 # - semgrep: primary SAST scanner used by sast-scanner.
 # - bandit: Python SAST fallback.

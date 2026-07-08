@@ -49,7 +49,8 @@ public class JobDispatcherWorkflow
                         execution.AllowedTools,
                         execution.DisallowedTools,
                         execution.MaxBudgetUsd,
-                        execution.ResumeSessions
+                        execution.ResumeSessions,
+                        execution.EnableCompression
                     ),
                 };
                 await XiansContext.Workflows.StartAsync<ProcessingWorkflow>(new object[] { request }, Guid.NewGuid().ToString());

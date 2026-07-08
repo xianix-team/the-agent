@@ -85,4 +85,11 @@ public sealed record ClaudeCodeChatRequest
 
     /// <summary>When true, resume the prior session for this conversation (best-effort). Defaults to false.</summary>
     public bool ResumeSessions { get; init; }
+
+    /// <summary>
+    /// When true, the executor starts a per-run Headroom compression proxy for this chat-driven
+    /// run (opt-in, fail-open). Mirrors the webhook path's per-execution <c>compression</c> flag.
+    /// Defaults to <c>false</c>.
+    /// </summary>
+    public bool EnableCompression { get; init; }
 }

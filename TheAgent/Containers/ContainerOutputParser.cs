@@ -36,6 +36,7 @@ public static class ContainerOutputParser
             result.DurationSeconds     = GetDouble(root, "duration_seconds");
             result.Models              = GetStringArray(root, "models");
             result.ModelUsage          = GetModelUsage(root);
+            ParseCompression(root, result);
         }
         catch (JsonException ex)
         {
@@ -112,4 +113,34 @@ public static class ContainerOutputParser
 
         return values.Count == 0 ? null : values;
     }
+
+    /// <summary>
+    /// Parses the optional <c>compression</c> object emitted by the executor when a run had
+    /// Headroom compression enabled. Missing block is a silent no-op — every field stays null,
+    /// which keeps the cost/token parsing contract for non-compression runs unchanged.
+    /// </summary>
+    private static void ParseCompression(JsonElement root, ContainerExecutionResult result)
+    {
+        if (!root.TryGetProperty("compression", out var el) || el.ValueKind != JsonValueKind.Object)
+            return;
+
+        result.CompressionEnabled        = GetBool(el, "enabled");
+        result.CompressionAvailable      = GetBool(el, "available");
+        result.CompressionTokensBefore   = GetLong(el, "tokens_before");
+        result.CompressionTokensAfter    = GetLong(el, "tokens_after");
+        result.CompressionTokensSaved    = GetLong(el, "tokens_saved");
+        result.CompressionSavingsPercent = GetDouble(el, "savings_percent");
+        result.CompressionSavingsUsd     = GetDouble(el, "compression_savings_usd");
+        result.CompressionRequests       = GetLong(el, "requests");
+        result.CompressionCacheHits      = GetLong(el, "cache_hits");
+    }
+
+    private static bool? GetBool(JsonElement root, string prop) => root.TryGetProperty(prop, out var el)
+        ? el.ValueKind switch
+        {
+            JsonValueKind.True  => true,
+            JsonValueKind.False => false,
+            _ => (bool?)null,
+        }
+        : null;
 }
