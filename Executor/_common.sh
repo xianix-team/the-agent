@@ -27,6 +27,9 @@ log() { echo "$@" >&2; }
 # auto-injected by the agent from the execution-level `platform` / `repository` block
 # in rules.json (or synthesized by the chat onboarding tool). They are not authored
 # under `use-inputs` — the agent serialises them under these canonical kebab-case keys.
+# These are the ONLY inputs the executor scripts ever read: everything else in
+# XIANIX_INPUTS is task-specific and opaque to this layer (task context such as a PR
+# number reaches the plugin through the prompt, never through executor logic).
 # Note: do NOT write `${XIANIX_INPUTS:-{}}` — bash parses the first `}` as the
 # end of the parameter expansion, leaving a stray `}` appended to the value
 # (which then breaks jq with "Unmatched '}'"). Use `:=` to assign-if-unset

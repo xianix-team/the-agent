@@ -142,7 +142,10 @@ cat progress.log  # git + plugin + executor progress messages
 |-----|----------|
 | `repository-url` | Git clone/fetch target. Required for repo-bound runs; framework-managed (injected from the execution-level `repository.url` in `rules.json`). |
 | `platform` | Credential selection: `github` (default), `azuredevops`. Framework-managed (injected from the execution-level `platform`). |
-| `git-ref` | Ref (branch / commit / tag) to check out into the worktree. Framework-managed (injected from the execution-level `repository.ref` in `rules.json`). When the rule omits `repository.ref` the executor runs against the bare-clone HEAD. |
+| `git-ref` | Ref (branch / commit / tag) to check out into the worktree. Optional and framework-managed (injected from the execution-level `repository.ref` in `rules.json` when declared). When absent the executor runs against the default branch (bare-clone HEAD) — any task-specific checkout beyond that (e.g. a PR's source branch) is performed by the plugin itself inside the worktree. |
+| `conversation-id` | Optional opaque id used (filename-sanitised) as the session-resume key when `XIANIX-RESUME-SESSIONS` is enabled. Framework-managed — injected from the execution-level `conversation-key` binding in `rules.json` (e.g. mapped from the payload's PR id); the executor attaches no meaning to its contents. |
+
+The executor shell scripts read **only** these structural keys from `XIANIX_INPUTS`. All other inputs (`pr-number`, `issue-number`, …) are task-specific and opaque to the executor — they reach the plugin through the interpolated `PROMPT`, keeping the executor independent of any particular action.
 
 ## Concurrency model
 

@@ -12,7 +12,15 @@ In **this repository**, the default rules are embedded from [`TheAgent/Knowledge
 
 ## File structure
 
-`rules.json` is a JSON array of **rule set** objects. Each rule set targets one **webhook** name (case-insensitive) and contains an **executions** array. Each execution is an independent pipeline: optional filters, inputs, plugins, and prompt.
+`rules.json` is a JSON array of **rule set** objects. The *kind* of each rule set is chosen by its discriminator key at the **root level** of the object — mutually exclusive:
+
+| Root key | Kind | Consumed by | Section |
+|----------|------|-------------|---------|
+| `"webhook"` | Webhook rule set — reacts to an inbound event | `WebhookRulesEvaluator` | below |
+| `"chat"` | Chat rule set — the plugin invocations the chat tool may offer | `AvailablePluginsCatalog` | [1a](#1a-chat--root-level-chat-rule-sets) |
+| `"schedule"` (+ `"cron"`) | Schedule rule set — cron-driven runs | `ScheduleEvaluator` | (see schedule docs) |
+
+Every kind carries an **executions** array (each execution is an independent pipeline: optional filters, inputs, plugins, prompt) and may carry a rule-set-wide `with-envs`. Objects without one of these discriminator keys are ignored by every reader. A webhook rule set targets one **webhook** name (case-insensitive).
 
 ```jsonc
 [
@@ -45,7 +53,7 @@ In **this repository**, the default rules are embedded from [`TheAgent/Knowledge
 | `with-envs` (optional, on the rule set) | Rule-set-wide [common environment variables](#5-with-envs--container-environment-variables) injected into every execution in this rule set. Per-execution `with-envs` entries override these by env name. |
 | `executions` | One or more execution blocks |
 | `platform` (optional, on each execution) | Hosting service the execution operates against (`github`, `azuredevops`, …). Structural — describes *where* the run happens, independent of the plugin. Auto-injected into `XIANIX_INPUTS` as `"platform"` for plugin prompts. Omit for executions that don't target a specific platform. |
-| `repository` (optional, on each execution) | Structural binding for the repository being operated on. Every sub-field that is declared (`url`, `ref`) is treated as **mandatory** — if any declared path doesn't resolve, the block is skipped before any container starts. Auto-injected as `"repository-url"` / `"git-ref"`, with `"repository-name"` derived from `repository.url` and injected alongside them. Omit entirely for executions that don't operate on a specific repo (e.g. work-item analysis). |
+| `repository` (optional, on each execution) | Structural binding for the repository being operated on. Every sub-field that is declared (`url`, `ref`) is treated as **mandatory** — if any declared path doesn't resolve, the block is skipped before any container starts. Auto-injected as `"repository-url"` / `"git-ref"`, with `"repository-name"` derived from `repository.url` and injected alongside them. Omit entirely for executions that don't operate on a specific repo (e.g. work-item analysis), or for chat rule-set executions (the chat tool always supplies the repository itself). |
 
 If **several** execution blocks in the same rule set match the same webhook payload, **each** match is scheduled separately: the integrator starts one activation / processing workflow per match (see `XianixAgent` webhook handler).
 
@@ -58,8 +66,9 @@ If **several** execution blocks in the same rule set match the same webhook payl
 └───────────────────────────────┬──────────────────────────────────────┘
                                 │
                     ┌───────────▼───────────┐
-                    │  Find rule set where  │
-                    │  webhook matches      │
+                    │  Find webhook rule    │──── (chat / schedule rule sets have no
+                    │  set where name       │      webhook name → never selected here)
+                    │  matches              │
                     └───────────┬───────────┘
                                 │
                     ┌───────────▼───────────┐
@@ -96,6 +105,63 @@ Case-insensitive match against the webhook name configured in Xians Agent Studio
 ```
 
 Only one rule set per webhook name is used — the **first** matching entry in the `rules.json` array wins.
+
+---
+
+## 1a. `chat` — root-level chat rule sets
+
+A **chat rule set** is a root-level sibling of the `"webhook"` and `"schedule"` rule sets — the invocation path is chosen by *which discriminator key the object carries*, not by a per-execution flag. A chat rule set is keyed on `"chat"` and lists the marketplace plugins the chat tool (`SupervisorSubagentTools.RunClaudeCodeOnRepository`) may offer the user, via `AvailablePluginsCatalog`, along with the cost/control tuning to apply to those chat runs.
+
+Unlike a webhook rule set, **a chat rule set has no `executions` array.** A chat run's prompt is authored by the supervisor from the user's own message — there's no payload to interpolate, so a per-execution `execute-prompt` / `use-inputs` shape would be redundant. The plugin list and tuning knobs live at the rule-set **root** and apply uniformly to every chat dispatch that uses one of the listed plugins:
+
+```jsonc
+{
+  "chat": "chat",
+  "with-envs": [ /* optional, rule-set-wide — same shape as a webhook rule set */ ],
+  "use-plugins": [
+    { "plugin-name": "pr-reviewer@xianix-plugins-official", "marketplace": "xianix-team/plugins-official" }
+  ],
+  "model": "claude-sonnet-4-5",
+  "max-budget-usd": 5.0
+  // also: "max-turns", "allowed-tools", "disallowed-tools", "resume-sessions"
+}
+```
+
+| Root key | Consumed by | Notes |
+|----------|-------------|-------|
+| `"webhook"` | `WebhookRulesEvaluator` against inbound webhook payloads | Matches on the webhook name; has `executions`. |
+| `"chat"` | `AvailablePluginsCatalog` (feeds the chat tool's `ListAvailablePlugins`) | Has no webhook name, so the webhook evaluator **never** selects it. No `executions` — `use-plugins` + tuning at the root. |
+| `"schedule"` (+ `"cron"`) | `ScheduleEvaluator` | Cron-driven; parsed independently from the same document. |
+
+`RulesKnowledge.LoadAsync` keeps only rule sets with a non-empty `"webhook"` name and `RulesKnowledge.LoadChatRuleSetsAsync` keeps only those with a non-empty `"chat"` name, so the three kinds coexist in one array without leaking into each other's readers.
+
+### Root-level fields
+
+| Field | Description |
+|-------|-------------|
+| `chat` | Discriminator + label. Any non-empty value marks the object as a chat rule set (the value is only used in logs — there's no external event to match). |
+| `use-plugins` | The plugins this rule set makes available to the chat tool. Same `plugin-name@marketplace` shape as a webhook execution's `use-plugins`. |
+| `model` / `max-turns` / `allowed-tools` / `disallowed-tools` / `max-budget-usd` / `resume-sessions` | Cost/control tuning applied to every chat dispatch that uses one of `use-plugins`. Same meaning as the identically-named per-execution knobs on a webhook block. |
+| `with-envs` | Optional rule-set-wide common environment variables shipped to chat dispatches by `RulesEnvCatalog` (platform-agnostic, like a webhook rule set's commons). |
+
+### Why cost tuning must live on the chat rule set
+
+If the chat catalog had to reuse a plugin's *webhook* execution blocks for its tuning, a chat run would silently inherit (or lose) whatever cost tuning the webhook block happened to carry. A webhook PR review might be pinned to `claude-sonnet-4-5` at `max-budget-usd: 3.0`, but without a chat rule set the chat tool has no equivalent knobs to populate on its dispatch — chat runs fall back to the executor's untuned defaults (a pricier model, a higher budget cap). Declaring `model` / `max-budget-usd` / … on the chat rule set fixes that, and lets the chat budget differ from the webhook budget for the same plugin.
+
+Author **separate chat rule sets** when different plugins need different tuning.
+
+### Invocation guidance — no prompt template
+
+Because a chat run's prompt comes from the user's message, a chat rule set carries no `execute-prompt`. The supervisor composes the prompt itself and invokes the plugin's slash command, passing whatever target the user gave (a PR number, a branch name, …) as its argument — e.g. "review PR 42" → `/pr-review 42`, "review my `feature/login` branch" → `/pr-review feature/login`. It infers the command from the plugin's name/purpose (see `system-prompt.md`). This is why one plugin listing serves both the "by PR number" and "by branch" cases that previously needed two execution blocks.
+
+`ListAvailablePlugins` surfaces a chat-listed plugin with an **empty** `usageExamples` array — the signal to the supervisor that it must compose the prompt itself. (Internally the catalog still synthesises a single tuning-only usage example so `PluginInputResolver` can carry the `model` / `max-budget-usd` / … onto the dispatch; that example has no prompt and no inputs and is filtered out of the model-facing list.)
+
+### Catalog selection rule (chat-exclusive, else webhook fallback)
+
+`AvailablePluginsCatalog` builds one catalog entry per unique `plugin-name@marketplace`, and for each plugin applies this rule:
+
+- If the plugin is listed by **any chat rule set**, the catalog serves it with that rule set's tuning exclusively — the webhook rule-set usage examples are not shown to the chat tool at all.
+- Otherwise (no chat rule set lists that plugin), the catalog falls back to the plugin's webhook usage examples (with their `execute-prompt` templates and `use-inputs`) — so tenants who haven't authored a chat rule set for a plugin see no behaviour change.
 
 ---
 
@@ -391,8 +457,8 @@ Examples:
 
 The same `with-envs` declarations also flow through to **chat-initiated** runs (e.g. when a user asks the agent to run a plugin via `RunClaudeCodeOnRepository` instead of via a webhook). A chat dispatch doesn't bind to a specific execution block, so the chat tool reads `rules.json` as the manifest of *every* credential the agent could need and ships:
 
-- **Every rule-set-level `with-envs` entry** — applied unconditionally, regardless of platform. This is precisely the "common defaults" contract: a `GITHUB-TOKEN` declared at the rule-set level is available to chat runs the same way it's available to every execution.
-- **Per-execution `with-envs` entries** whose execution matches the chosen repository's platform (or is platform-agnostic) — kept under the platform filter so a GitHub-targeted chat run doesn't inherit Azure DevOps's mandatory PAT and vice versa.
+- **Every rule-set-level `with-envs` entry** — applied unconditionally, regardless of platform, from **both** webhook rule sets and chat rule sets (a chat rule set has only rule-set-level `with-envs`, no executions). This is precisely the "common defaults" contract: a `GITHUB-TOKEN` declared at the rule-set level is available to chat runs the same way it's available to every execution.
+- **Per-execution `with-envs` entries** (webhook rule sets only) whose execution matches the chosen repository's platform (or is platform-agnostic) — kept under the platform filter so a GitHub-targeted chat run doesn't inherit Azure DevOps's mandatory PAT and vice versa.
 
 Both lists are then deduped by env name. The platform filter intentionally does *not* apply to rule-set commons — if you want a credential to be platform-specific, declare it under the matching execution(s), not at the rule-set level.
 

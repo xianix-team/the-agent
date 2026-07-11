@@ -98,16 +98,23 @@ def parse_float_env(name: str) -> float | None:
 # ── Session reuse (opt-in) ─────────────────────────────────────────────────────
 # Back-to-back runs against the same conversation (e.g. PR re-reviews on `synchronize`)
 # can resume the prior Claude Code session instead of rebuilding context from scratch.
-# The session id is persisted on the tenant volume keyed by repo + PR/issue/work-item, and
-# Claude's session history is persisted via CLAUDE_CONFIG_DIR (set in run_prompt.sh). Off by
-# default (XIANIX_RESUME_SESSIONS) and always best-effort — a failed resume falls back to a
-# fresh run so re-reviews can never be broken by a stale/missing session.
+# The session id is persisted on the tenant volume keyed by the generic `conversation-id`
+# input, and Claude's session history is persisted via CLAUDE_CONFIG_DIR (set in
+# run_prompt.sh). Off by default (XIANIX_RESUME_SESSIONS) and always best-effort — a
+# failed resume falls back to a fresh run so re-reviews can never be broken by a
+# stale/missing session.
 
 _SESSION_DIR = "/workspace/repo/xianix-sessions"
 
 
 def session_key(inputs_raw: str | None) -> str | None:
-    """Stable per-conversation key (repo + PR/issue/work-item) for session resume, or None."""
+    """Filename-safe session-resume key from the generic `conversation-id` input, or None.
+
+    `conversation-id` is an opaque value authored in rules.json `use-inputs` (e.g. mapped
+    from the payload's PR / work-item id); this executor only sanitises it for use as a
+    filename and attaches no meaning to its contents — task-specific input names are
+    never read here.
+    """
     if not inputs_raw:
         return None
     try:
@@ -117,12 +124,10 @@ def session_key(inputs_raw: str | None) -> str | None:
     if not isinstance(data, dict):
         return None
 
-    repo = data.get("repository-name") or data.get("repository-url") or ""
-    item = (data.get("pr-number") or data.get("issue-number")
-            or data.get("work-item-id") or data.get("workitem-id") or "")
-    if not repo or not item:
+    conversation_id = data.get("conversation-id") or ""
+    if not conversation_id:
         return None
-    return re.sub(r"[^A-Za-z0-9._-]", "_", f"{repo}#{item}")
+    return re.sub(r"[^A-Za-z0-9._-]", "_", str(conversation_id))
 
 
 def read_prior_session(key: str) -> str | None:

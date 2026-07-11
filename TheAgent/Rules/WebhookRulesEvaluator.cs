@@ -200,6 +200,15 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             if (!string.IsNullOrEmpty(gitRef))
                 dict["git-ref"] = gitRef;
 
+            // `conversation-key` resolves to the canonical `conversation-id` input the
+            // executor uses (opaquely) for session-resume keying. Best-effort by design:
+            // an unresolvable path must not skip the block — the run just starts a fresh
+            // session — so unlike the repository bindings it is never treated as mandatory.
+            var (conversationId, _) = ResolveStructuralBinding(
+                root, execution.ConversationKey, "conversation-key", treatAsMandatory: false);
+            if (!string.IsNullOrEmpty(conversationId))
+                dict["conversation-id"] = conversationId;
+
             var prompt = InterpolatePrompt(execution.Prompt, dict);
             var hasPrompt = !string.IsNullOrWhiteSpace(prompt);
             var blockName = string.IsNullOrWhiteSpace(execution.Name) ? null : execution.Name.Trim();

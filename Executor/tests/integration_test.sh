@@ -21,10 +21,13 @@
 #     2. A second "prepare" run reuses the existing clone (fetch, not re-clone).
 #     3. A new commit pushed to the fixture is picked up on the next run.
 #     4. A bad repository URL produces the structured prepare error envelope.
-#     5. A deleted head branch falls back to the platform PR ref (refs/pull/N/head).
+#     5. An explicit git-ref (any fetchable ref, e.g. a PR's refs/pull/N/head)
+#        is checked out into the worktree.
+#     6. No git-ref checks out the default branch (HEAD) — the chat-driven and
+#        plugin-resolves-its-own-refs path.
 #
 #   Tier 2 (needs ANTHROPIC_API_KEY, costs ~$0.01, skipped when the key is absent):
-#     6. A full prepare-and-execute run where Claude Code must read a planted
+#     7. A full prepare-and-execute run where Claude Code must read a planted
 #        secret token from the repo and return it in the result envelope.
 #
 # HOW TO RUN
@@ -336,15 +339,16 @@ test_bad_url_error_envelope() {
     fi
 }
 
-test_deleted_branch_falls_back_to_pr_ref() {
-    banner "Test 5: deleted head branch falls back to the platform PR ref"
+test_explicit_gitref_is_checked_out() {
+    banner "Test 5: an explicit git-ref (a PR-style ref) is checked out into the worktree"
 
-    # Simulate GitHub's post-merge state: the PR's head branch has been deleted
-    # from the remote, but the synthetic refs/pull/<n>/head still points at the
-    # head commit. (Production failure mode: a review triggered on an
-    # already-merged PR died with "couldn't find remote ref <branch>".)
+    # The executor is task-agnostic: git-ref is just "a fetchable ref". Prove
+    # that an arbitrary non-branch ref (the shape a PR platform maintains, e.g.
+    # refs/pull/7/head) is fetched and checked out when it is the declared
+    # git-ref. The branch itself is deleted so the commit is reachable ONLY via
+    # that ref.
     fixture_git checkout -q -b pr-branch-deleted
-    echo "A change from a PR whose branch gets deleted after merge" > "${FIXTURE_SRC}/PR.md"
+    echo "A change reachable only via a non-branch ref" > "${FIXTURE_SRC}/PR.md"
     fixture_git add -A
     fixture_git commit -q -m "PR head commit"
     local pr_sha
@@ -357,8 +361,7 @@ test_deleted_branch_falls_back_to_pr_ref() {
     local inputs
     inputs="$(jq -cn --arg url "${REPO_URL_IN_CONTAINER}" \
         '{"repository-url": $url, "platform": "local",
-          "git-ref": "pr-branch-deleted",
-          "pr-link": "https://api.github.com/repos/acme/fixture/pulls/7"}')"
+          "git-ref": "refs/pull/7/head"}')"
 
     # Run only the prepare script: prepare-and-execute mode is what enables
     # worktree creation, but going through the full entrypoint would chain into
@@ -366,34 +369,78 @@ test_deleted_branch_falls_back_to_pr_ref() {
     run_executor "${VOLUME_MAIN}" \
         --entrypoint /workspace/prepare_repo.sh \
         -e "TENANT-ID=integration-test" \
-        -e "EXECUTION-ID=it-pr-fallback" \
+        -e "EXECUTION-ID=it-explicit-ref" \
         -e "XIANIX-MODE=prepare-and-execute" \
         -e "XIANIX-INPUTS=${inputs}"
 
     if [ "${LAST_EXIT}" -eq 0 ]; then
-        t_pass "container exited 0 despite the deleted branch"
+        t_pass "container exited 0"
     else
         t_fail "container exited ${LAST_EXIT}, expected 0"
         return
     fi
 
-    if grep -q "falling back to 'refs/pull/7/head'" "${STDERR_FILE}"; then
-        t_pass "logged the fallback to refs/pull/7/head"
+    if grep -q "Creating worktree for ref: refs/pull/7/head" "${STDERR_FILE}"; then
+        t_pass "logged the worktree creation for refs/pull/7/head"
     else
-        t_fail "expected a fallback log line mentioning refs/pull/7/head"
+        t_fail "expected a worktree log line mentioning refs/pull/7/head"
     fi
 
     if inspect_volume "${VOLUME_MAIN}" "git -C /workspace/repo cat-file -e ${pr_sha}" >/dev/null 2>&1; then
-        t_pass "PR head commit (${pr_sha:0:12}) was fetched into the bare clone"
+        t_pass "ref's commit (${pr_sha:0:12}) was fetched into the bare clone"
     else
-        t_fail "PR head commit ${pr_sha} is missing from the bare clone"
+        t_fail "ref's commit ${pr_sha} is missing from the bare clone"
+    fi
+}
+
+test_no_gitref_uses_default_branch() {
+    banner "Test 6: no git-ref checks out the default branch (HEAD)"
+
+    # The chat-driven path ("review PR #9") supplies no git-ref at all: the
+    # executor must simply run against the default branch, and the PLUGIN is
+    # responsible for resolving/fetching any task-specific refs itself from
+    # the prompt. The executor never sees the PR number.
+    local main_sha
+    main_sha="$(fixture_git rev-parse main)"
+
+    local inputs
+    inputs="$(jq -cn --arg url "${REPO_URL_IN_CONTAINER}" \
+        '{"repository-url": $url, "platform": "local", "pr-number": "9"}')"
+
+    # Prepare script only — same reasoning as Test 5.
+    run_executor "${VOLUME_MAIN}" \
+        --entrypoint /workspace/prepare_repo.sh \
+        -e "TENANT-ID=integration-test" \
+        -e "EXECUTION-ID=it-no-gitref" \
+        -e "XIANIX-MODE=prepare-and-execute" \
+        -e "XIANIX-INPUTS=${inputs}"
+
+    if [ "${LAST_EXIT}" -eq 0 ]; then
+        t_pass "container exited 0 without a git-ref"
+    else
+        t_fail "container exited ${LAST_EXIT}, expected 0"
+        return
+    fi
+
+    if grep -q "Creating worktree for HEAD" "${STDERR_FILE}"; then
+        t_pass "worktree was created from HEAD (default branch)"
+    else
+        t_fail "expected a 'Creating worktree for HEAD' log line"
+    fi
+
+    local volume_sha
+    volume_sha="$(inspect_volume "${VOLUME_MAIN}" 'git -C /workspace/repo rev-parse HEAD' 2>/dev/null || echo '?')"
+    if [ "${volume_sha}" = "${main_sha}" ]; then
+        t_pass "bare-clone HEAD matches the fixture's default branch (${main_sha:0:12})"
+    else
+        t_fail "bare-clone HEAD is '${volume_sha}', expected '${main_sha}'"
     fi
 }
 
 # ── Tier 2: real Claude Code run (needs ANTHROPIC_API_KEY) ────────────────────
 
 test_claude_reads_planted_secret() {
-    banner "Test 6: Claude Code reads the planted secret token from the repo"
+    banner "Test 7: Claude Code reads the planted secret token from the repo"
 
     if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
         t_skip "ANTHROPIC_API_KEY is not set — skipping the live Claude Code test."
@@ -484,7 +531,8 @@ test_prepare_clones_repo
 test_prepare_reuses_clone
 test_new_commit_is_picked_up
 test_bad_url_error_envelope
-test_deleted_branch_falls_back_to_pr_ref
+test_explicit_gitref_is_checked_out
+test_no_gitref_uses_default_branch
 test_claude_reads_planted_secret
 
 banner "Results"

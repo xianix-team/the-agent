@@ -166,30 +166,12 @@ pull_default_branch() {
         || log "WARNING: failed to re-point HEAD at refs/heads/${default_branch}."
 }
 
-# Derive a platform-managed PR ref that outlives head-branch deletion. When a
-# PR is merged and its branch deleted (or an old webhook is re-delivered after
-# merge), fetching GIT_REF by branch name fails with "couldn't find remote ref"
-# — but both GitHub and Azure DevOps keep a synthetic ref for every PR forever:
-#   GitHub:       refs/pull/<number>/head   (the PR's head commit)
-#   Azure DevOps: refs/pull/<id>/merge      (ADO exposes only the merge ref)
-# The PR number comes from XIANIX_INPUTS: `pr-number` when the rules provide it
-# directly, otherwise parsed from `pr-link` (handles both API `/pulls/427` and
-# web `/pull/427` URL shapes). Prints nothing when no PR context is available.
-_pr_fallback_ref() {
-    local pr_number pr_link
-    pr_number=$(echo "${XIANIX_INPUTS}" | jq -r '."pr-number" // empty')
-    if [ -z "${pr_number}" ]; then
-        pr_link=$(echo "${XIANIX_INPUTS}" | jq -r '."pr-link" // empty')
-        pr_number=$(printf '%s' "${pr_link}" | sed -nE 's#.*/pulls?/([0-9]+).*#\1#p')
-    fi
-    [ -z "${pr_number}" ] && return 0
-    case "${PLATFORM}" in
-        azuredevops) printf 'refs/pull/%s/merge' "${pr_number}" ;;
-        *)           printf 'refs/pull/%s/head' "${pr_number}" ;;
-    esac
-}
-
 create_worktree() {
+    # Purely generic git semantics, no task knowledge: check out GIT_REF when
+    # supplied, otherwise the default branch (HEAD). Anything task-specific —
+    # e.g. a PR review needing the PR's source branch — is the PLUGIN's job:
+    # it receives the task context through the prompt and performs its own
+    # fetch/checkout inside the worktree.
     if [ -n "${GIT_REF}" ]; then
         log "--- Creating worktree for ref: ${GIT_REF} ---"
         # Fetch into a per-execution ref rather than relying on FETCH_HEAD.
@@ -199,20 +181,11 @@ create_worktree() {
         # race-free; the worktree is created detached from it and the temporary
         # ref is deleted immediately afterwards (the checkout keeps the commit).
         local exec_ref="refs/xianix/exec-${EXECUTION_ID}"
-        if ! git -C "${REPO_DIR}" fetch origin "+${GIT_REF}:${exec_ref}" >&2; then
-            local fallback_ref
-            fallback_ref="$(_pr_fallback_ref)"
-            if [ -z "${fallback_ref}" ] || [ "${fallback_ref}" = "${GIT_REF}" ]; then
-                log "FATAL: could not fetch ref '${GIT_REF}' from origin and no PR fallback ref is available."
-                exit 1
-            fi
-            log "WARNING: ref '${GIT_REF}' not found on origin (head branch likely deleted after merge) — falling back to '${fallback_ref}'."
-            git -C "${REPO_DIR}" fetch origin "+${fallback_ref}:${exec_ref}" >&2
-        fi
+        git -C "${REPO_DIR}" fetch origin "+${GIT_REF}:${exec_ref}" >&2
         git -C "${REPO_DIR}" worktree add "${WORK_DIR}" "${exec_ref}" --detach >&2
         git -C "${REPO_DIR}" update-ref -d "${exec_ref}" >&2 2>/dev/null || true
     else
-        log "--- Creating worktree for HEAD ---"
+        log "--- Creating worktree for HEAD (default branch) ---"
         git -C "${REPO_DIR}" worktree add "${WORK_DIR}" HEAD --detach >&2
     fi
 }

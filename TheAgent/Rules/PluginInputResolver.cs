@@ -94,7 +94,9 @@ internal static class PluginInputResolver
             effective[key] = value;
         }
 
-        return new ResolutionResult.Success(effective);
+        return new ResolutionResult.Success(
+            effective,
+            winningExamples.Select(w => new WinningUsageExample(w.Plugin.PluginName, w.Example)).ToList());
     }
 
     /// <summary>
@@ -174,10 +176,22 @@ internal static class PluginInputResolver
 
 internal abstract record ResolutionResult
 {
-    public sealed record Success(IReadOnlyDictionary<string, string> Inputs) : ResolutionResult;
+    /// <param name="Inputs">The merged, ready-to-serialize inputs (auto-fills, constants,
+    /// caller overrides).</param>
+    /// <param name="WinningExamples">The usage example that satisfied each requested
+    /// plugin's mandatory inputs, so callers can read its cost/control knobs
+    /// (<see cref="CatalogUsageExample.Model"/>, <see cref="CatalogUsageExample.MaxBudgetUsd"/>,
+    /// …) instead of dispatching with the executor's untuned defaults. Empty when no
+    /// plugins were requested, or when a requested plugin declared zero usage examples.</param>
+    public sealed record Success(
+        IReadOnlyDictionary<string, string> Inputs,
+        IReadOnlyList<WinningUsageExample> WinningExamples) : ResolutionResult;
 
     public sealed record Missing(IReadOnlyList<PluginInputGap> Gaps) : ResolutionResult;
 }
+
+/// <summary>The usage example that won input resolution for one requested plugin.</summary>
+internal sealed record WinningUsageExample(string PluginName, CatalogUsageExample Example);
 
 internal sealed record PluginInputGap(
     string PluginName,

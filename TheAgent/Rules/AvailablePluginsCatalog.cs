@@ -35,19 +35,23 @@ internal static class AvailablePluginsCatalog
 
     /// <summary>
     /// Input name the catalog synthesises from <see cref="RepositoryBindingTemplate.Ref"/>.
-    /// Surfaced to the chat tool as a Caller input — when a webhook rule declares which ref
-    /// to check out, the chat-driven equivalent must supply it too. This keeps the chat path
-    /// symmetric with the webhook path and ensures the executor entrypoint always finds
-    /// <c>git-ref</c> in <c>XIANIX_INPUTS</c> when the rule expects a specific worktree state.
+    /// Surfaced to the chat tool as an OPTIONAL Caller input: in webhook mode the payload
+    /// always carries the ref, but a chat user typically only knows the PR number. When
+    /// omitted, the executor checks out the repository's default branch and the plugin
+    /// itself resolves whatever refs its task needs (e.g. the pr-reviewer plugin fetches
+    /// the PR's source/target branches from the PR number in the prompt). The chat model
+    /// should pass <c>git-ref</c> only when the user explicitly names a branch / commit /
+    /// tag, and must never block a run to ask for it.
     /// </summary>
     public const string GitRefInput = "git-ref";
 
     /// <summary>
-    /// Loads <c>rules.json</c> via the canonical <see cref="RulesKnowledge.LoadAsync"/>
-    /// reader and returns one <see cref="CatalogPlugin"/> per unique
-    /// <c>plugin-name@marketplace</c> pair, aggregating every execution block that
-    /// references it so the model can see every way the plugin is normally invoked
-    /// along with the inputs each invocation needs.
+    /// Loads <c>rules.json</c> via the canonical <see cref="RulesKnowledge"/> readers —
+    /// <see cref="RulesKnowledge.LoadAsync"/> for webhook rule sets and
+    /// <see cref="RulesKnowledge.LoadChatRuleSetsAsync"/> for the root-level chat rule sets —
+    /// and returns one <see cref="CatalogPlugin"/> per unique <c>plugin-name@marketplace</c>
+    /// pair, aggregating every execution block that references it so the model can see every
+    /// way the plugin is normally invoked along with the inputs each invocation needs.
     /// </summary>
     /// <returns>An empty list when the rules knowledge document is missing or unparseable.</returns>
     public static async Task<IReadOnlyList<CatalogPlugin>> LoadAsync()
@@ -55,7 +59,8 @@ internal static class AvailablePluginsCatalog
         // Treat "missing" and "empty" identically here — a chat session with no rules
         // should still get a tool result of "no plugins available" rather than blow up.
         var ruleSets = await RulesKnowledge.LoadAsync().ConfigureAwait(false);
-        return BuildCatalog(ruleSets ?? []);
+        var chatRuleSets = await RulesKnowledge.LoadChatRuleSetsAsync().ConfigureAwait(false);
+        return BuildCatalog(ruleSets ?? [], chatRuleSets);
     }
 
     /// <summary>
@@ -63,33 +68,48 @@ internal static class AvailablePluginsCatalog
     /// per-plugin / per-platform aggregation can be exercised without a Xians Knowledge
     /// fixture. <see cref="LoadAsync"/> calls this after pulling and parsing the document.
     /// </summary>
-    internal static IReadOnlyList<CatalogPlugin> BuildCatalog(IEnumerable<WebhookRuleSet> ruleSets)
+    /// <param name="ruleSets">Webhook rule sets (keyed on <c>"webhook"</c>).</param>
+    /// <param name="chatRuleSets">Root-level chat rule sets (keyed on <c>"chat"</c>). A plugin
+    /// referenced by any chat rule set is served exclusively by its chat usage examples; a
+    /// plugin only ever referenced by webhook rule sets falls back to those (unchanged
+    /// behaviour). Optional so existing callers/tests that only exercise webhook rule sets
+    /// keep compiling.</param>
+    internal static IReadOnlyList<CatalogPlugin> BuildCatalog(
+        IEnumerable<WebhookRuleSet> ruleSets,
+        IEnumerable<ChatRuleSet>? chatRuleSets = null)
     {
         ArgumentNullException.ThrowIfNull(ruleSets);
 
         var byKey = new Dictionary<string, CatalogPluginBuilder>(StringComparer.Ordinal);
 
+        // Webhook rule sets first — they establish the fallback usage examples. Rule-set-wide
+        // common envs apply to every execution in the set, so a plugin used by any execution
+        // may need them; pass them through to AddUsage so they accumulate into the plugin's
+        // RequiredEnvs alongside execution-level envs (deduped first-wins by env name).
         foreach (var set in ruleSets)
         {
-            // Rule-set-wide common envs apply to every execution in this rule set, so a
-            // plugin used by any execution in this rule set may need them. Pass them
-            // through to AddUsage so they accumulate into the plugin's RequiredEnvs
-            // alongside the execution-level envs (still deduped first-wins by env name).
             foreach (var execution in set.Executions)
-            {
-                foreach (var plugin in execution.Plugins)
-                {
-                    if (string.IsNullOrWhiteSpace(plugin.PluginName))
-                        continue;
+                AddExecution(byKey, execution, set.WithEnvs);
+        }
 
-                    var key = BuildKey(plugin);
-                    if (!byKey.TryGetValue(key, out var builder))
-                    {
-                        builder = new CatalogPluginBuilder(plugin);
-                        byKey[key] = builder;
-                    }
-                    builder.AddUsage(execution, set.WithEnvs);
+        // Chat rule sets contribute the chat-exclusive tuning (see AddChatUsage / Build). A
+        // chat rule set has no executions — its prompt is authored by the supervisor from the
+        // user's message — so each listed plugin gets a single synthesised usage example that
+        // carries only the rule-set's cost/control knobs (no prompt template, no inputs).
+        foreach (var set in chatRuleSets ?? [])
+        {
+            foreach (var plugin in set.Plugins)
+            {
+                if (string.IsNullOrWhiteSpace(plugin.PluginName))
+                    continue;
+
+                var key = BuildKey(plugin);
+                if (!byKey.TryGetValue(key, out var builder))
+                {
+                    builder = new CatalogPluginBuilder(plugin);
+                    byKey[key] = builder;
                 }
+                builder.AddChatUsage(set);
             }
         }
 
@@ -97,6 +117,26 @@ internal static class AvailablePluginsCatalog
             .Select(b => b.Build())
             .OrderBy(p => p.PluginName, StringComparer.Ordinal)
             .ToList();
+    }
+
+    private static void AddExecution(
+        Dictionary<string, CatalogPluginBuilder> byKey,
+        WebhookExecution execution,
+        IReadOnlyList<EnvEntry> ruleSetCommonEnvs)
+    {
+        foreach (var plugin in execution.Plugins)
+        {
+            if (string.IsNullOrWhiteSpace(plugin.PluginName))
+                continue;
+
+            var key = BuildKey(plugin);
+            if (!byKey.TryGetValue(key, out var builder))
+            {
+                builder = new CatalogPluginBuilder(plugin);
+                byKey[key] = builder;
+            }
+            builder.AddUsage(execution, ruleSetCommonEnvs);
+        }
     }
 
     /// <summary>
@@ -155,7 +195,15 @@ internal static class AvailablePluginsCatalog
     private sealed class CatalogPluginBuilder
     {
         private readonly PluginEntry _source;
-        private readonly List<CatalogUsageExample> _usages = [];
+
+        // Kept in two separate lists so Build() can apply the "chat-exclusive, else
+        // webhook fallback" rule: if this plugin is listed by any root-level chat rule set
+        // (AddChatUsage), the chat catalog uses those tuning-only usage examples exclusively
+        // and ignores the webhook rule-set ones (AddUsage) for this plugin. Tenants that
+        // never list a plugin under a chat rule set keep the pre-existing behaviour of
+        // surfacing its webhook usage examples as-is.
+        private readonly List<CatalogUsageExample> _chatUsages = [];
+        private readonly List<CatalogUsageExample> _webhookUsages = [];
 
         // Aggregated across every execution that references this plugin, kept for the
         // model-facing `RequiredEnvs` (which lists every env the plugin could ever ask for).
@@ -182,8 +230,11 @@ internal static class AvailablePluginsCatalog
             //                        by RepositoryNaming.DeriveName — paired 1:1 with -url
             //                        so plugins always see both keys together)
             //   • platform         → Constant (from rules.json)
-            //   • git-ref          → Caller (model must supply — symmetric with the webhook
-            //                        payload supplying it)
+            //   • git-ref          → Caller but OPTIONAL (unlike webhook mode, where the
+            //                        payload supplies it, a chat user rarely knows the
+            //                        branch — the executor falls back to the default
+            //                        branch and the plugin resolves the task's refs from
+            //                        the prompt itself)
             if (execution.Repository is { } repo)
             {
                 if (repo.Url is { IsEmpty: false } urlBinding)
@@ -204,8 +255,12 @@ internal static class AvailablePluginsCatalog
                 if (repo.Ref is { IsEmpty: false } refBinding)
                     inputs.Add(new CatalogInputRequirement(
                         Name:          GitRefInput,
-                        Mandatory:     true,
-                        Source:        refBinding.Constant ? InputSourceKind.AutoFromRepository : InputSourceKind.Caller,
+                        // Never mandatory on the chat path: when git-ref is absent the
+                        // executor runs on the default branch and the plugin resolves
+                        // the task's refs itself, so the model must not stall a run
+                        // asking the user for a branch name.
+                        Mandatory:     false,
+                        Source:        refBinding.Constant ? InputSourceKind.Constant : InputSourceKind.Caller,
                         ConstantValue: refBinding.Constant ? refBinding.Value : null,
                         PathHint:      DescribeRepoBinding(refBinding)));
             }
@@ -225,10 +280,18 @@ internal static class AvailablePluginsCatalog
                 inputs.Add(BuildInputRequirement(input));
             }
 
-            _usages.Add(new CatalogUsageExample(
-                ExecutionName: execution.Name?.Trim() ?? "",
-                ExecutePrompt: execution.Prompt?.Trim() ?? "",
-                Inputs:        inputs));
+            var usage = new CatalogUsageExample(
+                ExecutionName:   execution.Name?.Trim() ?? "",
+                ExecutePrompt:   execution.Prompt?.Trim() ?? "",
+                Inputs:          inputs,
+                Model:           execution.Model,
+                MaxTurns:        execution.MaxTurns,
+                AllowedTools:    execution.AllowedTools,
+                DisallowedTools: execution.DisallowedTools,
+                MaxBudgetUsd:    execution.MaxBudgetUsd,
+                ResumeSessions:  execution.ResumeSessions);
+
+            _webhookUsages.Add(usage);
 
             // Rule-set common envs first (so an execution-level entry with the same name
             // would still win on first-wins dedup if it were added before this rule-set's
@@ -241,6 +304,36 @@ internal static class AvailablePluginsCatalog
             }
 
             foreach (var env in execution.WithEnvs)
+            {
+                if (string.IsNullOrWhiteSpace(env.Name)) continue;
+                _envs.TryAdd(env.Name, env);
+            }
+        }
+
+        /// <summary>
+        /// Adds the chat-exclusive usage example synthesised from a root-level chat rule set.
+        /// A chat rule set carries no prompt template or inputs (the supervisor authors the
+        /// prompt from the user's message), so the example has an empty <c>ExecutePrompt</c>
+        /// and no <c>Inputs</c> — it exists purely to (a) mark the plugin as chat-available and
+        /// (b) carry the rule-set's cost/control knobs through <see cref="PluginInputResolver"/>
+        /// to the chat dispatch. Empty inputs means it always wins input resolution.
+        /// </summary>
+        public void AddChatUsage(ChatRuleSet set)
+        {
+            ArgumentNullException.ThrowIfNull(set);
+
+            _chatUsages.Add(new CatalogUsageExample(
+                ExecutionName:   string.IsNullOrWhiteSpace(set.ChatName) ? "chat" : set.ChatName.Trim(),
+                ExecutePrompt:   "",
+                Inputs:          [],
+                Model:           set.Model,
+                MaxTurns:        set.MaxTurns,
+                AllowedTools:    set.AllowedTools,
+                DisallowedTools: set.DisallowedTools,
+                MaxBudgetUsd:    set.MaxBudgetUsd,
+                ResumeSessions:  set.ResumeSessions));
+
+            foreach (var env in set.WithEnvs)
             {
                 if (string.IsNullOrWhiteSpace(env.Name)) continue;
                 _envs.TryAdd(env.Name, env);
@@ -285,7 +378,10 @@ internal static class AvailablePluginsCatalog
             RequiredEnvs:    _envs.Values
                 .Select(e => new CatalogEnvRequirement(e.Name, e.Mandatory))
                 .ToList(),
-            UsageExamples:   _usages,
+            // Chat-exclusive-else-webhook-fallback: a plugin referenced by any root-level
+            // chat rule set is served exclusively by those tuned usage examples; otherwise
+            // the webhook rule-set ones are surfaced as before (unchanged default behaviour).
+            UsageExamples:   _chatUsages.Count > 0 ? _chatUsages : _webhookUsages,
             Source:          _source);
     }
 }
@@ -311,10 +407,23 @@ internal sealed record CatalogPlugin(
 
 internal sealed record CatalogEnvRequirement(string Name, bool Mandatory);
 
+/// <summary>
+/// One way this plugin is normally invoked. The <c>Model</c>/<c>MaxTurns</c>/<c>AllowedTools</c>/
+/// <c>DisallowedTools</c>/<c>MaxBudgetUsd</c>/<c>ResumeSessions</c> fields mirror the cost/control
+/// knobs of the <see cref="WebhookExecution"/> this example was built from, so a chat dispatch
+/// that wins this example can apply the same tuning a webhook run of the same execution block
+/// would get — instead of silently falling back to the executor's untuned defaults.
+/// </summary>
 internal sealed record CatalogUsageExample(
     string ExecutionName,
     string ExecutePrompt,
-    IReadOnlyList<CatalogInputRequirement> Inputs);
+    IReadOnlyList<CatalogInputRequirement> Inputs,
+    string Model,
+    int? MaxTurns,
+    IReadOnlyList<string> AllowedTools,
+    IReadOnlyList<string> DisallowedTools,
+    double? MaxBudgetUsd,
+    bool ResumeSessions);
 
 /// <summary>
 /// Where an input's value comes from at chat-execution time:

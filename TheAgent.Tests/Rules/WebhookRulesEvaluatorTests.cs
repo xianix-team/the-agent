@@ -569,6 +569,85 @@ public class WebhookRulesEvaluatorTests
     }
 
     [Fact]
+    public void EvaluateWithRules_ConversationKey_InjectsConversationIdInput()
+    {
+        using var doc = JsonDocument.Parse(
+            """
+            {
+              "repository": { "clone_url": "https://github.com/acme/app.git" },
+              "pull_request": { "number": 42 }
+            }
+            """);
+
+        var ruleSets = _sut.ParseRules(
+            """
+            [
+              {
+                "webhook": "Default",
+                "executions": [
+                  {
+                    "name": "github-pr",
+                    "platform": "github",
+                    "repository": { "url": "repository.clone_url" },
+                    "conversation-key": "pull_request.number",
+                    "resume-sessions": true,
+                    "match-any": [],
+                    "use-inputs": [],
+                    "use-plugins": [],
+                    "execute-prompt": "review"
+                  }
+                ]
+              }
+            ]
+            """);
+
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.True(outcome.Matched);
+        // The execution-level `conversation-key` binding resolves against the payload and is
+        // auto-injected under the canonical `conversation-id` key the executor's session
+        // resume reads (opaquely).
+        Assert.Equal("42", outcome.Results![0].Inputs["conversation-id"]);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_ConversationKeyUnresolvable_IsBestEffortAndDoesNotSkip()
+    {
+        using var doc = JsonDocument.Parse(
+            """
+            { "repository": { "clone_url": "https://github.com/acme/app.git" } }
+            """);
+
+        var ruleSets = _sut.ParseRules(
+            """
+            [
+              {
+                "webhook": "Default",
+                "executions": [
+                  {
+                    "name": "github-pr",
+                    "platform": "github",
+                    "repository": { "url": "repository.clone_url" },
+                    "conversation-key": "pull_request.number",
+                    "match-any": [],
+                    "use-inputs": [],
+                    "use-plugins": [],
+                    "execute-prompt": "review"
+                  }
+                ]
+              }
+            ]
+            """);
+
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        // Unlike the repository bindings, a conversation-key that doesn't resolve must not
+        // skip the block — the run simply proceeds without session-resume keying.
+        Assert.True(outcome.Matched);
+        Assert.False(outcome.Results![0].Inputs.ContainsKey("conversation-id"));
+    }
+
+    [Fact]
     public void EvaluateWithRules_AzureDevOpsCloneUrl_DerivesProjectSlashRepoDisplayName()
     {
         // ADO clone URLs nest a literal "_git" routing segment between project and repo.
@@ -1340,5 +1419,75 @@ public class WebhookRulesEvaluatorTests
         Assert.True(outcome.Matched);
         var names = outcome.Results![0].WithEnvs!.Select(e => e.Name).ToArray();
         Assert.Equal(new[] { "GITHUB-TOKEN", "AZURE-DEVOPS-TOKEN" }, names);
+    }
+
+    // ── root-level chat rule sets are invisible to the webhook evaluator ──────
+
+    /// <summary>
+    /// A root-level chat rule set (keyed on `"chat"`, no `"webhook"` name) must never be
+    /// scheduled by the webhook evaluator: it deserialises to a rule set with an empty
+    /// webhook name, so no inbound webhook name ever selects it. Chat rule sets exist purely
+    /// to feed <c>AvailablePluginsCatalog</c>.
+    /// </summary>
+    [Fact]
+    public void EvaluateWithRules_ChatRuleSet_NeverMatchedByWebhookEvaluator()
+    {
+        using var doc = JsonDocument.Parse("""{ "action": "opened" }""");
+        var ruleSets = _sut.ParseRules(
+            """
+            [
+              {
+                "chat": "chat",
+                "model": "claude-sonnet-4-5",
+                "max-budget-usd": 5.0,
+                "use-plugins": [
+                  { "plugin-name": "pr-reviewer@mp", "marketplace": "mp" }
+                ]
+              }
+            ]
+            """);
+
+        // Neither the chat rule set's own name nor an empty name selects anything.
+        Assert.False(_sut.EvaluateWithRules("chat", doc.RootElement, ruleSets).Matched);
+        Assert.False(_sut.EvaluateWithRules("Default", doc.RootElement, ruleSets).Matched);
+    }
+
+    /// <summary>
+    /// A chat rule set living side by side with a webhook rule set in the same document does
+    /// not interfere with webhook matching — evaluating the webhook name still schedules only
+    /// the webhook rule set's block.
+    /// </summary>
+    [Fact]
+    public void EvaluateWithRules_ChatRuleSetSibling_DoesNotAffectWebhookMatch()
+    {
+        using var doc = JsonDocument.Parse("""{ "action": "opened" }""");
+        var ruleSets = _sut.ParseRules(
+            """
+            [
+              {
+                "webhook": "Default",
+                "executions": [
+                  {
+                    "name": "webhook-block",
+                    "match-any": [ { "rule": "action==opened" } ],
+                    "use-inputs": [],
+                    "use-plugins": [],
+                    "execute-prompt": "webhook"
+                  }
+                ]
+              },
+              {
+                "chat": "chat",
+                "use-plugins": [
+                  { "plugin-name": "pr-reviewer@mp", "marketplace": "mp" }
+                ]
+              }
+            ]
+            """);
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.True(outcome.Matched);
+        Assert.Single(outcome.Results!);
+        Assert.Equal("webhook", outcome.Results![0].Prompt);
     }
 }

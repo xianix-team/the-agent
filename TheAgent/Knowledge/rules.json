@@ -13,8 +13,7 @@
                 "name": "github-pull-request-review",
                 "platform": "github",
                 "repository": {
-                    "url": "repository.clone_url",
-                    "ref": "pull_request.head.ref"
+                    "url": "repository.clone_url"
                 },
                 "match-any": [
                     {
@@ -32,8 +31,9 @@
                 ],
                 "use-inputs": [
                     {
-                        "name": "pr-link",
-                        "value": "pull_request.url"
+                        "name": "pr-number",
+                        "value": "pull_request.number",
+                        "mandatory": true
                     }
                 ],
                 "use-plugins": [
@@ -42,16 +42,16 @@
                         "marketplace": "xianix-team/plugins-official"
                     }
                 ],
+                "conversation-key": "pull_request.number",
                 "model": "claude-sonnet-4-5",
                 "max-budget-usd": 3.0,
-                "execute-prompt": "You are reviewing pull request {{pr-link}}. Run /pr-review to perform the automated review."
+                "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}}.\n\nRun /pr-review {{pr-number}} to perform the automated review."
             },
             {
                 "name": "azuredevops-pull-request-review",
                 "platform": "azuredevops",
                 "repository": {
-                    "url": "resource.repository.remoteUrl",
-                    "ref": "resource.sourceRefName"
+                    "url": "resource.repository.remoteUrl"
                 },
                 "match-any": [
                     {
@@ -70,7 +70,8 @@
                 "use-inputs": [
                     {
                         "name": "pr-number",
-                        "value": "resource.pullRequestId"
+                        "value": "resource.pullRequestId",
+                        "mandatory": true
                     }
                 ],
                 "use-plugins": [
@@ -86,9 +87,10 @@
                         "mandatory": true
                     }
                 ],
+                "conversation-key": "resource.pullRequestId",
                 "model": "claude-sonnet-4-5",
                 "max-budget-usd": 5.0,
-                "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}} (branch: {{git-ref}}).\n\nRun /pr-review to perform the automated review. "
+                "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}}.\n\nRun /pr-review {{pr-number}} to perform the automated review."
             },
             {
                 "name": "github-issue-requirement-analysis",
@@ -218,6 +220,17 @@
                 "allowed-tools": ["Read", "Glob"],
                 "max-budget-usd": 0.25,
                 "execute-prompt": "This is an automated end-to-end connectivity test (simulated Azure DevOps pull request #{{pr-number}}). Read the file TOKEN.txt at the root of this repository and reply with its exact contents. Your final answer MUST include the token string from TOKEN.txt verbatim."
+            }
+        ]
+    },
+    {
+        "chat": "chat",
+        "model": "claude-sonnet-4-5",
+        "max-budget-usd": 5.0,
+        "use-plugins": [
+            {
+                "plugin-name": "pr-reviewer@xianix-plugins-official",
+                "marketplace": "xianix-team/plugins-official"
             }
         ]
     }
