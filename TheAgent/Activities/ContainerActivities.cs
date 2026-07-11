@@ -137,6 +137,41 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
+    /// Best-effort removal of a workspace volume. Used by the onboarding / lazy-clone
+    /// workflows when a run fails on a brand-new repository: the volume was already
+    /// labelled by <see cref="EnsureWorkspaceVolumeAsync"/>, so leaving it behind would
+    /// make the repo show up as "onboarded" in <c>ListTenantRepositories</c> even though
+    /// it holds no (or a partial) clone. Volumes can't be un-labelled in place, so
+    /// deletion is the only way to keep the tenant listing truthful.
+    ///
+    /// Never throws for the two expected races: already-deleted (fine) and still-in-use
+    /// by another container (logged and left alone — that container's own run will
+    /// determine the volume's fate).
+    /// </summary>
+    [Activity]
+    public async Task RemoveWorkspaceVolumeAsync(string volumeName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(volumeName);
+
+        var logger = ActivityExecutionContext.Current.Logger;
+        try
+        {
+            await _docker.Volumes.RemoveAsync(volumeName, force: false);
+            logger.LogInformation("Removed workspace volume '{VolumeName}' after failed run.", volumeName);
+        }
+        catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            logger.LogInformation("Workspace volume '{VolumeName}' already absent.", volumeName);
+        }
+        catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Conflict)
+        {
+            logger.LogWarning(
+                "Workspace volume '{VolumeName}' is in use by another container; leaving it in place.",
+                volumeName);
+        }
+    }
+
+    /// <summary>
     /// Lists every repository belonging to <paramref name="tenantId"/> by enumerating Docker volumes
     /// labelled <c>xianix.tenant=&lt;tenantId&gt;</c> and reading their <c>xianix.repository</c> label.
     /// Volumes created before label support was added (or that lack a repository label) are skipped.

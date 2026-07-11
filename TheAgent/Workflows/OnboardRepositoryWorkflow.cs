@@ -29,44 +29,55 @@ public class OnboardRepositoryWorkflow
     {
         ArgumentNullException.ThrowIfNull(req);
 
+        string? volumeName = null;
         try
         {
-            await ExecutePipelineAsync(req);
+            Workflow.Logger.LogInformation(
+                "OnboardRepositoryWorkflow starting: tenant={TenantId}, repo={Repo}, platform={Platform}, participant={ParticipantId}.",
+                req.TenantId, req.RepositoryName, req.Platform, req.ParticipantId);
+
+            await NotifyAsync(req,
+                $"Onboarding `{req.RepositoryName}` (platform: `{req.Platform}`) — cloning into your tenant workspace.");
+
+            // EnsureWorkspaceVolumeAsync is the *only* place that stamps the
+            // xianix.repository / xianix.tenant labels TenantVolumeReader.ListAsync keys off.
+            // Calling it for an unknown URL is what makes the repo show up in
+            // ListTenantRepositories on subsequent chat turns.
+            volumeName = await Workflow.ExecuteActivityAsync(
+                (ContainerActivities a) => a.EnsureWorkspaceVolumeAsync(req.TenantId, req.RepositoryUrl),
+                ContainerWorkflowOptions.Standard);
+
+            await ExecutePipelineAsync(req, volumeName);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Workflow.Logger.LogError(ex,
                 "OnboardRepositoryWorkflow failed for tenant={TenantId}, repo={Repo}.",
                 req.TenantId, req.RepositoryName);
-            await NotifyAsync(req, $"Repository onboarding failed: {ex.Message}");
+            // The labelled volume is what makes the repo look "onboarded" to
+            // ListTenantRepositories — remove it so a failed onboarding leaves no trace
+            // and the user can simply retry. Idempotent: the pipeline may already have
+            // removed it on the non-exception failure path.
+            if (volumeName is not null)
+                await RemoveVolumeAsync(volumeName);
+            // ex is typically Temporal's ActivityFailureException wrapper whose own message
+            // is just "Activity task failed" — dig out the message the activity actually threw.
+            var reason = WorkflowErrors.UserFacingMessage(ex);
+            await NotifyAsync(req, $"Repository onboarding failed: {reason}");
             throw new ApplicationFailureException(
-                $"OnboardRepositoryWorkflow failed: {ex.Message}", ex, nonRetryable: true);
+                $"OnboardRepositoryWorkflow failed: {reason}", ex, nonRetryable: true);
         }
     }
 
-    private static async Task ExecutePipelineAsync(OnboardRepositoryRequest req)
+    private static async Task ExecutePipelineAsync(OnboardRepositoryRequest req, string volumeName)
     {
-        Workflow.Logger.LogInformation(
-            "OnboardRepositoryWorkflow starting: tenant={TenantId}, repo={Repo}, platform={Platform}, participant={ParticipantId}.",
-            req.TenantId, req.RepositoryName, req.Platform, req.ParticipantId);
-
-        await NotifyAsync(req,
-            $"Onboarding `{req.RepositoryName}` (platform: `{req.Platform}`) — cloning into your tenant workspace.");
-
-        // EnsureWorkspaceVolumeAsync is the *only* place that stamps the
-        // xianix.repository / xianix.tenant labels TenantVolumeReader.ListAsync keys off.
-        // Calling it for an unknown URL is what makes the repo show up in
-        // ListTenantRepositories on subsequent chat turns.
-        var volumeName = await Workflow.ExecuteActivityAsync(
-            (ContainerActivities a) => a.EnsureWorkspaceVolumeAsync(req.TenantId, req.RepositoryUrl),
-            ContainerWorkflowOptions.Standard);
-
         var input = BuildContainerInput(req, volumeName, Workflow.NewGuid().ToString("N")[..8]);
 
         var containerId = await Workflow.ExecuteActivityAsync(
             (ContainerActivities a) => a.StartContainerAsync(input),
             ContainerWorkflowOptions.Standard);
 
+        var succeeded = false;
         try
         {
             var result = await Workflow.ExecuteActivityAsync(
@@ -76,6 +87,7 @@ public class OnboardRepositoryWorkflow
                     $"onboard:{req.RepositoryName}",
                     (int)ContainerWorkflowOptions.ContainerExecutionTimeout.TotalSeconds),
                 ContainerWorkflowOptions.Wait);
+            succeeded = result.Succeeded;
 
             string summary;
             if (result.Succeeded)
@@ -101,6 +113,34 @@ public class OnboardRepositoryWorkflow
             await Workflow.ExecuteActivityAsync(
                 (ContainerActivities a) => a.CleanupContainerAsync(containerId),
                 ContainerWorkflowOptions.Cleanup);
+
+            // The clone never landed (or is partial), yet the volume already carries the
+            // xianix.repository label that ListTenantRepositories keys off — so without
+            // this the repo would keep showing up as "already onboarded" after a failure.
+            // Must run *after* the container cleanup above or Docker refuses with "in use".
+            if (!succeeded)
+                await RemoveVolumeAsync(volumeName);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort volume removal on the failure path; never throws so it can't mask the
+    /// original failure or suppress the user-facing notification.
+    /// </summary>
+    private static async Task RemoveVolumeAsync(string volumeName)
+    {
+        try
+        {
+            await Workflow.ExecuteActivityAsync(
+                (ContainerActivities a) => a.RemoveWorkspaceVolumeAsync(volumeName),
+                ContainerWorkflowOptions.Cleanup);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Workflow.Logger.LogWarning(ex,
+                "Could not remove workspace volume '{VolumeName}' after failed onboarding; " +
+                "the repo may still appear in ListTenantRepositories until it is offboarded.",
+                volumeName);
         }
     }
 
