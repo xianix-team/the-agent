@@ -327,14 +327,64 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
             logger.LogWarning("Container '{ContainerId}' timed out after {Timeout}s. Killing.", shortId, timeoutSeconds);
             await TryKillContainerAsync(containerId);
 
+            // The follow stream is cancelled with the timeout, so any buffered output is
+            // lost. Re-fetch logs once (no Follow) while the container still exists —
+            // CleanupContainerAsync runs only after this activity returns.
+            var (stdout, stderr) = await TryCollectLogsAsync(containerId, logger, shortId);
+
+            var timeoutMsg = $"Container timed out after {timeoutSeconds} seconds.";
+            var combinedStderr = string.IsNullOrWhiteSpace(stderr)
+                ? timeoutMsg
+                : $"{timeoutMsg}\n\n{stderr}";
+
+            if (!string.IsNullOrWhiteSpace(stderr) || !string.IsNullOrWhiteSpace(stdout))
+            {
+                logger.LogError(
+                    "## Container Log (timeout)\n**Container:** `{ContainerId}`\n\n```\n{Logs}\n```",
+                    shortId,
+                    string.IsNullOrWhiteSpace(stdout) ? combinedStderr : $"{combinedStderr}\n\n--- stdout ---\n{stdout}");
+            }
+
             return new ContainerExecutionResult
             {
                 TenantId       = tenantId,
                 ExecutionLabel = executionLabel,
                 ExitCode       = -1,
-                StdOut         = string.Empty,
-                StdErr         = $"Container timed out after {timeoutSeconds} seconds.",
+                StdOut         = stdout,
+                StdErr         = combinedStderr,
             };
+        }
+    }
+
+    /// <summary>
+    /// One-shot log fetch (no Follow) used after a timeout kill so operators still see
+    /// whatever the container wrote before it was stopped.
+    /// </summary>
+    private async Task<(string StdOut, string StdErr)> TryCollectLogsAsync(
+        string containerId,
+        ILogger logger,
+        string shortId)
+    {
+        try
+        {
+            var logsParams = new ContainerLogsParameters
+            {
+                ShowStdout = true,
+                ShowStderr = true,
+                Follow     = false,
+                Tail       = "all",
+            };
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var logStream = await _docker.Containers.GetContainerLogsAsync(
+                containerId, false, logsParams, cts.Token);
+            return await logStream.ReadOutputToEndAsync(cts.Token);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex, "Failed to collect logs from timed-out container '{ContainerId}'.", shortId);
+            return (string.Empty, string.Empty);
         }
     }
 

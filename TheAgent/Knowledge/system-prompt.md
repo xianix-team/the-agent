@@ -95,14 +95,11 @@ You have these tools available:
      - Build the `prompt` from the example's `executePrompt` template,
        replacing each `{{name}}` placeholder with the same value you'll pass
        via `inputs`. If the template references an optional input you are not
-       passing (e.g. `(branch: {{git-ref}})`), drop that fragment instead of
-       leaving an unresolved placeholder.
-   - **Never ask the user for `git-ref` (branch / commit).** It is always
-     optional: when omitted the run starts on the repository's default branch,
-     and the plugin resolves whatever the task needs from the prompt (e.g. the
-     pr-reviewer plugin looks up the PR's source and target branches from the
-     PR number and checks them out itself). Only pass `git-ref` when the user
-     explicitly named a branch, commit, or tag themselves.
+       passing, drop that fragment instead of leaving an unresolved placeholder.
+   - Runs always start on the repository's default branch. Plugins resolve any
+     task-specific refs from the prompt themselves (e.g. the pr-reviewer plugin
+     looks up the PR's source and target branches from the PR number and checks
+     them out itself).
    - If no plugin matches, run without one (omit `pluginNames` and `inputs`)
      and pass the user's instruction verbatim as `prompt`.
 4. **Call `RunClaudeCodeOnRepository`** with:

@@ -61,17 +61,15 @@ public class ProcessingWorkflow
         var repoLabel = string.IsNullOrEmpty(execution.RepositoryName)
             ? (string.IsNullOrEmpty(repositoryUrl) ? "(none)" : repositoryUrl)
             : execution.RepositoryName;
-        var refLabel = string.IsNullOrEmpty(execution.GitRef) ? "(default)" : execution.GitRef;
         var platformLabel = string.IsNullOrEmpty(execution.Platform) ? "(none)" : execution.Platform;
 
         Workflow.Logger.LogInformation(
-            "[start] exec={ExecutionId} block='{Block}' tenant={TenantId} repo={Repo}@{Ref} platform={Platform} " +
+            "[start] exec={ExecutionId} block='{Block}' tenant={TenantId} repo={Repo} platform={Platform} " +
             "name='{Name}' inputs=[{KeyInputs}] plugins={PluginCount}{PluginList}.",
             executionId,
             blockName,
             orchestrationResult.TenantId,
             repoLabel,
-            refLabel,
             platformLabel,
             orchestrationResult.Name,
             keyInputs,
@@ -230,7 +228,6 @@ public class ProcessingWorkflow
             "issue-number", "issue-title",
             "work-item-id", "work-item-title",
             "action", "trigger-label",
-            "git-ref", "branch",
         ];
 
         var parts = new List<string>(preferredKeys.Length);
@@ -287,7 +284,6 @@ public class ProcessingWorkflow
                 TenantId = orchestrationResult.TenantId,
                 RepositoryUrl = execution?.RepositoryUrl ?? string.Empty,
                 RepositoryName = execution?.RepositoryName ?? string.Empty,
-                GitRef = execution?.GitRef ?? string.Empty,
                 Platform = execution?.Platform ?? string.Empty,
                 Prompt = execution?.Prompt ?? string.Empty,
                 BlockName = orchestrationResult.ExecutionBlockName,

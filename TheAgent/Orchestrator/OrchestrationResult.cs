@@ -133,15 +133,6 @@ public sealed class ExecutionSpec
     /// </summary>
     public string RepositoryName { get; init; } = string.Empty;
 
-    /// <summary>
-    /// Resolved git ref (branch, commit SHA, or tag) the executor should check out into the
-    /// per-run worktree. Empty when the rule didn't declare a <c>repository.ref</c> — the
-    /// executor falls back to the bare-clone HEAD in that case. Also auto-injected into
-    /// <c>InputsJson</c> as <c>"git-ref"</c> so plugin prompts and the executor entrypoint
-    /// can read it from the same canonical kebab-case key.
-    /// </summary>
-    public string GitRef { get; init; } = string.Empty;
-
     public string Prompt { get; init; } = string.Empty;
 
     /// <summary>
@@ -174,7 +165,6 @@ public sealed class ExecutionSpec
         string platform = "",
         string repositoryUrl = "",
         string repositoryName = "",
-        string gitRef = "",
         string model = "",
         int? maxTurns = null,
         IReadOnlyList<string>? allowedTools = null,
@@ -188,7 +178,6 @@ public sealed class ExecutionSpec
         Platform        = platform ?? "";
         RepositoryUrl   = repositoryUrl ?? "";
         RepositoryName  = repositoryName ?? "";
-        GitRef          = gitRef ?? "";
         Model           = model ?? "";
         MaxTurns        = maxTurns;
         AllowedTools    = allowedTools is null ? [] : [.. allowedTools];

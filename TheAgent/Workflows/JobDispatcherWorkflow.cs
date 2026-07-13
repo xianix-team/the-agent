@@ -25,8 +25,6 @@ public class JobDispatcherWorkflow
                     inputs["repository-url"] = execution.Repository.Url.Value.ToString();
                 if (!string.IsNullOrEmpty(execution.Repository?.Name?.Value.ToString()))
                     inputs["repository-name"] = execution.Repository.Name.Value.ToString();
-                if (!string.IsNullOrEmpty(execution.Repository?.Ref?.Value.ToString()))
-                    inputs["git-ref"] = execution.Repository.Ref.Value.ToString();
 
                 execution.WithEnvs.AddRange(scheduleEntry.EnvVars);
 
@@ -43,7 +41,6 @@ public class JobDispatcherWorkflow
                         execution.Platform,
                         execution.Repository?.Url?.Value.ToString() ?? string.Empty,
                         execution.Repository?.Name?.Value.ToString() ?? string.Empty,
-                        execution.Repository?.Ref?.Value.ToString() ?? string.Empty,
                         execution.Model,
                         execution.MaxTurns,
                         execution.AllowedTools,

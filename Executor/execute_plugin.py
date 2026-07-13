@@ -8,6 +8,8 @@ Reads configuration from environment variables injected by the control plane:
   WORK_DIR             - absolute path to the workspace (repo worktree or empty directory)
   CLAUDE_CODE_PLUGINS  - JSON array of {"plugin-name", "marketplace"?} descriptors
   PROMPT               - fully-interpolated Claude Code prompt to execute
+                         (when XIANIX_INPUTS.platform is set, a short host-context
+                         preamble is prepended before Claude Code sees it)
   ANTHROPIC_API_KEY    - Anthropic API key (read automatically by the SDK)
 
 Writes a structured JSON envelope to stdout (see `build_output`).
@@ -29,6 +31,8 @@ from claude_agent_sdk import (
     SystemMessage,
     ResultMessage,
 )
+
+from host_context import prepend_host_context
 
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -476,6 +480,10 @@ async def main() -> None:
     prompt       = require_env("PROMPT")
     work_dir     = os.environ.get("WORK_DIR", "/workspace")
     plugins      = parse_plugins(os.environ.get("CLAUDE_CODE_PLUGINS", "[]"))
+
+    # When rules.json declares platform, surface it in the prompt so free-form plugin
+    # runs (comment instructions, etc.) pick the right host APIs. Env alone is easy to miss.
+    prompt = prepend_host_context(prompt, os.environ.get("XIANIX_INPUTS"))
 
     # ── Cost-control levers (all optional; injected by the control plane) ─────
     # Primary model: XIANIX_MODEL (first-class rules.json `model`) wins, then a raw

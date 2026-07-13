@@ -246,9 +246,9 @@ public class OnboardRepositoryWorkflow
     internal static ContainerExecutionInput BuildContainerInput(
         OnboardRepositoryRequest req, string volumeName, string executionId)
     {
-        // Inputs the executor scripts read from XIANIX_INPUTS via jq. We deliberately do
-        // NOT pass git-ref: a bare clone fetches all refs, and onboarding doesn't pick a
-        // working ref — that decision happens later in RunClaudeCodeOnRepository.
+        // Inputs the executor scripts read from XIANIX_INPUTS via jq. Onboarding only
+        // needs the structural clone keys — the executor always starts on the default
+        // branch; task-specific checkout happens later in RunClaudeCodeOnRepository.
         var inputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["repository-url"]  = req.RepositoryUrl,

@@ -16,18 +16,19 @@
 #
 # TEST TIERS
 # ----------
+#   Tier 0 (always runs, free, no Docker):
+#     0. host_context.py unit tests (platform preamble for PROMPT).
+#
 #   Tier 1 (always runs, free):
 #     1. "prepare" mode clones the repo onto the volume.
 #     2. A second "prepare" run reuses the existing clone (fetch, not re-clone).
 #     3. A new commit pushed to the fixture is picked up on the next run.
 #     4. A bad repository URL produces the structured prepare error envelope.
-#     5. An explicit git-ref (any fetchable ref, e.g. a PR's refs/pull/N/head)
-#        is checked out into the worktree.
-#     6. No git-ref checks out the default branch (HEAD) — the chat-driven and
-#        plugin-resolves-its-own-refs path.
+#     5. Worktree is created from the default branch (HEAD); plugins resolve
+#        any task-specific refs from the prompt themselves.
 #
 #   Tier 2 (needs ANTHROPIC_API_KEY, costs ~$0.01, skipped when the key is absent):
-#     7. A full prepare-and-execute run where Claude Code must read a planted
+#     6. A full prepare-and-execute run where Claude Code must read a planted
 #        secret token from the repo and return it in the result envelope.
 #
 # HOW TO RUN
@@ -339,67 +340,12 @@ test_bad_url_error_envelope() {
     fi
 }
 
-test_explicit_gitref_is_checked_out() {
-    banner "Test 5: an explicit git-ref (a PR-style ref) is checked out into the worktree"
+test_worktree_uses_default_branch() {
+    banner "Test 5: worktree is created from the default branch (HEAD)"
 
-    # The executor is task-agnostic: git-ref is just "a fetchable ref". Prove
-    # that an arbitrary non-branch ref (the shape a PR platform maintains, e.g.
-    # refs/pull/7/head) is fetched and checked out when it is the declared
-    # git-ref. The branch itself is deleted so the commit is reachable ONLY via
-    # that ref.
-    fixture_git checkout -q -b pr-branch-deleted
-    echo "A change reachable only via a non-branch ref" > "${FIXTURE_SRC}/PR.md"
-    fixture_git add -A
-    fixture_git commit -q -m "PR head commit"
-    local pr_sha
-    pr_sha="$(fixture_git rev-parse HEAD)"
-    fixture_git push -q origin pr-branch-deleted
-    fixture_git checkout -q main
-    git -C "${FIXTURE_BARE}" update-ref refs/pull/7/head "${pr_sha}"
-    git -C "${FIXTURE_BARE}" branch -D pr-branch-deleted >/dev/null
-
-    local inputs
-    inputs="$(jq -cn --arg url "${REPO_URL_IN_CONTAINER}" \
-        '{"repository-url": $url, "platform": "local",
-          "git-ref": "refs/pull/7/head"}')"
-
-    # Run only the prepare script: prepare-and-execute mode is what enables
-    # worktree creation, but going through the full entrypoint would chain into
-    # run_prompt.sh, which needs an API key.
-    run_executor "${VOLUME_MAIN}" \
-        --entrypoint /workspace/prepare_repo.sh \
-        -e "TENANT-ID=integration-test" \
-        -e "EXECUTION-ID=it-explicit-ref" \
-        -e "XIANIX-MODE=prepare-and-execute" \
-        -e "XIANIX-INPUTS=${inputs}"
-
-    if [ "${LAST_EXIT}" -eq 0 ]; then
-        t_pass "container exited 0"
-    else
-        t_fail "container exited ${LAST_EXIT}, expected 0"
-        return
-    fi
-
-    if grep -q "Creating worktree for ref: refs/pull/7/head" "${STDERR_FILE}"; then
-        t_pass "logged the worktree creation for refs/pull/7/head"
-    else
-        t_fail "expected a worktree log line mentioning refs/pull/7/head"
-    fi
-
-    if inspect_volume "${VOLUME_MAIN}" "git -C /workspace/repo cat-file -e ${pr_sha}" >/dev/null 2>&1; then
-        t_pass "ref's commit (${pr_sha:0:12}) was fetched into the bare clone"
-    else
-        t_fail "ref's commit ${pr_sha} is missing from the bare clone"
-    fi
-}
-
-test_no_gitref_uses_default_branch() {
-    banner "Test 6: no git-ref checks out the default branch (HEAD)"
-
-    # The chat-driven path ("review PR #9") supplies no git-ref at all: the
-    # executor must simply run against the default branch, and the PLUGIN is
-    # responsible for resolving/fetching any task-specific refs itself from
-    # the prompt. The executor never sees the PR number.
+    # Every run starts on the default branch; plugins resolve/fetch any
+    # task-specific refs from the prompt themselves. The executor never sees
+    # the PR number as a checkout target.
     local main_sha
     main_sha="$(fixture_git rev-parse main)"
 
@@ -407,16 +353,16 @@ test_no_gitref_uses_default_branch() {
     inputs="$(jq -cn --arg url "${REPO_URL_IN_CONTAINER}" \
         '{"repository-url": $url, "platform": "local", "pr-number": "9"}')"
 
-    # Prepare script only — same reasoning as Test 5.
+    # Prepare script only — avoids chaining into run_prompt.sh (needs API key).
     run_executor "${VOLUME_MAIN}" \
         --entrypoint /workspace/prepare_repo.sh \
         -e "TENANT-ID=integration-test" \
-        -e "EXECUTION-ID=it-no-gitref" \
+        -e "EXECUTION-ID=it-default-head" \
         -e "XIANIX-MODE=prepare-and-execute" \
         -e "XIANIX-INPUTS=${inputs}"
 
     if [ "${LAST_EXIT}" -eq 0 ]; then
-        t_pass "container exited 0 without a git-ref"
+        t_pass "container exited 0"
     else
         t_fail "container exited ${LAST_EXIT}, expected 0"
         return
@@ -440,7 +386,7 @@ test_no_gitref_uses_default_branch() {
 # ── Tier 2: real Claude Code run (needs ANTHROPIC_API_KEY) ────────────────────
 
 test_claude_reads_planted_secret() {
-    banner "Test 7: Claude Code reads the planted secret token from the repo"
+    banner "Test 6: Claude Code reads the planted secret token from the repo"
 
     if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
         t_skip "ANTHROPIC_API_KEY is not set — skipping the live Claude Code test."
@@ -513,9 +459,16 @@ test_claude_reads_planted_secret() {
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-for tool in docker git jq; do
+for tool in docker git jq python3; do
     command -v "${tool}" >/dev/null || { echo "FATAL: '${tool}' is required." >&2; exit 1; }
 done
+
+banner "Unit: host_context preamble"
+if python3 "${SCRIPT_DIR}/test_host_context.py"; then
+    t_pass "host_context.py unit tests"
+else
+    t_fail "host_context.py unit tests"
+fi
 
 if [ -z "${SKIP_BUILD:-}" ]; then
     banner "Building executor image (${IMAGE})"
@@ -531,8 +484,7 @@ test_prepare_clones_repo
 test_prepare_reuses_clone
 test_new_commit_is_picked_up
 test_bad_url_error_envelope
-test_explicit_gitref_is_checked_out
-test_no_gitref_uses_default_branch
+test_worktree_uses_default_branch
 test_claude_reads_planted_secret
 
 banner "Results"

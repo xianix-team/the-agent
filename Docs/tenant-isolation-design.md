@@ -247,13 +247,6 @@ else
     cd "${REPO_DIR}"
 fi
 
-# If a specific branch/ref is provided (e.g., PR head)
-if [ -n "${GIT_REF:-}" ]; then
-    log "--- Checking out ref: ${GIT_REF} ---"
-    git fetch origin "${GIT_REF}" 2>&2
-    git checkout FETCH_HEAD 2>&2
-fi
-
 # Execute the plugin via Claude Code SDK
 # stdout from this script IS the result — captured by the control plane
 log "--- Executing plugin: ${PLUGIN_NAME} ---"

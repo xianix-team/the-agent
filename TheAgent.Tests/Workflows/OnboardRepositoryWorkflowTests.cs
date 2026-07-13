@@ -54,8 +54,7 @@ public class OnboardRepositoryWorkflowTests
         Assert.Equal("acme/app",                        inputs["repository-name"]);
         Assert.Equal(RepositoryPlatform.GitHub,         inputs["platform"]);
 
-        // Onboarding intentionally does NOT pin a ref — a bare clone fetches all refs,
-        // and the user picks one later via RunClaudeCodeOnRepository.
+        // Structural keys only — executor always starts on the default-branch HEAD.
         Assert.False(inputs.ContainsKey("git-ref"));
     }
 

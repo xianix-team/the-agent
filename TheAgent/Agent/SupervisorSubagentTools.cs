@@ -239,11 +239,9 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         "run is rejected if any mandatory input is missing. Inputs use the kebab-case names " +
         "from rules.json (e.g. `pr-number`, `pr-title`) and match the `{{placeholders}}` you " +
         "substituted in the prompt. Plugin names and inputs are validated against the catalog. " +
-        "`git-ref` (branch / commit / tag) is always OPTIONAL — never ask the user for it. " +
-        "When omitted, the run starts on the repository's default branch and the plugin " +
-        "itself resolves whatever task context it needs (e.g. a PR's source/target " +
-        "branches from the PR number in the prompt). Pass `git-ref` only when the user " +
-        "explicitly named a ref. " +
+        "The run always starts on the repository's default branch; plugins resolve any " +
+        "task-specific refs from the prompt (e.g. a PR's source/target branches from the " +
+        "PR number). " +
         "Do NOT pass `repository-url`, `repository-name`, or `platform` — they are " +
         "auto-filled from the chosen repository / rule. " +
         "Returns immediately after starting the run; progress and the final result are " +
@@ -253,7 +251,7 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         [Description("The repository URL to operate on. May be one already in ListTenantRepositories OR a brand-new URL on github.com / dev.azure.com / *.visualstudio.com (it will be cloned in-flight). For self-hosted hosts, call OnboardRepository first with an explicit platform.")] string repositoryUrl,
         [Description("The full Claude Code prompt to execute. For a chat plugin (empty usageExamples) this MUST be `{slashCommand} {target}` from ListAvailablePlugins — never invent a command. For a webhook-backed plugin use the chosen example's executePrompt template with placeholders substituted.")] string prompt,
         [Description("Optional plugin specs (e.g. [\"pr-reviewer@xianix-plugins-official\"]). Each must come from ListAvailablePlugins. Omit or pass an empty array for a no-plugin run.")] string[]? pluginNames = null,
-        [Description("Mandatory inputs for a webhook-backed plugin's chosen usage example, keyed by the rules.json kebab-case input name (e.g. {\"pr-number\":\"42\",\"pr-title\":\"Fix bug\"}). Omit for chat plugins (empty usageExamples — the target goes in the prompt instead) and for no-plugin runs. `git-ref` is optional — include it only when the user explicitly named a branch/commit/tag; otherwise the run starts on the default branch and the plugin resolves the rest from the prompt. Never include repository-url, repository-name, or platform — those are auto-filled.")] Dictionary<string, string>? inputs = null)
+        [Description("Mandatory inputs for a webhook-backed plugin's chosen usage example, keyed by the rules.json kebab-case input name (e.g. {\"pr-number\":\"42\",\"pr-title\":\"Fix bug\"}). Omit for chat plugins (empty usageExamples — the target goes in the prompt instead) and for no-plugin runs. Never include repository-url, repository-name, or platform — those are auto-filled.")] Dictionary<string, string>? inputs = null)
     {
         if (string.IsNullOrWhiteSpace(repositoryUrl))
             return "ERROR: repositoryUrl is required. Call ListTenantRepositories first.";

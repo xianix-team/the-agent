@@ -139,16 +139,16 @@ public sealed class WebhookExecution
 
     /// <summary>
     /// Structural binding for the repository this execution operates on. When present, every
-    /// declared sub-field (<see cref="RepositoryBindingTemplate.Url"/>,
-    /// <see cref="RepositoryBindingTemplate.Ref"/>) is treated as mandatory — if any
-    /// declared JSON path doesn't resolve, the execution block is skipped before any
-    /// container starts. Resolved values are auto-injected into <c>XIANIX_INPUTS</c> as
-    /// <c>repository-url</c> / <c>git-ref</c> so plugin prompt templates and the executor
-    /// entrypoint can read them off the same canonical kebab-case keys. The short
-    /// <c>repository-name</c> identifier is derived from <c>repository.url</c> via
+    /// declared sub-field (<see cref="RepositoryBindingTemplate.Url"/>) is treated as
+    /// mandatory — if any declared JSON path doesn't resolve, the execution block is skipped
+    /// before any container starts. Resolved values are auto-injected into <c>XIANIX_INPUTS</c>
+    /// as <c>repository-url</c> so plugin prompt templates and the executor entrypoint can
+    /// read them off the same canonical kebab-case keys. The short <c>repository-name</c>
+    /// identifier is derived from <c>repository.url</c> via
     /// <see cref="RepositoryNaming.DeriveName"/> and injected alongside them — it is not
-    /// authored in <c>rules.json</c>. Omit the whole block for executions that don't
-    /// operate on a specific repo (e.g. Azure DevOps work-item analysis).
+    /// authored in <c>rules.json</c>. The executor always checks out the repository's default
+    /// branch; task-specific refs are the plugin's responsibility. Omit the whole block for
+    /// executions that don't operate on a specific repo (e.g. Azure DevOps work-item analysis).
     /// </summary>
     [JsonPropertyName("repository")]
     public RepositoryBindingTemplate? Repository { get; init; }
@@ -345,10 +345,17 @@ public sealed class MatchEntry
 /// the webhook payload (the common case for webhook-driven runs) or carry a hard-coded
 /// literal (for runs whose repository is fixed regardless of the payload — cron pings,
 /// single-tenant agents pinned to one repo, manual triggers). Resolved strings flow on
-/// <see cref="EvaluationResult.RepositoryUrl"/> and <see cref="EvaluationResult.GitRef"/>.
-/// The short <c>repository-name</c> identifier is derived from the resolved URL via
-/// <see cref="RepositoryNaming.DeriveName"/> — it is not authored here.
+/// <see cref="EvaluationResult.RepositoryUrl"/>. The short <c>repository-name</c> identifier
+/// is derived from the resolved URL via <see cref="RepositoryNaming.DeriveName"/> — it is
+/// not authored here. The executor always starts on the default-branch HEAD; plugins perform
+/// any task-specific checkout inside the worktree.
+/// <para/>
+/// Accepts either a bare string (JSON-path shorthand for <see cref="Url"/>, e.g.
+/// <c>"repository": "repository.clone_url"</c>) or the object form
+/// <c>{ "url": "..." }</c>. Constant clone URLs still use the object form with
+/// <c>{ "url": { "value": "...", "constant": true } }</c>.
 /// </summary>
+[JsonConverter(typeof(RepositoryBindingTemplateJsonConverter))]
 public sealed class RepositoryBindingTemplate
 {
     /// <summary>
@@ -361,17 +368,83 @@ public sealed class RepositoryBindingTemplate
     public RepoFieldBinding? Url { get; init; }
 
     /// <summary>
-    /// Git ref (branch, commit SHA, or tag) the executor should check out into the per-run
-    /// worktree. Treated as <em>mandatory when declared</em> — if a declared JSON path
-    /// doesn't resolve, the execution block is skipped (same semantics as <see cref="Url"/>).
-    /// Set the object form <c>{ "value": "main", "constant": true }</c> to pin to a fixed
-    /// branch/tag. Omit the field entirely to run against the bare-clone HEAD.
-    /// </summary>
-    [JsonPropertyName("ref")]
-    public RepoFieldBinding? Ref { get; init; }
+    /// Optional short repository identifier binding. Prefer omitting this — the framework
+    /// derives <c>repository-name</c> from <see cref="Url"/> via
+    /// <see cref="RepositoryNaming.DeriveName"/>.
     /// </summary>
     [JsonPropertyName("name")]
     public RepoFieldBinding? Name { get; init; }
+}
+
+/// <summary>
+/// Custom converter so the execution-level <c>repository</c> field accepts either a bare
+/// string (JSON-path shorthand for <c>url</c>) or the full object form. Mirrors the
+/// <see cref="RepoFieldBindingJsonConverter"/> envelope used by nested sub-fields.
+/// </summary>
+internal sealed class RepositoryBindingTemplateJsonConverter : JsonConverter<RepositoryBindingTemplate>
+{
+    public override RepositoryBindingTemplate? Read(
+        ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        switch (reader.TokenType)
+        {
+            case JsonTokenType.Null:
+                return null;
+
+            case JsonTokenType.String:
+                // Bare-string shorthand — equivalent to { "url": "<path>" }.
+                var path = reader.GetString() ?? "";
+                return new RepositoryBindingTemplate { Url = RepoFieldBinding.Path(path) };
+
+            case JsonTokenType.StartObject:
+                RepoFieldBinding? url = null;
+                RepoFieldBinding? name = null;
+                while (reader.Read())
+                {
+                    if (reader.TokenType == JsonTokenType.EndObject)
+                        return new RepositoryBindingTemplate { Url = url, Name = name };
+
+                    if (reader.TokenType != JsonTokenType.PropertyName)
+                        throw new JsonException(
+                            $"Unexpected token '{reader.TokenType}' inside repository binding.");
+
+                    var prop = reader.GetString() ?? "";
+                    reader.Read();
+
+                    if (string.Equals(prop, "url", StringComparison.OrdinalIgnoreCase))
+                        url = JsonSerializer.Deserialize<RepoFieldBinding>(ref reader, options);
+                    else if (string.Equals(prop, "name", StringComparison.OrdinalIgnoreCase))
+                        name = JsonSerializer.Deserialize<RepoFieldBinding>(ref reader, options);
+                    else
+                        // Forward-compat: ignore unknown sibling fields (e.g. legacy "ref").
+                        reader.Skip();
+                }
+
+                throw new JsonException("Unexpected end of JSON inside repository binding.");
+
+            default:
+                throw new JsonException(
+                    $"Repository binding must be a string (JSON path for url) or object " +
+                    $"with 'url'/'name' — got '{reader.TokenType}'.");
+        }
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer, RepositoryBindingTemplate value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        if (value.Url is not null)
+        {
+            writer.WritePropertyName("url");
+            JsonSerializer.Serialize(writer, value.Url, options);
+        }
+        if (value.Name is not null)
+        {
+            writer.WritePropertyName("name");
+            JsonSerializer.Serialize(writer, value.Name, options);
+        }
+        writer.WriteEndObject();
+    }
 }
 
 /// <summary>
@@ -401,7 +474,7 @@ public sealed class RepoFieldBinding
 }
 
 /// <summary>
-/// Custom converter so the <c>repository.url</c> / <c>repository.ref</c> fields accept
+/// Custom converter so the <c>repository.url</c> / <c>repository.name</c> fields accept
 /// either a bare string ("treat as JSON path") or an object ("respect explicit
 /// <c>constant</c> flag") — the same envelope already used by <see cref="InputRuleEntry"/>.
 /// Property name matching is case-insensitive to stay consistent with

@@ -154,7 +154,6 @@ public class EventOrchestratorTests
                 ["platform"]        = "github",
                 ["repository-url"]  = "https://github.com/acme/app.git",
                 ["repository-name"] = "acme/app",
-                ["git-ref"]         = "feat/auth",
             },
             Plugins: [],
             Prompt: "review acme/app",
@@ -162,8 +161,7 @@ public class EventOrchestratorTests
             WithEnvs: null,
             Platform: "github",
             RepositoryUrl: "https://github.com/acme/app.git",
-            RepositoryName: "acme/app",
-            GitRef: "feat/auth");
+            RepositoryName: "acme/app");
 
         _evaluator.EvaluateAsync("Default", Arg.Any<object?>())
                   .Returns(Task.FromResult(EvaluationOutcome.Match(evaluation)));
@@ -176,7 +174,6 @@ public class EventOrchestratorTests
         Assert.Equal("github", execution!.Platform);
         Assert.Equal("https://github.com/acme/app.git", execution.RepositoryUrl);
         Assert.Equal("acme/app", execution.RepositoryName);
-        Assert.Equal("feat/auth", execution.GitRef);
     }
 
     [Fact]

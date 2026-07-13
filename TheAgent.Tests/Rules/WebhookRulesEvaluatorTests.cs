@@ -528,15 +528,14 @@ public class WebhookRulesEvaluatorTests
                     "name": "github-pr",
                     "platform": "github",
                     "repository": {
-                      "url": "repository.clone_url",
-                      "ref": "pull_request.head.ref"
+                      "url": "repository.clone_url"
                     },
                     "match-any": [],
                     "use-inputs": [
                       { "name": "pr-link", "value": "pull_request.url" }
                     ],
                     "use-plugins": [],
-                    "execute-prompt": "review {{repository-name}} on {{platform}} @ {{git-ref}}"
+                    "execute-prompt": "review {{repository-name}} on {{platform}}"
                   }
                 ]
               }
@@ -552,20 +551,60 @@ public class WebhookRulesEvaluatorTests
         Assert.Equal("github", result.Platform);
         Assert.Equal("https://github.com/acme/app.git", result.RepositoryUrl);
         Assert.Equal("acme/app", result.RepositoryName);
-        Assert.Equal("feat/auth", result.GitRef);
 
         // Wire-format: same values are also auto-injected into the inputs dict under the
         // canonical kebab-case keys plugin prompts and the executor entrypoint read.
         Assert.Equal("github", result.Inputs["platform"]);
         Assert.Equal("https://github.com/acme/app.git", result.Inputs["repository-url"]);
         Assert.Equal("acme/app", result.Inputs["repository-name"]);
-        Assert.Equal("feat/auth", result.Inputs["git-ref"]);
+        Assert.False(result.Inputs.ContainsKey("git-ref"));
 
         // Caller-declared use-inputs are still resolved alongside the structural fields.
         Assert.Equal("https://github.com/acme/app/pull/42", result.Inputs["pr-link"]);
 
         // Prompt interpolation sees the auto-injected keys.
-        Assert.Equal("review acme/app on github @ feat/auth", result.Prompt);
+        Assert.Equal("review acme/app on github", result.Prompt);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_RepositoryBareString_TreatedAsUrlJsonPath()
+    {
+        using var doc = JsonDocument.Parse(
+            """
+            {
+              "action": "opened",
+              "repository": { "clone_url": "https://github.com/acme/app.git" }
+            }
+            """);
+
+        var ruleSets = _sut.ParseRules(
+            """
+            [
+              {
+                "webhook": "Default",
+                "executions": [
+                  {
+                    "name": "github-pr",
+                    "platform": "github",
+                    "repository": "repository.clone_url",
+                    "match-any": [],
+                    "use-inputs": [],
+                    "use-plugins": [],
+                    "execute-prompt": "review {{repository-name}}"
+                  }
+                ]
+              }
+            ]
+            """);
+
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.True(outcome.Matched);
+        var result = outcome.Results![0];
+        Assert.Equal("https://github.com/acme/app.git", result.RepositoryUrl);
+        Assert.Equal("acme/app", result.RepositoryName);
+        Assert.Equal("https://github.com/acme/app.git", result.Inputs["repository-url"]);
+        Assert.Equal("review acme/app", result.Prompt);
     }
 
     [Fact]
@@ -675,8 +714,7 @@ public class WebhookRulesEvaluatorTests
                     "name": "azuredevops-pr",
                     "platform": "azuredevops",
                     "repository": {
-                      "url": "resource.repository.remoteUrl",
-                      "ref": "resource.sourceRefName"
+                      "url": "resource.repository.remoteUrl"
                     },
                     "match-any": [],
                     "use-inputs": [],
@@ -695,84 +733,6 @@ public class WebhookRulesEvaluatorTests
         Assert.Equal("myproj/myrepo", result.RepositoryName);
         Assert.Equal("myproj/myrepo", result.Inputs["repository-name"]);
         Assert.Equal("review myproj/myrepo", result.Prompt);
-    }
-
-    [Fact]
-    public void EvaluateWithRules_StructuralRepositoryRefMissing_SkipsBlockAsMandatory()
-    {
-        using var doc = JsonDocument.Parse(
-            """
-            { "action": "opened", "repository": { "clone_url": "https://github.com/acme/app.git", "full_name": "acme/app" }, "pull_request": { "head": {} } }
-            """);
-
-        var ruleSets = _sut.ParseRules(
-            """
-            [
-              {
-                "webhook": "Default",
-                "executions": [
-                  {
-                    "name": "github-pr",
-                    "platform": "github",
-                    "repository": {
-                      "url": "repository.clone_url",
-                      "ref": "pull_request.head.ref"
-                    },
-                    "match-any": [],
-                    "use-inputs": [],
-                    "use-plugins": [],
-                    "execute-prompt": "ok"
-                  }
-                ]
-              }
-            ]
-            """);
-
-        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
-
-        Assert.False(outcome.Matched);
-        Assert.Contains("repository.ref", outcome.SkipReason);
-        Assert.Contains("mandatory", outcome.SkipReason, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void EvaluateWithRules_NoRepositoryRefDeclared_OmitsGitRefKeyFromInputs()
-    {
-        using var doc = JsonDocument.Parse(
-            """
-            { "action": "opened", "repository": { "clone_url": "https://github.com/acme/app.git", "full_name": "acme/app" } }
-            """);
-
-        var ruleSets = _sut.ParseRules(
-            """
-            [
-              {
-                "webhook": "Default",
-                "executions": [
-                  {
-                    "platform": "github",
-                    "repository": {
-                      "url": "repository.clone_url"
-                    },
-                    "match-any": [],
-                    "use-inputs": [],
-                    "use-plugins": [],
-                    "execute-prompt": "ok"
-                  }
-                ]
-              }
-            ]
-            """);
-
-        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
-
-        Assert.True(outcome.Matched);
-        var result = outcome.Results![0];
-
-        // No repository.ref declared → typed field empty and no auto-injected key in inputs
-        // (executor falls back to bare-clone HEAD).
-        Assert.Equal("", result.GitRef);
-        Assert.False(result.Inputs.ContainsKey("git-ref"));
     }
 
     [Fact]
@@ -884,7 +844,7 @@ public class WebhookRulesEvaluatorTests
     }
 
     // ── Constant-form repository bindings ────────────────────────────────────
-    // These cover the schema escape hatch where `repository.url` / `repository.ref` carry
+    // These cover the schema escape hatch where `repository.url` carries
     // hard-coded values via `{ "value": "...", "constant": true }` instead of resolving a
     // JSON path against the webhook payload. The escape hatch exists for runs whose repo
     // is fixed regardless of the trigger (cron pings, single-tenant agents pinned to one
@@ -935,58 +895,10 @@ public class WebhookRulesEvaluatorTests
     }
 
     [Fact]
-    public void EvaluateWithRules_ConstantGitRef_TakenVerbatimAndPayloadIgnored()
-    {
-        // Mirror of the URL test for `ref` — pin the executor to a specific branch even
-        // when the payload carries a different one.
-        using var doc = JsonDocument.Parse(
-            """
-            {
-              "action": "opened",
-              "repository": { "clone_url": "https://github.com/acme/app.git" },
-              "pull_request": { "head": { "ref": "feat/should-not-win" } }
-            }
-            """);
-
-        var ruleSets = _sut.ParseRules(
-            """
-            [
-              {
-                "webhook": "Default",
-                "executions": [
-                  {
-                    "name": "constant-ref-block",
-                    "platform": "github",
-                    "repository": {
-                      "url": "repository.clone_url",
-                      "ref": { "value": "main", "constant": true }
-                    },
-                    "match-any": [],
-                    "use-inputs": [],
-                    "use-plugins": [],
-                    "execute-prompt": "review {{repository-name}} @ {{git-ref}}"
-                  }
-                ]
-              }
-            ]
-            """);
-
-        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
-
-        Assert.True(outcome.Matched);
-        var result = outcome.Results![0];
-
-        Assert.Equal("https://github.com/acme/app.git", result.RepositoryUrl);
-        Assert.Equal("main", result.GitRef);
-        Assert.Equal("main", result.Inputs["git-ref"]);
-        Assert.Equal("review acme/app @ main", result.Prompt);
-    }
-
-    [Fact]
-    public void EvaluateWithRules_ConstantUrlAndRef_NoPayloadFieldsConsulted()
+    public void EvaluateWithRules_ConstantUrl_NoPayloadFieldsConsulted()
     {
         // Payload carries no repo info at all (think: a Slack-driven trigger or cron
-        // ping). With both fields hard-coded, the resolver must succeed without ever
+        // ping). With the URL hard-coded, the resolver must succeed without ever
         // reaching for a JSON path.
         using var doc = JsonDocument.Parse("""{ "trigger": "cron-daily-scan" }""");
 
@@ -1000,13 +912,12 @@ public class WebhookRulesEvaluatorTests
                     "name": "fully-pinned-block",
                     "platform": "github",
                     "repository": {
-                      "url": { "value": "https://github.com/pinned/scan-target.git", "constant": true },
-                      "ref": { "value": "v1.2.3", "constant": true }
+                      "url": { "value": "https://github.com/pinned/scan-target.git", "constant": true }
                     },
                     "match-any": [],
                     "use-inputs": [],
                     "use-plugins": [],
-                    "execute-prompt": "scan {{repository-name}} @ {{git-ref}}"
+                    "execute-prompt": "scan {{repository-name}}"
                   }
                 ]
               }
@@ -1020,8 +931,7 @@ public class WebhookRulesEvaluatorTests
 
         Assert.Equal("https://github.com/pinned/scan-target.git", result.RepositoryUrl);
         Assert.Equal("pinned/scan-target", result.RepositoryName);
-        Assert.Equal("v1.2.3", result.GitRef);
-        Assert.Equal("scan pinned/scan-target @ v1.2.3", result.Prompt);
+        Assert.Equal("scan pinned/scan-target", result.Prompt);
     }
 
     [Fact]

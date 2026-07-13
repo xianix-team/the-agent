@@ -17,12 +17,6 @@ namespace Xianix.Rules;
 /// when no <c>repository.url</c> was declared. Also auto-injected into <paramref name="Inputs"/>
 /// under <c>"repository-name"</c>. Not authored in <c>rules.json</c> — clone URL and display
 /// name are kept consistent by always deriving the name from the URL.</param>
-/// <param name="GitRef">Resolved git ref (branch, commit, or tag) the executor should
-/// check out into the per-run worktree. Empty when the rule didn't declare a
-/// <c>repository.ref</c> (executor falls back to bare-clone HEAD). Resolved either from the
-/// payload or, for runs pinned to a fixed branch/tag, from the constant form. Also
-/// auto-injected into <paramref name="Inputs"/> under <c>"git-ref"</c> for prompt
-/// interpolation.</param>
 public sealed record EvaluationResult(
     Dictionary<string, object?> Inputs,
     IReadOnlyList<PluginEntry> Plugins,
@@ -32,7 +26,6 @@ public sealed record EvaluationResult(
     string Platform = "",
     string RepositoryUrl = "",
     string RepositoryName = "",
-    string GitRef = "",
     string Model = "",
     int? MaxTurns = null,
     IReadOnlyList<string>? AllowedTools = null,

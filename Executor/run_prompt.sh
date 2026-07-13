@@ -191,7 +191,7 @@ fi
 log "--- Executing prompt ---"
 log "Working directory:   ${WORK_DIR}"
 if [ -n "${PROMPT:-}" ]; then
-    log "Prompt (${#PROMPT} chars) on ${REPOSITORY_URL:-<no repo>}${GIT_REF:+@${GIT_REF}}:"
+    log "Prompt (${#PROMPT} chars) on ${REPOSITORY_URL:-<no repo>}:"
     log "┌──────────────────────── PROMPT ────────────────────────"
     while IFS= read -r _line; do
         log "│ ${_line}"

@@ -183,9 +183,9 @@ public class ClaudeCodeChatWorkflow
     {
         try
         {
-            // Chat runs carry git-ref / platform inside the resolved inputs rather than on a
+            // Chat runs carry platform inside the resolved inputs rather than on a
             // dedicated field (see SupervisorSubagentTools.RunClaudeCodeOnRepository), so pull
-            // them from there to keep metadata symmetric with the webhook path.
+            // it from there to keep metadata symmetric with the webhook path.
             var ctx = new ExecutionMetricsContext
             {
                 Category         = ExecutionMetrics.ChatCategory,
@@ -194,7 +194,6 @@ public class ClaudeCodeChatWorkflow
                 TenantId         = req.TenantId,
                 RepositoryUrl    = req.RepositoryUrl,
                 RepositoryName   = req.RepositoryName,
-                GitRef           = InputOrEmpty(req.Inputs, "git-ref"),
                 Platform         = InputOrEmpty(req.Inputs, "platform"),
                 Prompt           = req.Prompt,
                 MaxBudgetUsd     = req.MaxBudgetUsd,

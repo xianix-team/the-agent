@@ -34,18 +34,6 @@ internal static class AvailablePluginsCatalog
     public const string PlatformInput = "platform";
 
     /// <summary>
-    /// Input name the catalog synthesises from <see cref="RepositoryBindingTemplate.Ref"/>.
-    /// Surfaced to the chat tool as an OPTIONAL Caller input: in webhook mode the payload
-    /// always carries the ref, but a chat user typically only knows the PR number. When
-    /// omitted, the executor checks out the repository's default branch and the plugin
-    /// itself resolves whatever refs its task needs (e.g. the pr-reviewer plugin fetches
-    /// the PR's source/target branches from the PR number in the prompt). The chat model
-    /// should pass <c>git-ref</c> only when the user explicitly names a branch / commit /
-    /// tag, and must never block a run to ask for it.
-    /// </summary>
-    public const string GitRefInput = "git-ref";
-
-    /// <summary>
     /// Loads <c>rules.json</c> via the canonical <see cref="RulesKnowledge"/> readers —
     /// <see cref="RulesKnowledge.LoadAsync"/> for webhook rule sets and
     /// <see cref="RulesKnowledge.LoadChatRuleSetsAsync"/> for the root-level chat rule sets —
@@ -237,11 +225,8 @@ internal static class AvailablePluginsCatalog
             //                        by RepositoryNaming.DeriveName — paired 1:1 with -url
             //                        so plugins always see both keys together)
             //   • platform         → Constant (from rules.json)
-            //   • git-ref          → Caller but OPTIONAL (unlike webhook mode, where the
-            //                        payload supplies it, a chat user rarely knows the
-            //                        branch — the executor falls back to the default
-            //                        branch and the plugin resolves the task's refs from
-            //                        the prompt itself)
+            // The executor always starts on the default-branch HEAD; plugins resolve any
+            // task-specific refs from the prompt themselves.
             if (execution.Repository is { } repo)
             {
                 if (repo.Url is { IsEmpty: false } urlBinding)
@@ -259,17 +244,6 @@ internal static class AvailablePluginsCatalog
                         ConstantValue: null,
                         PathHint:      "derived from repository.url"));
                 }
-                if (repo.Ref is { IsEmpty: false } refBinding)
-                    inputs.Add(new CatalogInputRequirement(
-                        Name:          GitRefInput,
-                        // Never mandatory on the chat path: when git-ref is absent the
-                        // executor runs on the default branch and the plugin resolves
-                        // the task's refs itself, so the model must not stall a run
-                        // asking the user for a branch name.
-                        Mandatory:     false,
-                        Source:        refBinding.Constant ? InputSourceKind.Constant : InputSourceKind.Caller,
-                        ConstantValue: refBinding.Constant ? refBinding.Value : null,
-                        PathHint:      DescribeRepoBinding(refBinding)));
             }
 
             if (!string.IsNullOrWhiteSpace(execution.Platform))

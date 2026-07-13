@@ -322,7 +322,6 @@ internal static class ExecutionMetrics
             ["tenant_id"]            = ctx.TenantId,
             ["repository_url"]       = ctx.RepositoryUrl,
             ["repository_name"]      = ctx.RepositoryName,
-            ["git_ref"]              = ctx.GitRef,
             ["platform"]             = ctx.Platform,
             ["prompt"]               = ctx.Prompt,
             ["execution_block_name"] = ctx.BlockName ?? string.Empty,
@@ -365,7 +364,6 @@ internal sealed record ExecutionMetricsContext
     public string TenantId       { get; init; } = string.Empty;
     public string RepositoryUrl  { get; init; } = string.Empty;
     public string RepositoryName { get; init; } = string.Empty;
-    public string GitRef         { get; init; } = string.Empty;
     public string Platform       { get; init; } = string.Empty;
     public string Prompt         { get; init; } = string.Empty;
 

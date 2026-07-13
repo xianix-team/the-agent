@@ -4,7 +4,7 @@
 # Responsibilities:
 #   * Re-export dashed env var aliases (bash can't use dashes in names).
 #   * Provide the `log` helper used everywhere.
-#   * Extract the framework-managed inputs (repository-url / platform / git-ref)
+#   * Extract the framework-managed inputs (repository-url / platform)
 #     from XIANIX_INPUTS so both scripts agree on what they describe.
 #   * Define REPO_DIR / WORK_DIR / GIT_CRED_FILE as canonical paths.
 #   * Provide `configure_credentials` so either script can stand on its own
@@ -23,13 +23,15 @@ done < <(env -0)
 log() { echo "$@" >&2; }
 
 # ── Inputs (extracted from XIANIX_INPUTS) ────────────────────────────────────
-# `repository-url`, `platform`, and `git-ref` are framework-managed structural fields
+# `repository-url` and `platform` are framework-managed structural fields
 # auto-injected by the agent from the execution-level `platform` / `repository` block
 # in rules.json (or synthesized by the chat onboarding tool). They are not authored
 # under `use-inputs` — the agent serialises them under these canonical kebab-case keys.
 # These are the ONLY inputs the executor scripts ever read: everything else in
 # XIANIX_INPUTS is task-specific and opaque to this layer (task context such as a PR
 # number reaches the plugin through the prompt, never through executor logic).
+# The worktree is always created from the default-branch HEAD; plugins perform any
+# further checkout themselves.
 # Note: do NOT write `${XIANIX_INPUTS:-{}}` — bash parses the first `}` as the
 # end of the parameter expansion, leaving a stray `}` appended to the value
 # (which then breaks jq with "Unmatched '}'"). Use `:=` to assign-if-unset
@@ -37,13 +39,12 @@ log() { echo "$@" >&2; }
 : "${XIANIX_INPUTS:={\}}"
 REPOSITORY_URL=$(echo "${XIANIX_INPUTS}" | jq -r '."repository-url" // empty')
 PLATFORM=$(echo "${XIANIX_INPUTS}"       | jq -r '.platform // empty')
-GIT_REF=$(echo "${XIANIX_INPUTS}"        | jq -r '."git-ref" // empty')
 
 if [ -n "${REPOSITORY_URL}" ] && [ -z "${PLATFORM}" ]; then
     PLATFORM="github"
 fi
 
-export REPOSITORY_URL PLATFORM GIT_REF
+export REPOSITORY_URL PLATFORM
 
 # ── Workspace paths ──────────────────────────────────────────────────────────
 REPO_DIR="/workspace/repo"

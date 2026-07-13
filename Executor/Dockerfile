@@ -116,6 +116,7 @@ RUN if [ "$INSTALL_INFRA_TOOLS" = "1" ]; then \
     fi
 
 COPY execute_plugin.py /workspace/execute_plugin.py
+COPY host_context.py /workspace/host_context.py
 COPY _common.sh /workspace/_common.sh
 COPY prepare_repo.sh /workspace/prepare_repo.sh
 COPY run_prompt.sh /workspace/run_prompt.sh
