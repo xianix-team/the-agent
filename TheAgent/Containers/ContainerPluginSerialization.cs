@@ -22,6 +22,16 @@ internal sealed record ContainerPluginDto
 
     [JsonPropertyName("marketplace")]
     public required string Marketplace { get; init; }
+
+    /// <summary>
+    /// Slash command that invokes this plugin (e.g. <c>/pr-review</c>). Carried through so the
+    /// executor can list the available commands in the host-context preamble — a free-form
+    /// prompt (comment instructions, etc.) may not spell out the command, and Claude Code
+    /// otherwise has to guess it. Omitted from the payload when the rule author declared none.
+    /// </summary>
+    [JsonPropertyName("slash-command")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SlashCommand { get; init; }
 }
 
 /// <summary>
@@ -40,8 +50,9 @@ internal static class ContainerPluginSerialization
 
     private static ContainerPluginDto ToDto(PluginEntry p) => new()
     {
-        PluginName  = p.PluginName,
-        Marketplace = p.Marketplace,
+        PluginName   = p.PluginName,
+        Marketplace  = p.Marketplace,
+        SlashCommand = string.IsNullOrWhiteSpace(p.SlashCommand) ? null : p.SlashCommand.Trim(),
     };
 }
 

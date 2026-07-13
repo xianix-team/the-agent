@@ -6,10 +6,12 @@ Reads configuration from environment variables injected by the control plane:
   TENANT_ID            - identifies the tenant
   EXECUTION_ID         - unique ID for this execution
   WORK_DIR             - absolute path to the workspace (repo worktree or empty directory)
-  CLAUDE_CODE_PLUGINS  - JSON array of {"plugin-name", "marketplace"?} descriptors
+  CLAUDE_CODE_PLUGINS  - JSON array of {"plugin-name", "marketplace"?, "slash-command"?}
+                         descriptors
   PROMPT               - fully-interpolated Claude Code prompt to execute
-                         (when XIANIX_INPUTS.platform is set, a short host-context
-                         preamble is prepended before Claude Code sees it)
+                         (a short host-context preamble is prepended before Claude Code
+                         sees it when XIANIX_INPUTS.platform is set and/or the plugins
+                         declare slash commands)
   ANTHROPIC_API_KEY    - Anthropic API key (read automatically by the SDK)
 
 Writes a structured JSON envelope to stdout (see `build_output`).
@@ -483,7 +485,9 @@ async def main() -> None:
 
     # When rules.json declares platform, surface it in the prompt so free-form plugin
     # runs (comment instructions, etc.) pick the right host APIs. Env alone is easy to miss.
-    prompt = prepend_host_context(prompt, os.environ.get("XIANIX_INPUTS"))
+    # Passing the plugins along also lists their slash commands in the preamble so a
+    # free-form prompt that never names the command doesn't leave Claude Code guessing.
+    prompt = prepend_host_context(prompt, os.environ.get("XIANIX_INPUTS"), plugins)
 
     # ── Cost-control levers (all optional; injected by the control plane) ─────
     # Primary model: XIANIX_MODEL (first-class rules.json `model`) wins, then a raw

@@ -1400,4 +1400,28 @@ public class WebhookRulesEvaluatorTests
         Assert.Single(outcome.Results!);
         Assert.Equal("webhook", outcome.Results![0].Prompt);
     }
+
+    [Fact]
+    public void EvaluateWithRules_GithubPrCommentMentioningXianix_MatchesPrCommentBlock()
+    {
+        var rulesJson = File.ReadAllText(
+            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "TheAgent", "Knowledge", "rules.json"));
+        var payloadJson = File.ReadAllText(
+            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "TestScripts", "github-issue-comment-pr-sample.json"));
+
+        using var doc = JsonDocument.Parse(payloadJson);
+        var ruleSets = _sut.ParseRules(rulesJson);
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.True(outcome.Matched);
+        Assert.DoesNotContain(outcome.Results!, r => r.ExecutionBlockName == "github-issue-agent-comment-instruction");
+        Assert.Contains(outcome.Results!, r => r.ExecutionBlockName == "github-pr-agent-comment-instruction");
+        var match = outcome.Results!.Single(r => r.ExecutionBlockName == "github-pr-agent-comment-instruction");
+        Assert.Equal("github", match.Platform);
+        Assert.Equal("https://github.com/hasith/XiansAi.Server.git", match.RepositoryUrl);
+        Assert.Equal("3", match.Inputs["pr-number"]?.ToString());
+        Assert.Equal("@xianix", match.Inputs["user-instruction"]?.ToString());
+        Assert.Equal("hasith", match.Inputs["comment-author"]?.ToString());
+        Assert.Equal("4958276471", match.Inputs["comment-id"]?.ToString());
+    }
 }

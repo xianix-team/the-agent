@@ -49,6 +49,102 @@
           "execute-prompt": "You are @xianix. {{comment-author}} mentioned @xianix in a comment on pull request #{{pr-number}}. The comment: \"{{user-instruction}}\"\n\nFirst, decide whether this comment is actually directing you to do something, versus just mentioning your name in passing (e.g. referencing past actions, talking about you to someone else, or a mention with no request attached). If it's not a direct instruction to you, do nothing and post no reply.\n\nIf it IS a direct instruction:\n1. Strip the @xianix mention and treat the rest as your instruction.\n2. Perform the requested action using the tools available to you.\n\nGuidelines:\n- Keep your reply concise — state what you did and any findings, don't restate the request back.\n- If the instruction is ambiguous, ask a clarifying question in your reply rather than guessing.\n- If you lack access or the request is out of scope for this PR, say so plainly.\nIf necessary read the other comments on the PR to understand the context.\n- Only act within this PR's files and branch; do not touch unrelated code.\n- Post at most one reply comment per invocation."
         },
         {
+          "name": "github-issue-agent-comment-instruction",
+          "platform": "github",
+          "repository": {
+            "url": "repository.clone_url"
+          },
+          "match-any": [
+            {
+              "name": "github-issue-agent-re-instruction-requested",
+              "rule": "action==created&&comment.body*='@xianix'&&issue.pull_request!?"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "issue-number",
+              "value": "issue.number"
+            },
+            {
+              "name": "user-instruction",
+              "value": "comment.body"
+            },
+            {
+              "name": "comment-author",
+              "value": "comment.user.login"
+            },
+            {
+              "name": "comment-id",
+              "value": "comment.id"
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "req-analyst@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official",
+              "slash-command": "/requirement-analysis"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "GITHUB-TOKEN",
+              "value": "secrets.GITHUB-TOKEN",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 5,
+          "execute-prompt": "You are @xianix. {{comment-author}} mentioned @xianix in a comment on issue #{{issue-number}}. The comment: \"{{user-instruction}}\"\n\nFirst, decide whether this comment is actually directing you to do something, versus just mentioning your name in passing (e.g. referencing past actions, talking about you to someone else, or a mention with no request attached). If it's not a direct instruction to you, do nothing and post no reply.\n\nIf it IS a direct instruction:\n1. Strip the @xianix mention and treat the rest as your instruction.\n2. Perform the requested action using the tools available to you.\n\nGuidelines:\n- Keep your reply concise — state what you did and any findings, don't restate the request back.\n- If the instruction is ambiguous, ask a clarifying question in your reply rather than guessing.\n- If you lack access or the request is out of scope for this issue, say so plainly.\n- If necessary, read the other comments on the issue to understand the context.\n- Stay focused on this issue's scope; do not touch unrelated code or open new work without being asked.\n- Post at most one reply comment per invocation."
+        },
+        {
+          "name": "github-pr-agent-comment-instruction",
+          "platform": "github",
+          "repository": {
+            "url": "repository.clone_url"
+          },
+          "match-any": [
+            {
+              "name": "github-pr-agent-re-instruction-requested",
+              "rule": "action==created&&comment.body*='@xianix'&&issue.pull_request?"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "pr-number",
+              "value": "issue.number"
+            },
+            {
+              "name": "user-instruction",
+              "value": "comment.body"
+            },
+            {
+              "name": "comment-author",
+              "value": "comment.user.login"
+            },
+            {
+              "name": "comment-id",
+              "value": "comment.id"
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "pr-reviewer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official@extract-proper-git-diffs",
+              "slash-command": "/pr-review"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "GITHUB-TOKEN",
+              "value": "secrets.GITHUB-TOKEN",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 5,
+          "execute-prompt": "You are @xianix. {{comment-author}} mentioned @xianix in a comment on pull request #{{pr-number}}. The comment: \"{{user-instruction}}\"\n\nFirst, decide whether this comment is actually directing you to do something, versus just mentioning your name in passing (e.g. referencing past actions, talking about you to someone else, or a mention with no request attached). If it's not a direct instruction to you, do nothing and post no reply.\n\nIf it IS a direct instruction:\n1. Strip the @xianix mention and treat the rest as your instruction.\n2. Perform the requested action using the tools available to you.\n\nGuidelines:\n- Keep your reply concise — state what you did and any findings, don't restate the request back.\n- If the instruction is ambiguous, ask a clarifying question in your reply rather than guessing.\n- If you lack access or the request is out of scope for this PR, say so plainly.\n- If necessary, read the other comments on the PR to understand the context.\n- Only act within this PR's files and branch; do not touch unrelated code.\n- Post at most one reply comment per invocation."
+        },
+        {
           "name": "github-pull-request-review",
           "platform": "github",
           "repository": {
