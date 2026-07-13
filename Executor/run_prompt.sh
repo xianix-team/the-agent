@@ -144,7 +144,7 @@ if [ -n "${CLAUDE_CODE_PLUGINS:-}" ] && [ "${CLAUDE_CODE_PLUGINS}" != "[]" ]; th
         # Clear any prior install record + cached copy so install always resolves
         # and copies the version from the freshly cloned marketplace.
         claude plugin uninstall "${url}" --scope project >&2 2>/dev/null || true
-        [ -n "${mkt_name}" ] && rm -rf "${_cache_base}/${mkt_name}/${name}" 2>/dev/null || true
+        [ -n "${mkt_name}" ] && rm -rf "${_cache_base:?}/${mkt_name:?}/${name:?}" 2>/dev/null || true
 
         if ! claude plugin install "${url}" --scope project >&2; then
             log "  WARNING: failed to install plugin '${name}' — continuing"
