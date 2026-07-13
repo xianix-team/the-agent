@@ -12,7 +12,15 @@ In **this repository**, the default rules are embedded from [`TheAgent/Knowledge
 
 ## File structure
 
-`rules.json` is a JSON array of **rule set** objects. Each rule set targets one **webhook** name (case-insensitive) and contains an **executions** array. Each execution is an independent pipeline: optional filters, inputs, plugins, and prompt.
+`rules.json` is a JSON array of **rule set** objects. The *kind* of each rule set is chosen by its discriminator key at the **root level** of the object — mutually exclusive:
+
+| Root key | Kind | Consumed by | Section |
+|----------|------|-------------|---------|
+| `"webhook"` | Webhook rule set — reacts to an inbound event | `WebhookRulesEvaluator` | below |
+| `"chat"` | Chat rule set — the plugin invocations the chat tool may offer | `AvailablePluginsCatalog` | [1a](#1a-chat--root-level-chat-rule-sets) |
+| `"schedule"` (+ `"cron"`) | Schedule rule set — cron-driven runs | `ScheduleEvaluator` | (see schedule docs) |
+
+Every kind carries an **executions** array (each execution is an independent pipeline: optional filters, inputs, plugins, prompt) and may carry a rule-set-wide `with-envs`. Objects without one of these discriminator keys are ignored by every reader. A webhook rule set targets one **webhook** name (case-insensitive).
 
 ```jsonc
 [
@@ -23,11 +31,7 @@ In **this repository**, the default rules are embedded from [`TheAgent/Knowledge
       {
         "name": "...",
         "platform": "...",
-        "repository": {
-          "url":  "...",
-          "name": "...",
-          "ref":  "..."
-        },
+        "repository": "...",
         "match-any": [ ... ],
         "use-inputs": [ ... ],
         "use-plugins": [ ... ],
@@ -45,7 +49,7 @@ In **this repository**, the default rules are embedded from [`TheAgent/Knowledge
 | `with-envs` (optional, on the rule set) | Rule-set-wide [common environment variables](#5-with-envs--container-environment-variables) injected into every execution in this rule set. Per-execution `with-envs` entries override these by env name. |
 | `executions` | One or more execution blocks |
 | `platform` (optional, on each execution) | Hosting service the execution operates against (`github`, `azuredevops`, …). Structural — describes *where* the run happens, independent of the plugin. Auto-injected into `XIANIX_INPUTS` as `"platform"` for plugin prompts. Omit for executions that don't target a specific platform. |
-| `repository` (optional, on each execution) | Structural binding for the repository being operated on. Every sub-field that is declared (`url`, `ref`) is treated as **mandatory** — if any declared path doesn't resolve, the block is skipped before any container starts. Auto-injected as `"repository-url"` / `"git-ref"`, with `"repository-name"` derived from `repository.url` and injected alongside them. Omit entirely for executions that don't operate on a specific repo (e.g. work-item analysis). |
+| `repository` (optional, on each execution) | Structural binding for the repository being operated on. Declared sub-fields (`url`) are treated as **mandatory** — if a declared path doesn't resolve, the block is skipped before any container starts. Auto-injected as `"repository-url"`, with `"repository-name"` derived from `repository.url` and injected alongside it. The executor always checks out the default-branch HEAD; plugins perform any task-specific checkout. Omit entirely for executions that don't operate on a specific repo (e.g. work-item analysis), or for chat rule-set executions (the chat tool always supplies the repository itself). |
 
 If **several** execution blocks in the same rule set match the same webhook payload, **each** match is scheduled separately: the integrator starts one activation / processing workflow per match (see `XianixAgent` webhook handler).
 
@@ -58,8 +62,9 @@ If **several** execution blocks in the same rule set match the same webhook payl
 └───────────────────────────────┬──────────────────────────────────────┘
                                 │
                     ┌───────────▼───────────┐
-                    │  Find rule set where  │
-                    │  webhook matches      │
+                    │  Find webhook rule    │──── (chat / schedule rule sets have no
+                    │  set where name       │      webhook name → never selected here)
+                    │  matches              │
                     └───────────┬───────────┘
                                 │
                     ┌───────────▼───────────┐
@@ -99,23 +104,90 @@ Only one rule set per webhook name is used — the **first** matching entry in t
 
 ---
 
+## 1a. `chat` — root-level chat rule sets
+
+A **chat rule set** is a root-level sibling of the `"webhook"` and `"schedule"` rule sets — the invocation path is chosen by *which discriminator key the object carries*, not by a per-execution flag. A chat rule set is keyed on `"chat"` and lists the marketplace plugins the chat tool (`SupervisorSubagentTools.RunClaudeCodeOnRepository`) may offer the user, via `AvailablePluginsCatalog`, along with the cost/control tuning to apply to those chat runs.
+
+Unlike a webhook rule set, **a chat rule set has no `executions` array.** A chat run's prompt is authored by the supervisor from the user's own message — there's no payload to interpolate, so a per-execution `execute-prompt` / `use-inputs` shape would be redundant. The plugin list and tuning knobs live at the rule-set **root** and apply uniformly to every chat dispatch that uses one of the listed plugins:
+
+```jsonc
+{
+  "chat": "chat",
+  "with-envs": [ /* optional, rule-set-wide — same shape as a webhook rule set */ ],
+  "use-plugins": [
+    {
+      "plugin-name": "pr-reviewer@xianix-plugins-official",
+      "marketplace": "xianix-team/plugins-official",
+      "slash-command": "/pr-review"
+    }
+  ],
+  "model": "claude-sonnet-4-5",
+  "max-budget-usd": 5.0
+  // also: "max-turns", "allowed-tools", "disallowed-tools", "resume-sessions"
+}
+```
+
+| Root key | Consumed by | Notes |
+|----------|-------------|-------|
+| `"webhook"` | `WebhookRulesEvaluator` against inbound webhook payloads | Matches on the webhook name; has `executions`. |
+| `"chat"` | `AvailablePluginsCatalog` (feeds the chat tool's `ListAvailablePlugins`) | Has no webhook name, so the webhook evaluator **never** selects it. No `executions` — `use-plugins` + tuning at the root. |
+| `"schedule"` (+ `"cron"`) | `ScheduleEvaluator` | Cron-driven; parsed independently from the same document. |
+
+`RulesKnowledge.LoadAsync` keeps only rule sets with a non-empty `"webhook"` name and `RulesKnowledge.LoadChatRuleSetsAsync` keeps only those with a non-empty `"chat"` name, so the three kinds coexist in one array without leaking into each other's readers.
+
+### Root-level fields
+
+| Field | Description |
+|-------|-------------|
+| `chat` | Discriminator + label. Any non-empty value marks the object as a chat rule set (the value is only used in logs — there's no external event to match). |
+| `use-plugins` | The plugins this rule set makes available to the chat tool. Same `plugin-name@marketplace` shape as a webhook execution's `use-plugins`, plus a required **`slash-command`** (e.g. `/pr-review`) so the supervisor composes `{slash-command} {user-target}` without inventing a command name. |
+| `model` / `max-turns` / `allowed-tools` / `disallowed-tools` / `max-budget-usd` / `resume-sessions` | Cost/control tuning applied to every chat dispatch that uses one of `use-plugins`. Same meaning as the identically-named per-execution knobs on a webhook block. |
+| `with-envs` | Optional rule-set-wide common environment variables shipped to chat dispatches by `RulesEnvCatalog` (platform-agnostic, like a webhook rule set's commons). |
+
+### Why cost tuning must live on the chat rule set
+
+If the chat catalog had to reuse a plugin's *webhook* execution blocks for its tuning, a chat run would silently inherit (or lose) whatever cost tuning the webhook block happened to carry. A webhook PR review might be pinned to `claude-sonnet-4-5` at `max-budget-usd: 3.0`, but without a chat rule set the chat tool has no equivalent knobs to populate on its dispatch — chat runs fall back to the executor's untuned defaults (a pricier model, a higher budget cap). Declaring `model` / `max-budget-usd` / … on the chat rule set fixes that, and lets the chat budget differ from the webhook budget for the same plugin.
+
+Author **separate chat rule sets** when different plugins need different tuning.
+
+### Invocation guidance — slash command, not invented prompts
+
+Because a chat run's prompt comes from the user's message, a chat rule set carries no `execute-prompt`. The supervisor composes the prompt as `{slash-command} {target}` using the **`slash-command` declared on the chat `use-plugins` entry** (surfaced by `ListAvailablePlugins` as `slashCommand`), appending whatever target the user gave (a PR number, a branch name, …) — e.g. "review PR 42" → `/pr-review 42`, "review my `feature/login` branch" → `/pr-review feature/login`. It must **not** invent alternate command names from the plugin name (e.g. do not turn `pr-reviewer` into `/code-review`). This is why one plugin listing serves both the "by PR number" and "by branch" cases that previously needed two execution blocks.
+
+`ListAvailablePlugins` surfaces a chat-listed plugin with an **empty** `usageExamples` array and a populated `slashCommand` — the signal to the supervisor that it must compose `{slashCommand} {target}`. (Internally the catalog still synthesises a single tuning-only usage example so `PluginInputResolver` can carry the `model` / `max-budget-usd` / … onto the dispatch; that example has no prompt and no inputs and is filtered out of the model-facing list.)
+
+### Catalog selection rule (chat-exclusive, else webhook fallback)
+
+`AvailablePluginsCatalog` builds one catalog entry per unique `plugin-name@marketplace`, and for each plugin applies this rule:
+
+- If the plugin is listed by **any chat rule set**, the catalog serves it with that rule set's tuning exclusively — the webhook rule-set usage examples are not shown to the chat tool at all.
+- Otherwise (no chat rule set lists that plugin), the catalog falls back to the plugin's webhook usage examples (with their `execute-prompt` templates and `use-inputs`) — so tenants who haven't authored a chat rule set for a plugin see no behaviour change.
+
+---
+
 ## 1b. `platform` & `repository` — Structural execution context
 
 These two execution-level fields describe **what the run operates on** — independent of which plugin is used. They're resolved before any plugin runs, used by the framework itself (credential setup, workspace volume, worktree checkout, chat-side input resolution), **and** auto-injected into `XIANIX_INPUTS` under canonical kebab-case keys so plugin prompts and the executor entrypoint can read them off the same keys they always have.
 
 ```json
 "platform": "github",
+"repository": "repository.clone_url"
+```
+
+The bare-string form is shorthand for `{ "url": "repository.clone_url" }`. The object form is still accepted when you need a constant URL or an explicit `name`:
+
+```json
+"platform": "github",
 "repository": {
-  "url": "repository.clone_url",
-  "ref": "pull_request.head.ref"
+  "url": "repository.clone_url"
 }
 ```
 
 | Field             | Type                                                                | Description |
 |-------------------|---------------------------------------------------------------------|-------------|
 | `platform`        | string literal                                                      | Hosting service (`github`, `azuredevops`, …). Used by the executor to pick the right `git` credential helper and is exposed to plugin prompts as `{{platform}}`. Empty / omitted means the executor will infer from the repo URL (defaults to `github`). |
+| `repository`      | string (JSON path) **or** object                                    | Either a bare JSON path for the clone URL (shorthand for `repository.url`) or an object with `url` / optional `name`. |
 | `repository.url`  | string (JSON path) **or** `{ value, constant }` object              | Either a JSON path that resolves to the clone URL (the common webhook-driven case) or a hard-coded literal via the constant form (see below). **Mandatory when declared** — if a declared JSON path doesn't resolve, the execution block is skipped before any container starts. Exposed as `{{repository-url}}`. |
-| `repository.ref`  | string (JSON path) **or** `{ value, constant }` object              | Either a JSON path that resolves to the git ref (branch, commit SHA, or tag), or a constant pinning the run to a fixed branch/tag. **Mandatory when declared.** Omit entirely to run against the bare-clone HEAD. Exposed as `{{git-ref}}` and used directly by `Executor/entrypoint.sh` to position the worktree before the prompt runs. |
 
 > **`{{repository-name}}` is derived, not declared.** A short `owner/repo`-style identifier is computed from the resolved `repository.url` (platform-aware: GitHub, Azure DevOps `_git` URLs, etc.) and auto-injected as `{{repository-name}}`. There is no `repository.name` knob in the schema — clone URL and display name are kept in lockstep so they can never drift.
 >
@@ -123,37 +195,29 @@ These two execution-level fields describe **what the run operates on** — indep
 
 #### Hard-coding the repository (constant form)
 
-For runs whose repository or ref is fixed regardless of the webhook payload — cron pings, Slack triggers, single-tenant agents pinned to one repo, manual triggers — wrap the value in `{ "value": "...", "constant": true }`:
+For runs whose repository is fixed regardless of the webhook payload — cron pings, Slack triggers, single-tenant agents pinned to one repo, manual triggers — wrap the value in `{ "value": "...", "constant": true }`:
 
 ```jsonc
 "repository": {
-  "url": { "value": "https://github.com/my-org/agent-target.git", "constant": true },
-  "ref": { "value": "main",                                          "constant": true }
+  "url": { "value": "https://github.com/my-org/agent-target.git", "constant": true }
 }
 ```
 
-The bare-string shorthand (`"url": "repository.clone_url"`) is just sugar for `{ "value": "repository.clone_url", "constant": false }`, so existing rules need no changes. Mixed forms work too — clone a fixed mirror but check out whatever ref the webhook says:
-
-```jsonc
-"repository": {
-  "url": { "value": "https://github.com/my-org/mirror.git", "constant": true },
-  "ref": "pull_request.head.ref"
-}
-```
+The bare-string shorthand (`"url": "repository.clone_url"`) is just sugar for `{ "value": "repository.clone_url", "constant": false }`, so existing rules need no changes.
 
 Constant URLs of course also drive `{{repository-name}}` — `RepositoryNaming.DeriveName` runs on the resolved URL regardless of how it was supplied.
 
 ### Why split these out from `use-inputs`?
 
 - They are **structural** — every webhook-triggered run on a repo needs them, regardless of plugin. Promoting them to execution-level removes per-plugin duplication and makes the contract explicit.
-- The framework needs them **before** the plugin loop runs (clone target, credential helper, volume name, worktree ref) — they were already special-cased; now the schema reflects that.
-- `repository.ref` is part of the *binding* (which repo, at which ref), not a free-form input the prompt happens to use — nesting it next to `url` keeps that relationship obvious.
+- The framework needs them **before** the plugin loop runs (clone target, credential helper, volume name) — they were already special-cased; now the schema reflects that.
 - The chat-driven path (`SupervisorSubagentTools.RunClaudeCodeOnRepository`) treats `RepositoryUrl` / `RepositoryName` as first-class typed fields and derives the name from the URL the same way the webhook path does, via `RepositoryNaming.DeriveName`. Aligning the webhook schema removes a subtle divergence.
 - Executions that don't operate on a repo (e.g. Azure DevOps work-item analysis) just **omit** the `repository` block — no need for `mandatory: false` ceremony on per-plugin inputs.
+- The worktree always starts on the **default-branch HEAD**. Task-specific refs (PR head, feature branch, tag) are resolved by the plugin from the prompt.
 
 ### Wire-format
 
-Plugin prompts and `Executor/entrypoint.sh` always read structural values from these canonical `XIANIX_INPUTS` keys (`platform`, `repository-url`, `repository-name`, `git-ref`). The agent serialises the resolved structural values into the inputs dict under exactly these keys — they are **not** authored under `use-inputs` and the same key names are not used for anything else. `repository-name` is the derived value (from `repository.url`), not a separate path.
+Plugin prompts and `Executor/entrypoint.sh` always read structural values from these canonical `XIANIX_INPUTS` keys (`platform`, `repository-url`, `repository-name`). The agent serialises the resolved structural values into the inputs dict under exactly these keys — they are **not** authored under `use-inputs` and the same key names are not used for anything else. `repository-name` is the derived value (from `repository.url`), not a separate path.
 
 ---
 
@@ -181,10 +245,18 @@ Each rule is a comparison of a **JSON path** against a **literal value**, option
 <json-path> <operator> <expected-value>
 ```
 
-| Operator | Meaning       | Missing path returns |
-|----------|---------------|----------------------|
-| `==`     | Equals        | `false`              |
-| `!=`     | Not equals    | `true`               |
+| Operator | Meaning       | Case-sensitive | Missing path returns |
+|----------|---------------|----------------|----------------------|
+| `==`     | Equals              | yes | `false` |
+| `!=`     | Not equals          | yes | `true`  |
+| `^=`     | Starts with (prefix) | no  | `false` |
+| `!^=`    | Does not start with  | no  | `true`  |
+| `*=`     | Contains (substring) | no  | `false` |
+| `!*=`    | Does not contain     | no  | `true`  |
+| `?`      | Path exists and is non-null | n/a | `false` |
+| `!?`     | Path missing or null | n/a | `true` |
+
+The text-search operators (`^=`/`!^=` and `*=`/`!*=`) match **case-insensitively** — they are meant for fuzzy human text such as `@`-mentions and message bodies (e.g. `comment.body*='@xianix'` matches `@Xianix`). Equality (`==`/`!=`) stays **case-sensitive** because it targets structured identifiers where case is meaningful (GitHub label and branch names, enum-like statuses).
 
 ### Compound expressions
 
@@ -261,7 +333,7 @@ Only **one** `*` segment per path is supported. Wildcard `*` is **not** supporte
 
 Extracts values from the webhook payload into named variables. They are used for `execute-prompt` interpolation and are forwarded to the executor (for example as `XIANIX_INPUTS`).
 
-> **Don't put structural context here.** `platform`, `repository-url`, `repository-name`, and `git-ref` are declared at the [execution level](#1b-platform--repository--structural-execution-context) and auto-injected into `XIANIX_INPUTS` for you. Authoring them under `use-inputs` is unsupported — the framework uses the structural fields for credential setup, volume management, worktree checkout, and chat-side input validation.
+> **Don't put structural context here.** `platform`, `repository-url`, and `repository-name` are declared at the [execution level](#1b-platform--repository--structural-execution-context) and auto-injected into `XIANIX_INPUTS` for you. Authoring them under `use-inputs` is unsupported — the framework uses the structural fields for credential setup, volume management, and chat-side input validation.
 
 ```json
 "use-inputs": [
@@ -391,8 +463,8 @@ Examples:
 
 The same `with-envs` declarations also flow through to **chat-initiated** runs (e.g. when a user asks the agent to run a plugin via `RunClaudeCodeOnRepository` instead of via a webhook). A chat dispatch doesn't bind to a specific execution block, so the chat tool reads `rules.json` as the manifest of *every* credential the agent could need and ships:
 
-- **Every rule-set-level `with-envs` entry** — applied unconditionally, regardless of platform. This is precisely the "common defaults" contract: a `GITHUB-TOKEN` declared at the rule-set level is available to chat runs the same way it's available to every execution.
-- **Per-execution `with-envs` entries** whose execution matches the chosen repository's platform (or is platform-agnostic) — kept under the platform filter so a GitHub-targeted chat run doesn't inherit Azure DevOps's mandatory PAT and vice versa.
+- **Every rule-set-level `with-envs` entry** — applied unconditionally, regardless of platform, from **both** webhook rule sets and chat rule sets (a chat rule set has only rule-set-level `with-envs`, no executions). This is precisely the "common defaults" contract: a `GITHUB-TOKEN` declared at the rule-set level is available to chat runs the same way it's available to every execution.
+- **Per-execution `with-envs` entries** (webhook rule sets only) whose execution matches the chosen repository's platform (or is platform-agnostic) — kept under the platform filter so a GitHub-targeted chat run doesn't inherit Azure DevOps's mandatory PAT and vice versa.
 
 Both lists are then deduped by env name. The platform filter intentionally does *not* apply to rule-set commons — if you want a credential to be platform-specific, declare it under the matching execution(s), not at the rule-set level.
 
@@ -452,8 +524,7 @@ Placeholders are replaced case-insensitively. Any `{{name}}` with no matching in
         "name": "github-pull-request-review",
         "platform": "github",
         "repository": {
-          "url": "repository.clone_url",
-          "ref": "pull_request.head.ref"
+          "url": "repository.clone_url"
         },
         "match-any": [
           { "name": "pr-opened-event", "rule": "action==opened" }
@@ -468,7 +539,7 @@ Placeholders are replaced case-insensitively. Any `{{name}}` with no matching in
             "marketplace": "xianix-team/plugins-official"
           }
         ],
-        "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{git-ref}}).\n\nRun /code-review to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."
+        "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}}.\n\nRun /pr-review {{pr-number}} to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."
       }
     ]
   }
@@ -512,8 +583,8 @@ When the run doesn't operate on a specific repo, just omit the `repository` bloc
 
 1. Webhook payload arrives; orchestrator evaluates rules for the webhook name.
 2. For each execution block, if `match-any` is non-empty, at least one `rule` must pass.
-3. The structural fields (`platform`, `repository.url`, `repository.ref`) are resolved alongside `use-inputs`. Any declared structural field that fails to resolve **skips the block** with a clear error — same code path as a missing mandatory input.
-4. The resolved structural values are auto-injected into the inputs dictionary as `platform`, `repository-url`, and `git-ref`. The short `repository-name` (e.g. `owner/repo`) is **derived** from `repository-url` via `RepositoryNaming.DeriveName` (platform-aware: handles GitHub, Azure DevOps `_git` URLs, etc.) and injected alongside them — these are the canonical wire-format keys plugin prompts and the executor entrypoint expect.
+3. The structural fields (`platform`, `repository.url`) are resolved alongside `use-inputs`. Any declared structural field that fails to resolve **skips the block** with a clear error — same code path as a missing mandatory input.
+4. The resolved structural values are auto-injected into the inputs dictionary as `platform` and `repository-url`. The short `repository-name` (e.g. `owner/repo`) is **derived** from `repository-url` via `RepositoryNaming.DeriveName` (platform-aware: handles GitHub, Azure DevOps `_git` URLs, etc.) and injected alongside them — these are the canonical wire-format keys plugin prompts and the executor entrypoint expect.
 5. `execute-prompt` is interpolated against the merged inputs dict.
 6. The agent merges rule-set-level common `with-envs` with the matched execution's own `with-envs` (execution-level entries override rule-set entries by env name), resolves each entry (literals, `host.*`, `secrets.*`), and injects them into the executor container alongside the runtime values it manages itself.
-7. The executor uses `platform` to pick the right credential helper, `git clone`s `repository-url` into the per-tenant workspace volume, checks out `git-ref` into the per-run worktree (or HEAD when omitted), installs `use-plugins`, and runs the prompt.
+7. The executor uses `platform` to pick the right credential helper, `git clone`s `repository-url` into the per-tenant workspace volume, checks out the default-branch HEAD into the per-run worktree, installs `use-plugins`, and runs the prompt. Plugins perform any further task-specific checkout themselves.

@@ -137,6 +137,41 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
+    /// Best-effort removal of a workspace volume. Used by the onboarding / lazy-clone
+    /// workflows when a run fails on a brand-new repository: the volume was already
+    /// labelled by <see cref="EnsureWorkspaceVolumeAsync"/>, so leaving it behind would
+    /// make the repo show up as "onboarded" in <c>ListTenantRepositories</c> even though
+    /// it holds no (or a partial) clone. Volumes can't be un-labelled in place, so
+    /// deletion is the only way to keep the tenant listing truthful.
+    ///
+    /// Never throws for the two expected races: already-deleted (fine) and still-in-use
+    /// by another container (logged and left alone — that container's own run will
+    /// determine the volume's fate).
+    /// </summary>
+    [Activity]
+    public async Task RemoveWorkspaceVolumeAsync(string volumeName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(volumeName);
+
+        var logger = ActivityExecutionContext.Current.Logger;
+        try
+        {
+            await _docker.Volumes.RemoveAsync(volumeName, force: false);
+            logger.LogInformation("Removed workspace volume '{VolumeName}' after failed run.", volumeName);
+        }
+        catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            logger.LogInformation("Workspace volume '{VolumeName}' already absent.", volumeName);
+        }
+        catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Conflict)
+        {
+            logger.LogWarning(
+                "Workspace volume '{VolumeName}' is in use by another container; leaving it in place.",
+                volumeName);
+        }
+    }
+
+    /// <summary>
     /// Lists every repository belonging to <paramref name="tenantId"/> by enumerating Docker volumes
     /// labelled <c>xianix.tenant=&lt;tenantId&gt;</c> and reading their <c>xianix.repository</c> label.
     /// Volumes created before label support was added (or that lack a repository label) are skipped.
@@ -292,14 +327,64 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
             logger.LogWarning("Container '{ContainerId}' timed out after {Timeout}s. Killing.", shortId, timeoutSeconds);
             await TryKillContainerAsync(containerId);
 
+            // The follow stream is cancelled with the timeout, so any buffered output is
+            // lost. Re-fetch logs once (no Follow) while the container still exists —
+            // CleanupContainerAsync runs only after this activity returns.
+            var (stdout, stderr) = await TryCollectLogsAsync(containerId, logger, shortId);
+
+            var timeoutMsg = $"Container timed out after {timeoutSeconds} seconds.";
+            var combinedStderr = string.IsNullOrWhiteSpace(stderr)
+                ? timeoutMsg
+                : $"{timeoutMsg}\n\n{stderr}";
+
+            if (!string.IsNullOrWhiteSpace(stderr) || !string.IsNullOrWhiteSpace(stdout))
+            {
+                logger.LogError(
+                    "## Container Log (timeout)\n**Container:** `{ContainerId}`\n\n```\n{Logs}\n```",
+                    shortId,
+                    string.IsNullOrWhiteSpace(stdout) ? combinedStderr : $"{combinedStderr}\n\n--- stdout ---\n{stdout}");
+            }
+
             return new ContainerExecutionResult
             {
                 TenantId       = tenantId,
                 ExecutionLabel = executionLabel,
                 ExitCode       = -1,
-                StdOut         = string.Empty,
-                StdErr         = $"Container timed out after {timeoutSeconds} seconds.",
+                StdOut         = stdout,
+                StdErr         = combinedStderr,
             };
+        }
+    }
+
+    /// <summary>
+    /// One-shot log fetch (no Follow) used after a timeout kill so operators still see
+    /// whatever the container wrote before it was stopped.
+    /// </summary>
+    private async Task<(string StdOut, string StdErr)> TryCollectLogsAsync(
+        string containerId,
+        ILogger logger,
+        string shortId)
+    {
+        try
+        {
+            var logsParams = new ContainerLogsParameters
+            {
+                ShowStdout = true,
+                ShowStderr = true,
+                Follow     = false,
+                Tail       = "all",
+            };
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var logStream = await _docker.Containers.GetContainerLogsAsync(
+                containerId, false, logsParams, cts.Token);
+            return await logStream.ReadOutputToEndAsync(cts.Token);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex, "Failed to collect logs from timed-out container '{ContainerId}'.", shortId);
+            return (string.Empty, string.Empty);
         }
     }
 

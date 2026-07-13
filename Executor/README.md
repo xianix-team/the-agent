@@ -8,7 +8,7 @@ The `xianix-executor` Docker image runs inside an isolated container per tenant 
 |------|---------|
 | `Dockerfile` | Image definition — Python 3.12, Node.js 20, git, gh CLI, Claude Code CLI + SDK |
 | `entrypoint.sh` | Thin dispatcher — picks `prepare_repo.sh` and/or `run_prompt.sh` based on `XIANIX-MODE` |
-| `prepare_repo.sh` | Configures git credentials, bare-clone-or-fetches the repo into `/workspace/repo`, and **always pulls the upstream default branch** (so `git diff origin/<default>` and the no-`git-ref` worktree path see the freshest tip on every run, for both webhook and chat-driven executions). In `prepare-and-execute` mode it also creates the per-execution worktree at `/workspace/exec-${EXECUTION-ID}`. |
+| `prepare_repo.sh` | Configures git credentials, bare-clone-or-fetches the repo into `/workspace/repo`, and **always pulls the upstream default branch** (so `git diff origin/<default>` and the worktree from HEAD see the freshest tip on every run, for both webhook and chat-driven executions). In `prepare-and-execute` mode it also creates the per-execution worktree at `/workspace/exec-${EXECUTION-ID}`. |
 | `run_prompt.sh` | Installs Claude Code plugins, prepares cached repo context, launches `execute_plugin.py`, then cleans up the worktree (from an `EXIT` trap, so cleanup runs even when the run exits non-zero) |
 | `maintain_volume.sh` | Best-effort volume housekeeping run during prepare — `git gc --auto` on the bare clone, prunes superseded plugin-cache versions, and expires old `xianix-sessions` pointers. Never fails a run; retention windows are tunable via `XIANIX-SESSION-RETENTION-DAYS` / `XIANIX-PLUGIN-CACHE-MAX-AGE-DAYS`. |
 | `_common.sh` | Shared helpers sourced by both phase scripts (env aliasing, `log`, input parsing, `configure_credentials`) |
@@ -41,7 +41,7 @@ The image expects all configuration via environment variables:
 docker run --rm \
   -e TENANT-ID=local-test \
   -e EXECUTION-ID=test-001 \
-  -e 'XIANIX-INPUTS={"repository-url":"https://github.com/your-org/your-repo","platform":"github","git-ref":"feature/foo"}' \
+  -e 'XIANIX-INPUTS={"repository-url":"https://github.com/your-org/your-repo","platform":"github"}' \
   -e CLAUDE-CODE-PLUGINS='[{"plugin-name":"github@claude-plugins-official","marketplace":"anthropics/claude-plugins-official"}]' \
   -e PROMPT="Review this repository and summarize the architecture." \
   -e ANTHROPIC-API-KEY=sk-ant-... \
@@ -57,7 +57,7 @@ The `/workspace/repo` mount holds a **bare git clone**. On first run the repo is
 Every run — webhook-triggered or chat-conversational — also re-pulls the upstream's **default branch** before any plugin or prompt action runs. This keeps `refs/heads/<default>` and the bare clone's `HEAD` in lock-step with the remote, so:
 
 - A plugin doing `git diff origin/<default>` always sees the latest base.
-- A no-`git-ref` worktree (`worktree add HEAD --detach`) always picks up the freshest default tip, even if a previous run left the bare clone on something else.
+- A worktree (`worktree add HEAD --detach`) always picks up the freshest default tip, even if a previous run left the bare clone on something else.
 - An upstream default-branch rename (e.g. `master` → `main`) self-heals on the next execution rather than breaking subsequent worktree creations.
 
 ```bash
@@ -80,6 +80,7 @@ The tests run in two tiers:
 
 | Tier | Needs | What it verifies |
 |------|-------|------------------|
+| 0 — unit (always runs, free) | Python 3 only | `host_context.py` prepends `[Xianix host context]` when `platform` is set; skips when absent; idempotent |
 | 1 — hermetic (always runs, free) | Docker only | `prepare` mode clones onto the volume; a second run fetches instead of re-cloning; a new upstream commit is picked up (default-branch refresh contract); a bad repo URL emits the structured prepare error envelope with a non-zero exit |
 | 2 — live Claude Code (skipped without a key, costs ~$0.03) | `ANTHROPIC_API_KEY` | A full `prepare-and-execute` run. The fixture contains a `SECRET.md` with a **random token generated fresh per test run**; the prompt asks the agent to read the file and reply with the token. The test asserts the token appears in `.result` — which is only possible if the agent genuinely cloned the repo, created the worktree, and read the file. Also asserts stdout purity (exactly one line of valid JSON) and that `session_id` / `input_tokens` / `cost_usd` are populated. The run is cost-capped via `XIANIX-MODEL=claude-haiku-4-5`, `XIANIX-MAX-TURNS=10`, and `XIANIX-MAX-BUDGET-USD=0.25`. |
 
@@ -125,9 +126,9 @@ cat progress.log  # git + plugin + executor progress messages
 | `TENANT-ID` | Yes | Identifies the tenant for logging and isolation |
 | `EXECUTION-ID` | Yes | Unique per-execution ID, used as the git worktree name |
 | `XIANIX-MODE` | No | Phase selector — `prepare-and-execute` (default), `prepare` (bare clone only), or `execute` (run an already-prepared workspace). See *Execution modes* above. |
-| `XIANIX-INPUTS` | Yes | JSON object with dynamic inputs. For repo-bound runs the agent auto-injects the structural keys `repository-url`, `platform`, and (when declared) `git-ref` from the execution-level `repository` / `platform` fields in `rules.json`. The short `repository-name` (e.g. `owner/repo`) is **derived** from `repository-url` (platform-aware: handles GitHub, Azure DevOps `_git` URLs, etc.) and injected alongside them. None of these keys are authored under `use-inputs`. |
+| `XIANIX-INPUTS` | Yes | JSON object with dynamic inputs. For repo-bound runs the agent auto-injects the structural keys `repository-url` and `platform` from the execution-level `repository` / `platform` fields in `rules.json`. The short `repository-name` (e.g. `owner/repo`) is **derived** from `repository-url` (platform-aware: handles GitHub, Azure DevOps `_git` URLs, etc.) and injected alongside them. None of these keys are authored under `use-inputs`. The worktree always starts on the default-branch HEAD; task-specific checkouts are performed by plugins. |
 | `CLAUDE-CODE-PLUGINS` | Yes | JSON array of `{ "plugin-name", "marketplace"? }` plugin descriptors. Env vars used by the plugins are injected separately by the agent via the execution-level `with-envs` in `rules.json` and never appear in this payload. |
-| `PROMPT` | Yes | Fully interpolated Claude Code prompt to execute |
+| `PROMPT` | Yes | Fully interpolated Claude Code prompt to execute. When `XIANIX_INPUTS` includes a non-empty `platform`, the executor prepends a short `[Xianix host context]` block (platform + optional `repository-name`) so Claude Code / plugins can pick the right host APIs without relying on env alone. |
 | `ANTHROPIC-API-KEY` | Yes | Anthropic API key (read by the Claude Code SDK) |
 | `GITHUB-TOKEN` | Conditional | GitHub PAT — required for GitHub workflows (clones, marketplace repos, `gh` CLI). Injected from the **tenant Secret Vault** via `"value": "secrets.GITHUB-TOKEN"` in `rules.json`; never read from the agent host. |
 | `AZURE-DEVOPS-TOKEN` | Conditional | Azure DevOps PAT — required when `platform=azuredevops`. Injected from the **tenant Secret Vault** via `"value": "secrets.AZURE-DEVOPS-TOKEN"` in `rules.json`; never read from the agent host. |
@@ -141,8 +142,10 @@ cat progress.log  # git + plugin + executor progress messages
 | Key | Used for |
 |-----|----------|
 | `repository-url` | Git clone/fetch target. Required for repo-bound runs; framework-managed (injected from the execution-level `repository.url` in `rules.json`). |
-| `platform` | Credential selection: `github` (default), `azuredevops`. Framework-managed (injected from the execution-level `platform`). |
-| `git-ref` | Ref (branch / commit / tag) to check out into the worktree. Framework-managed (injected from the execution-level `repository.ref` in `rules.json`). When the rule omits `repository.ref` the executor runs against the bare-clone HEAD. |
+| `platform` | Credential selection: `github` (default), `azuredevops`. Framework-managed (injected from the execution-level `platform`). Also used to prepend host context onto `PROMPT` when non-empty. |
+| `conversation-id` | Optional opaque id used (filename-sanitised) as the session-resume key when `XIANIX-RESUME-SESSIONS` is enabled. Framework-managed — injected from the execution-level `conversation-key` binding in `rules.json` (e.g. mapped from the payload's PR id); the executor attaches no meaning to its contents. |
+
+The executor shell scripts read **only** these structural keys from `XIANIX_INPUTS`. All other inputs (`pr-number`, `issue-number`, …) are task-specific and opaque to the executor — they reach the plugin through the interpolated `PROMPT`, keeping the executor independent of any particular action.
 
 ## Concurrency model
 

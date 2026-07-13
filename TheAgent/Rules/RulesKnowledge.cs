@@ -95,4 +95,42 @@ public static class RulesKnowledge
             return [];
         }
     }
+
+    /// <summary>
+    /// Loads the chat rule sets from the same <see cref="Constants.RulesKnowledgeName"/>
+    /// document. Chat rule sets are the root-level siblings of webhook (and schedule) rule
+    /// sets, discriminated by a non-empty <c>"chat"</c> name — exactly the same document
+    /// shape the <c>ScheduleEvaluator</c> re-parses for its <c>"schedule"</c> entries. Only
+    /// entries with a non-empty <see cref="ChatRuleSet.ChatName"/> are returned, so webhook /
+    /// schedule rule sets are ignored here just as chat rule sets are ignored by
+    /// <see cref="LoadAsync"/>.
+    /// </summary>
+    /// <returns>An empty list when the document is missing, blank, or unparseable — callers
+    /// (the chat plugin catalog) degrade to "no chat rule sets", falling back to webhook
+    /// usage examples.</returns>
+    public static async Task<List<ChatRuleSet>> LoadChatRuleSetsAsync(ILogger? logger = null)
+    {
+        logger ??= NullLogger.Instance;
+
+        var doc = await XiansContext.CurrentAgent.Knowledge
+            .GetAsync(Constants.RulesKnowledgeName)
+            .ConfigureAwait(false);
+
+        if (doc is null || string.IsNullOrWhiteSpace(doc.Content))
+            return [];
+
+        try
+        {
+            return [.. (JsonSerializer.Deserialize<List<ChatRuleSet>>(doc.Content, RulesJsonOptions)
+                   ?? []).Where(e => !string.IsNullOrWhiteSpace(e.ChatName))];
+        }
+        catch (JsonException ex)
+        {
+            logger.LogError(
+                ex,
+                "Failed to parse chat rule sets from knowledge document '{RulesName}' — treating " +
+                "as no chat rule sets. Check rules.json syntax in Xians Studio.", Constants.RulesKnowledgeName);
+            return [];
+        }
+    }
 }

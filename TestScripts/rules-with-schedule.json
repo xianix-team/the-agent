@@ -13,8 +13,7 @@
                 "name": "github-pull-request-review",
                 "platform": "github",
                 "repository": {
-                    "url": "repository.clone_url",
-                    "ref": "pull_request.head.ref"
+                    "url": "repository.clone_url"
                 },
                 "match-any": [
                     {
@@ -68,8 +67,7 @@
                 "name": "github-dependency-optimizer",
                 "platform": "github",
                 "repository": {
-                    "url": "https://github.com/99x-Projects/qib.git",
-                    "ref": "main"
+                    "url": "https://github.com/99x-Projects/qib.git"
                 },
                 "use-plugins": [
                     {

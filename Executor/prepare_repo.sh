@@ -12,10 +12,10 @@
 #
 # Whenever REPOSITORY_URL is set, this script ALWAYS pulls the upstream default
 # branch into the bare clone before any further git action — irrespective of
-# GIT_REF and irrespective of whether the run was triggered by a webhook or by a
-# user-conversational tool. This guarantees that both `git diff origin/<default>`
-# and the no-GIT_REF worktree path see the latest default-branch tip rather than
-# whatever the bare clone happened to be left at by the previous execution.
+# whether the run was triggered by a webhook or by a user-conversational tool.
+# This guarantees that both `git diff origin/<default>` and the worktree
+# (`worktree add HEAD`) see the latest default-branch tip rather than whatever
+# the bare clone happened to be left at by the previous execution.
 #
 # When REPOSITORY_URL is empty we either skip (mode=prepare) or create an empty
 # workspace directory so a no-repo prompt run still has somewhere to cd into.
@@ -55,7 +55,6 @@ log "Execution ID:        ${EXECUTION_ID}"
 log "Mode:                ${XIANIX_MODE}"
 log "Repository:          ${REPOSITORY_URL:-<none>}"
 log "Platform:            ${PLATFORM:-<none>}"
-[ -n "${GIT_REF}" ] && log "Git ref:             ${GIT_REF}"
 
 # True when the bare repo has linked worktrees beyond itself, i.e. another
 # concurrent execution is (or recently was) checked out against this volume.
@@ -103,15 +102,14 @@ ensure_bare_repo() {
     git -C "${REPO_DIR}" worktree prune --expire=12.hours.ago >&2 2>/dev/null || true
 }
 
-# Always pull the upstream default branch into the bare clone, even if a GIT_REF
-# was supplied. Why this is non-redundant with the `git fetch --all --prune` in
-# `ensure_bare_repo`:
+# Always pull the upstream default branch into the bare clone. Why this is
+# non-redundant with the `git fetch --all --prune` in `ensure_bare_repo`:
 #
 #   1. If the upstream renamed its default (e.g. master → main), `--prune`
 #      deletes the old local head but the bare clone's `HEAD` symbolic ref
 #      stays pointed at the now-missing branch — the next `worktree add HEAD`
 #      then dies with "not a valid ref". We re-point HEAD at the live default
-#      so the no-GIT_REF worktree path stays self-healing.
+#      so the worktree path stays self-healing.
 #
 #   2. The previous fetch is best-effort across *all* refs and `set -e`-aware,
 #      but a partial failure could leave the default branch stale. Re-fetching
@@ -160,61 +158,20 @@ pull_default_branch() {
     fi
 
     # Re-point local HEAD at the (possibly renamed) default branch so the
-    # no-GIT_REF worktree path picks up the right tip, and so any consumer
-    # reading `HEAD` from the bare clone gets the upstream's view of "default".
+    # worktree path picks up the right tip, and so any consumer reading `HEAD`
+    # from the bare clone gets the upstream's view of "default".
     git -C "${REPO_DIR}" symbolic-ref HEAD "refs/heads/${default_branch}" >&2 \
         || log "WARNING: failed to re-point HEAD at refs/heads/${default_branch}."
 }
 
-# Derive a platform-managed PR ref that outlives head-branch deletion. When a
-# PR is merged and its branch deleted (or an old webhook is re-delivered after
-# merge), fetching GIT_REF by branch name fails with "couldn't find remote ref"
-# — but both GitHub and Azure DevOps keep a synthetic ref for every PR forever:
-#   GitHub:       refs/pull/<number>/head   (the PR's head commit)
-#   Azure DevOps: refs/pull/<id>/merge      (ADO exposes only the merge ref)
-# The PR number comes from XIANIX_INPUTS: `pr-number` when the rules provide it
-# directly, otherwise parsed from `pr-link` (handles both API `/pulls/427` and
-# web `/pull/427` URL shapes). Prints nothing when no PR context is available.
-_pr_fallback_ref() {
-    local pr_number pr_link
-    pr_number=$(echo "${XIANIX_INPUTS}" | jq -r '."pr-number" // empty')
-    if [ -z "${pr_number}" ]; then
-        pr_link=$(echo "${XIANIX_INPUTS}" | jq -r '."pr-link" // empty')
-        pr_number=$(printf '%s' "${pr_link}" | sed -nE 's#.*/pulls?/([0-9]+).*#\1#p')
-    fi
-    [ -z "${pr_number}" ] && return 0
-    case "${PLATFORM}" in
-        azuredevops) printf 'refs/pull/%s/merge' "${pr_number}" ;;
-        *)           printf 'refs/pull/%s/head' "${pr_number}" ;;
-    esac
-}
-
 create_worktree() {
-    if [ -n "${GIT_REF}" ]; then
-        log "--- Creating worktree for ref: ${GIT_REF} ---"
-        # Fetch into a per-execution ref rather than relying on FETCH_HEAD.
-        # FETCH_HEAD is a single shared file in the bare repo, so two concurrent
-        # executions fetching different refs can clobber each other and end up
-        # checking out the wrong commit. A unique ref keyed by EXECUTION_ID is
-        # race-free; the worktree is created detached from it and the temporary
-        # ref is deleted immediately afterwards (the checkout keeps the commit).
-        local exec_ref="refs/xianix/exec-${EXECUTION_ID}"
-        if ! git -C "${REPO_DIR}" fetch origin "+${GIT_REF}:${exec_ref}" >&2; then
-            local fallback_ref
-            fallback_ref="$(_pr_fallback_ref)"
-            if [ -z "${fallback_ref}" ] || [ "${fallback_ref}" = "${GIT_REF}" ]; then
-                log "FATAL: could not fetch ref '${GIT_REF}' from origin and no PR fallback ref is available."
-                exit 1
-            fi
-            log "WARNING: ref '${GIT_REF}' not found on origin (head branch likely deleted after merge) — falling back to '${fallback_ref}'."
-            git -C "${REPO_DIR}" fetch origin "+${fallback_ref}:${exec_ref}" >&2
-        fi
-        git -C "${REPO_DIR}" worktree add "${WORK_DIR}" "${exec_ref}" --detach >&2
-        git -C "${REPO_DIR}" update-ref -d "${exec_ref}" >&2 2>/dev/null || true
-    else
-        log "--- Creating worktree for HEAD ---"
-        git -C "${REPO_DIR}" worktree add "${WORK_DIR}" HEAD --detach >&2
-    fi
+    # Purely generic git semantics, no task knowledge: always check out the
+    # default branch (HEAD). Anything task-specific — e.g. a PR review needing
+    # the PR's source branch — is the PLUGIN's job: it receives the task
+    # context through the prompt and performs its own fetch/checkout inside the
+    # worktree.
+    log "--- Creating worktree for HEAD (default branch) ---"
+    git -C "${REPO_DIR}" worktree add "${WORK_DIR}" HEAD --detach >&2
 }
 
 prepare_empty_workspace() {
@@ -229,7 +186,7 @@ if [ -n "${REPOSITORY_URL}" ]; then
     # user-conversational executions land here, so this single call is what
     # honours the "always pull the default branch before any git action"
     # contract for every entry point. Done before create_worktree so the
-    # no-GIT_REF path resolves HEAD to the freshly-refreshed default tip.
+    # worktree resolves HEAD to the freshly-refreshed default tip.
     pull_default_branch
 
     # Best-effort volume housekeeping (git gc, stale plugin versions, old session

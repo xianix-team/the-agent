@@ -3,9 +3,10 @@ namespace Xianix.Rules;
 /// <summary>
 /// Reads the <see cref="Constants.RulesKnowledgeName"/> Xians knowledge document and
 /// returns the union of every <c>with-envs</c> entry declared across all rule sets —
-/// both the rule-set-wide common <c>with-envs</c> (which apply to every execution by
-/// design) and the per-execution <c>with-envs</c> filtered to the dispatch platform
-/// (plus platform-agnostic executions). Used by the chat-driven
+/// webhook rule sets and root-level chat rule sets alike — covering both the
+/// rule-set-wide common <c>with-envs</c> (which apply to every execution by design) and
+/// the per-execution <c>with-envs</c> filtered to the dispatch platform (plus
+/// platform-agnostic executions). Used by the chat-driven
 /// <c>SupervisorSubagentTools.RunClaudeCodeOnRepository</c> tool.
 ///
 /// Rationale: a chat-initiated run has no matched <see cref="WebhookExecution"/>, so we
@@ -46,7 +47,8 @@ internal static class RulesEnvCatalog
         ArgumentException.ThrowIfNullOrWhiteSpace(platform);
 
         var ruleSets = await RulesKnowledge.LoadAsync().ConfigureAwait(false);
-        return BuildEnvList(ruleSets ?? [], platform);
+        var chatRuleSets = await RulesKnowledge.LoadChatRuleSetsAsync().ConfigureAwait(false);
+        return BuildEnvList(ruleSets ?? [], platform, chatRuleSets);
     }
 
     /// <summary>
@@ -71,7 +73,9 @@ internal static class RulesEnvCatalog
     /// first, they win on collisions with execution-level entries of the same name.
     /// </summary>
     internal static IReadOnlyList<EnvEntry> BuildEnvList(
-        IEnumerable<WebhookRuleSet> ruleSets, string platform)
+        IEnumerable<WebhookRuleSet> ruleSets,
+        string platform,
+        IEnumerable<ChatRuleSet>? chatRuleSets = null)
     {
         ArgumentNullException.ThrowIfNull(ruleSets);
         ArgumentException.ThrowIfNullOrWhiteSpace(platform);
@@ -81,21 +85,21 @@ internal static class RulesEnvCatalog
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var result = new List<EnvEntry>();
 
-        foreach (var set in ruleSets)
+        void Collect(IReadOnlyList<EnvEntry> commonEnvs, IEnumerable<WebhookExecution> executions)
         {
             // Rule-set-wide common envs are platform-agnostic by design — they apply to
             // every execution in the rule set, regardless of platform. Include them once
             // per rule set so chat dispatches still pick them up even when they don't
             // bind to a specific execution. Dedup remains "first wins" by env name, same
             // as the per-execution loop below.
-            foreach (var env in set.WithEnvs)
+            foreach (var env in commonEnvs)
             {
                 if (string.IsNullOrWhiteSpace(env.Name)) continue;
                 if (!seen.Add(env.Name)) continue;
                 result.Add(env);
             }
 
-            foreach (var execution in set.Executions)
+            foreach (var execution in executions)
             {
                 var execKey = (execution.Platform ?? string.Empty).Trim().ToLowerInvariant();
                 if (execKey.Length > 0 && execKey != key)
@@ -109,6 +113,16 @@ internal static class RulesEnvCatalog
                 }
             }
         }
+
+        foreach (var set in ruleSets)
+            Collect(set.WithEnvs, set.Executions);
+
+        // Root-level chat rule sets carry only rule-set-wide with-envs (no executions), so a
+        // credential declared only on a chat rule set is still shipped to chat dispatches.
+        // Walked after webhook rule sets, so a webhook rule set's entry of the same name
+        // still wins on first-wins dedup.
+        foreach (var set in chatRuleSets ?? [])
+            Collect(set.WithEnvs, []);
 
         return result;
     }

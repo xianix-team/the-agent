@@ -46,6 +46,39 @@ public class AvailablePluginsCatalogTests
             }).ToList(),
         };
 
+    // A flat, root-level chat rule set: a plugin list plus rule-set-wide tuning knobs
+    // (no executions — a chat run's prompt is authored by the supervisor from slashCommand).
+    private static ChatRuleSet ChatSet(
+        string pluginName,
+        string model = "",
+        double? maxBudgetUsd = null,
+        int? maxTurns = null,
+        IReadOnlyList<string>? allowedTools = null,
+        IReadOnlyList<string>? disallowedTools = null,
+        bool resumeSessions = false,
+        IEnumerable<EnvEntry>? withEnvs = null,
+        string slashCommand = "") =>
+        new()
+        {
+            ChatName        = "chat",
+            Plugins         =
+            [
+                new PluginEntry
+                {
+                    PluginName   = pluginName,
+                    Marketplace  = "mp",
+                    SlashCommand = slashCommand,
+                },
+            ],
+            Model           = model,
+            MaxBudgetUsd    = maxBudgetUsd,
+            MaxTurns        = maxTurns,
+            AllowedTools    = (allowedTools ?? []).ToList(),
+            DisallowedTools = (disallowedTools ?? []).ToList(),
+            ResumeSessions  = resumeSessions,
+            WithEnvs        = (withEnvs ?? []).ToList(),
+        };
+
     [Fact]
     public void BuildCatalog_RequiredEnvs_UnionEveryEnvAcrossExecutionsThatUseThePlugin()
     {
@@ -150,5 +183,173 @@ public class AvailablePluginsCatalogTests
 
         var entry = Assert.Single(plugin.RequiredEnvs);
         Assert.Equal("GITHUB-TOKEN", entry.Name);
+    }
+
+    // ── root-level chat rule set — chat-exclusive-else-webhook-fallback selection ───
+
+    /// <summary>
+    /// A plugin listed by a root-level chat rule set is served by that chat rule set's
+    /// tuning-only usage example exclusively — its webhook rule-set ones are hidden from the
+    /// chat catalog. The chat usage example carries no prompt template (the supervisor
+    /// authors the prompt from slashCommand + target) and the chat rule set's model, not the
+    /// webhook block's. The chat listing's slash-command wins even when the webhook listing
+    /// omitted one.
+    /// </summary>
+    [Fact]
+    public void BuildCatalog_PluginInChatRuleSet_UsesChatTuningExclusively()
+    {
+        var webhookRules = new[] { RuleSetWith(Execution("github", "pr-reviewer")) };
+        var chatRules    = new[] { ChatSet("pr-reviewer", model: "chat-model", slashCommand: "/pr-review") };
+
+        var plugin  = Assert.Single(AvailablePluginsCatalog.BuildCatalog(webhookRules, chatRules));
+        var example = Assert.Single(plugin.UsageExamples);
+
+        Assert.Equal("chat-model", example.Model);
+        Assert.Equal("", example.ExecutePrompt);
+        Assert.Empty(example.Inputs);
+        Assert.Equal("/pr-review", plugin.SlashCommand);
+    }
+
+    /// <summary>
+    /// Chat <c>slash-command</c> is surfaced on the catalog entry so ListAvailablePlugins can
+    /// tell the supervisor the exact command — no inventing <c>/code-review</c> from the
+    /// plugin name.
+    /// </summary>
+    [Fact]
+    public void BuildCatalog_ChatRuleSet_SurfacesSlashCommand()
+    {
+        var chatRules = new[] { ChatSet("pr-reviewer", slashCommand: "/pr-review") };
+
+        var plugin = Assert.Single(AvailablePluginsCatalog.BuildCatalog([], chatRules));
+
+        Assert.Equal("/pr-review", plugin.SlashCommand);
+    }
+
+    /// <summary>
+    /// A plugin absent from every chat rule set keeps the pre-existing behaviour of
+    /// surfacing its webhook usage examples — no regression for tenants who never author a
+    /// chat rule set.
+    /// </summary>
+    [Fact]
+    public void BuildCatalog_PluginNotInChatRuleSet_FallsBackToWebhookUsageExamples()
+    {
+        var rules = new[] { RuleSetWith(Execution("github", "pr-reviewer")) };
+
+        var plugin  = Assert.Single(AvailablePluginsCatalog.BuildCatalog(rules));
+        var example = Assert.Single(plugin.UsageExamples);
+
+        Assert.Equal("github-pr-reviewer", example.ExecutionName);
+    }
+
+    /// <summary>
+    /// The synthesised chat usage example carries the chat rule set's root-level cost/control
+    /// knobs (model, budget, turn cap, tool lists, session resume) so the chat tool applies
+    /// that tuning to the dispatch — and no prompt template or inputs.
+    /// </summary>
+    [Fact]
+    public void BuildCatalog_ChatRuleSet_SurfacesModelAndCostSettings()
+    {
+        var chatRules = new[]
+        {
+            ChatSet(
+                "pr-reviewer",
+                model: "claude-sonnet-4-5",
+                maxBudgetUsd: 5.0,
+                maxTurns: 20,
+                allowedTools: ["Read", "Bash"],
+                disallowedTools: ["WebSearch"],
+                resumeSessions: true),
+        };
+
+        var plugin  = Assert.Single(AvailablePluginsCatalog.BuildCatalog([], chatRules));
+        var example = Assert.Single(plugin.UsageExamples);
+
+        Assert.Equal("claude-sonnet-4-5", example.Model);
+        Assert.Equal(5.0, example.MaxBudgetUsd);
+        Assert.Equal(20, example.MaxTurns);
+        Assert.Equal(new[] { "Read", "Bash" }, example.AllowedTools);
+        Assert.Equal(new[] { "WebSearch" }, example.DisallowedTools);
+        Assert.True(example.ResumeSessions);
+        Assert.Equal("", example.ExecutePrompt);
+        Assert.Empty(example.Inputs);
+    }
+
+    /// <summary>
+    /// A chat plugin's synthesised usage example has no mandatory inputs, so it always wins
+    /// input resolution with no caller inputs — and the winner carries the chat rule set's
+    /// model/budget so the chat tool can apply them to the dispatch.
+    /// </summary>
+    [Fact]
+    public void Resolve_ChatPlugin_WinsWithNoInputsAndCarriesTuning()
+    {
+        var catalog = AvailablePluginsCatalog.BuildCatalog(
+            [],
+            new[] { ChatSet("pr-reviewer", model: "claude-sonnet-4-5", maxBudgetUsd: 5.0) });
+
+        var result = PluginInputResolver.Resolve(
+            "https://github.com/acme/app.git", "acme/app", catalog, callerInputs: null);
+
+        var success = Assert.IsType<ResolutionResult.Success>(result);
+        var winner  = Assert.Single(success.WinningExamples);
+        Assert.Equal("pr-reviewer", winner.PluginName);
+        Assert.Equal("claude-sonnet-4-5", winner.Example.Model);
+        Assert.Equal(5.0, winner.Example.MaxBudgetUsd);
+    }
+
+    /// <summary>
+    /// Webhook-fallback plugins can still expose several usage examples; the resolver tries
+    /// them in declaration order and picks the first whose mandatory caller inputs are all
+    /// satisfiable — so a "by branch" example is reachable even when a "by PR number" example
+    /// is declared first and its input wasn't supplied.
+    /// </summary>
+    [Fact]
+    public void Resolve_MultipleWebhookUsageExamples_PicksFirstSatisfiableInDeclarationOrder()
+    {
+        var byNumber = new WebhookExecution
+        {
+            Name       = "wh-by-number",
+            Platform   = "github",
+            Plugins    = [new PluginEntry { PluginName = "pr-reviewer", Marketplace = "mp" }],
+            InputRules = [new InputRuleEntry { Name = "pr-number", Value = "pull_request.number", Mandatory = true }],
+        };
+        var byBranch = new WebhookExecution
+        {
+            Name       = "wh-by-branch",
+            Platform   = "github",
+            Plugins    = [new PluginEntry { PluginName = "pr-reviewer", Marketplace = "mp" }],
+            InputRules = [new InputRuleEntry { Name = "branch-name", Value = "pull_request.head.ref", Mandatory = true }],
+        };
+
+        var catalog = AvailablePluginsCatalog.BuildCatalog(new[] { RuleSetWith(byNumber, byBranch) });
+
+        var result = PluginInputResolver.Resolve(
+            "https://github.com/acme/app.git",
+            "acme/app",
+            catalog,
+            new Dictionary<string, string> { ["branch-name"] = "feature/x" });
+
+        var success = Assert.IsType<ResolutionResult.Success>(result);
+        var winner  = Assert.Single(success.WinningExamples);
+        Assert.Equal("pr-reviewer", winner.PluginName);
+        Assert.Equal("wh-by-branch", winner.Example.ExecutionName);
+    }
+
+    /// <summary>
+    /// A plugin requested with no usage examples at all still resolves successfully with an
+    /// empty <c>WinningExamples</c> list — callers must not assume it's non-empty.
+    /// </summary>
+    [Fact]
+    public void Resolve_PluginWithNoUsageExamples_ReturnsEmptyWinningExamples()
+    {
+        var rules = new[] { RuleSetWith(Execution("github", "no-examples-plugin")) };
+        var catalog = AvailablePluginsCatalog.BuildCatalog(rules)
+            .Select(p => p with { UsageExamples = [] })
+            .ToList();
+
+        var result = PluginInputResolver.Resolve(
+            "https://github.com/acme/app.git", "acme/app", catalog, callerInputs: null);
+
+        var success = Assert.IsType<ResolutionResult.Success>(result);
+        Assert.Empty(success.WinningExamples);
     }
 }

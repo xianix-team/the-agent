@@ -9,6 +9,8 @@ namespace Xianix.Rules;
 /// then inputs are resolved into a dictionary (JSON paths and optional constant literals).
 /// Atomic match operators include <c>==</c>, <c>!=</c>, <c>^=</c> / <c>!^=</c> (string prefix),
 /// <c>*=</c> / <c>!*=</c> (substring contains), and unary <c>?</c> / <c>!?</c> (exists / not-exists).
+/// The text-search operators (<c>^=</c>/<c>!^=</c> and <c>*=</c>/<c>!*=</c>) match case-insensitively;
+/// equality (<c>==</c>/<c>!=</c>) stays case-sensitive for structured identifiers.
 /// Returns null if no matching webhook, no match entry passes, or the payload is not valid JSON.
 /// </summary>
 public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
@@ -161,13 +163,10 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             // and its display name can never drift.
             var (repoUrl, repoUrlMissing) = ResolveStructuralBinding(
                 root, execution.Repository?.Url, "repository.url", treatAsMandatory: true);
-            var (gitRef, gitRefMissing) = ResolveStructuralBinding(
-                root, execution.Repository?.Ref, "repository.ref", treatAsMandatory: true);
 
             var repoName = string.IsNullOrEmpty(repoUrl) ? "" : RepositoryNaming.DeriveName(repoUrl);
 
             if (repoUrlMissing is not null) missingMandatory.Add(repoUrlMissing);
-            if (gitRefMissing is not null)  missingMandatory.Add(gitRefMissing);
 
             if (missingMandatory.Count > 0)
             {
@@ -197,8 +196,15 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
                 dict["repository-url"] = repoUrl;
             if (!string.IsNullOrEmpty(repoName))
                 dict["repository-name"] = repoName;
-            if (!string.IsNullOrEmpty(gitRef))
-                dict["git-ref"] = gitRef;
+
+            // `conversation-key` resolves to the canonical `conversation-id` input the
+            // executor uses (opaquely) for session-resume keying. Best-effort by design:
+            // an unresolvable path must not skip the block — the run just starts a fresh
+            // session — so unlike the repository bindings it is never treated as mandatory.
+            var (conversationId, _) = ResolveStructuralBinding(
+                root, execution.ConversationKey, "conversation-key", treatAsMandatory: false);
+            if (!string.IsNullOrEmpty(conversationId))
+                dict["conversation-id"] = conversationId;
 
             var prompt = InterpolatePrompt(execution.Prompt, dict);
             var hasPrompt = !string.IsNullOrWhiteSpace(prompt);
@@ -215,12 +221,11 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             var mergedEnvs = MergeWithEnvs(set.WithEnvs, execution.WithEnvs);
 
             _logger.LogInformation(
-                "Rules matched execution '{ExecutionBlock}' for webhook '{WebhookName}': {InputCount} input(s), {PluginCount} plugin(s), {WithEnvsCount} with-envs entry/entries (ruleSetCommon={CommonEnvCount}, executionOwn={OwnEnvCount}), platform='{Platform}', repo='{RepoName}', gitRef='{GitRef}', executePrompt={HasPrompt}.",
+                "Rules matched execution '{ExecutionBlock}' for webhook '{WebhookName}': {InputCount} input(s), {PluginCount} plugin(s), {WithEnvsCount} with-envs entry/entries (ruleSetCommon={CommonEnvCount}, executionOwn={OwnEnvCount}), platform='{Platform}', repo='{RepoName}', executePrompt={HasPrompt}.",
                 blockName ?? "(unnamed)", webhookName, dict.Count, execution.Plugins.Count, mergedEnvs.Count,
                 set.WithEnvs.Count, execution.WithEnvs.Count,
                 platform.Length == 0 ? "(none)" : platform,
                 string.IsNullOrEmpty(repoName) ? (string.IsNullOrEmpty(repoUrl) ? "(none)" : repoUrl) : repoName,
-                string.IsNullOrEmpty(gitRef) ? "(none)" : gitRef,
                 hasPrompt);
             matches.Add(new EvaluationResult(
                 Inputs:               dict,
@@ -231,7 +236,6 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
                 Platform:             platform,
                 RepositoryUrl:        repoUrl,
                 RepositoryName:       repoName,
-                GitRef:               gitRef,
                 Model:                execution.Model,
                 MaxTurns:             execution.MaxTurns,
                 AllowedTools:         execution.AllowedTools,
@@ -382,7 +386,7 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
                     var s = actualSw.ValueKind == JsonValueKind.String
                         ? actualSw.GetString() ?? ""
                         : actualSw.GetRawText().Trim('"');
-                    var ok = s.StartsWith(expected, StringComparison.Ordinal);
+                    var ok = s.StartsWith(expected, StringComparison.OrdinalIgnoreCase);
                     var pass = negatedSw ? !ok : ok;
                     return
                         $"'{condition}' (actual starts with prefix: {ok}; condition {(pass ? "passes" : "fails")})";
@@ -400,7 +404,7 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
                     var s = actualCt.ValueKind == JsonValueKind.String
                         ? actualCt.GetString() ?? ""
                         : actualCt.GetRawText().Trim('"');
-                    var ok = s.Contains(expected, StringComparison.Ordinal);
+                    var ok = s.Contains(expected, StringComparison.OrdinalIgnoreCase);
                     var pass = negatedCt ? !ok : ok;
                     return
                         $"'{condition}' (actual contains substring: {ok}; condition {(pass ? "passes" : "fails")})";
@@ -543,13 +547,13 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
     }
 
     /// <summary>
-    /// Resolves a structural execution-level binding (currently <c>repository.url</c> and
-    /// <c>repository.ref</c>). When the binding is in <see cref="RepoFieldBinding.Constant"/>
-    /// mode the value is taken verbatim — the webhook payload is not consulted, so rules
-    /// pinned to a fixed repository or branch work even on payloads that don't carry that
-    /// info. Otherwise the value is treated as a JSON path resolved against the payload
-    /// (the original schema). Returns the resolved string and an optional missing-mandatory
-    /// token to surface in the same error path as missing <c>use-inputs</c>.
+    /// Resolves a structural execution-level binding (currently <c>repository.url</c>).
+    /// When the binding is in <see cref="RepoFieldBinding.Constant"/> mode the value is
+    /// taken verbatim — the webhook payload is not consulted, so rules pinned to a fixed
+    /// repository work even on payloads that don't carry that info. Otherwise the value is
+    /// treated as a JSON path resolved against the payload (the original schema). Returns
+    /// the resolved string and an optional missing-mandatory token to surface in the same
+    /// error path as missing <c>use-inputs</c>.
     /// <para/>
     /// Note: <c>repository-name</c> is intentionally not routed through here — it is
     /// derived from the resolved URL by <see cref="RepositoryNaming.DeriveName"/>.
@@ -917,7 +921,10 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             return false;
 
         var s = actual.GetString();
-        return s is not null && s.StartsWith(prefix, StringComparison.Ordinal);
+        // Prefix match is a fuzzy human-text operator (mentions, message text), so it is
+        // case-insensitive by design — unlike `==`, which stays exact for structured
+        // identifiers (labels, branches, enum-like statuses).
+        return s is not null && s.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -964,7 +971,10 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             return false;
 
         var s = actual.GetString();
-        return s is not null && s.Contains(needle, StringComparison.Ordinal);
+        // Substring match is a fuzzy human-text operator (mentions, message text), so it is
+        // case-insensitive by design — unlike `==`, which stays exact for structured
+        // identifiers (labels, branches, enum-like statuses).
+        return s is not null && s.Contains(needle, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

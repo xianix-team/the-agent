@@ -28,36 +28,46 @@ public class ClaudeCodeChatWorkflow
     {
         ArgumentNullException.ThrowIfNull(req);
 
+        string? volumeName = null;
         try
         {
-            await ExecutePipelineAsync(req);
+            Workflow.Logger.LogInformation(
+                "ClaudeCodeChatWorkflow starting: tenant={TenantId}, repo={Repo}, participant={ParticipantId}.",
+                req.TenantId, req.RepositoryName, req.ParticipantId);
+
+            var pluginSummary = req.Plugins.Count == 0
+                ? ""
+                : $" with plugin(s): {string.Join(", ", req.Plugins.Select(p => $"`{p.PluginName}`"))}";
+            await NotifyAsync(req, $"Starting Claude Code on `{req.RepositoryName}`{pluginSummary}…");
+
+            volumeName = await Workflow.ExecuteActivityAsync(
+                (ContainerActivities a) => a.EnsureWorkspaceVolumeAsync(req.TenantId, req.RepositoryUrl),
+                ContainerWorkflowOptions.Standard);
+
+            await ExecutePipelineAsync(req, volumeName);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Workflow.Logger.LogError(ex,
                 "ClaudeCodeChatWorkflow failed for tenant={TenantId}, repo={Repo}.",
                 req.TenantId, req.RepositoryName);
-            await NotifyAsync(req, $"Run failed: {ex.Message}");
+            // A lazy-clone run already stamped the xianix.repository label on the volume,
+            // so a failure here would otherwise leave the repo looking "already onboarded".
+            // Remove it (idempotent — the pipeline may have done so already). Known repos
+            // keep their volume: it holds a good clone from an earlier successful run.
+            if (req.IsNewRepository && volumeName is not null)
+                await RemoveVolumeAsync(volumeName);
+            // ex is typically Temporal's ActivityFailureException wrapper whose own message
+            // is just "Activity task failed" — dig out the message the activity actually threw.
+            var reason = WorkflowErrors.UserFacingMessage(ex);
+            await NotifyAsync(req, $"Run failed: {reason}");
             throw new ApplicationFailureException(
-                $"ClaudeCodeChatWorkflow failed: {ex.Message}", ex, nonRetryable: true);
+                $"ClaudeCodeChatWorkflow failed: {reason}", ex, nonRetryable: true);
         }
     }
 
-    private static async Task ExecutePipelineAsync(ClaudeCodeChatRequest req)
+    private static async Task ExecutePipelineAsync(ClaudeCodeChatRequest req, string volumeName)
     {
-        Workflow.Logger.LogInformation(
-            "ClaudeCodeChatWorkflow starting: tenant={TenantId}, repo={Repo}, participant={ParticipantId}.",
-            req.TenantId, req.RepositoryName, req.ParticipantId);
-
-        var pluginSummary = req.Plugins.Count == 0
-            ? ""
-            : $" with plugin(s): {string.Join(", ", req.Plugins.Select(p => $"`{p.PluginName}`"))}";
-        await NotifyAsync(req, $"Starting Claude Code on `{req.RepositoryName}`{pluginSummary}…");
-
-        var volumeName = await Workflow.ExecuteActivityAsync(
-            (ContainerActivities a) => a.EnsureWorkspaceVolumeAsync(req.TenantId, req.RepositoryUrl),
-            ContainerWorkflowOptions.Standard);
-
         var input = new ContainerExecutionInput
         {
             TenantId          = req.TenantId,
@@ -79,6 +89,7 @@ public class ClaudeCodeChatWorkflow
             (ContainerActivities a) => a.StartContainerAsync(input),
             ContainerWorkflowOptions.Standard);
 
+        var succeeded = false;
         try
         {
             await NotifyAsync(req, "Container is running — this can take several minutes.");
@@ -90,6 +101,7 @@ public class ClaudeCodeChatWorkflow
                     $"chat:{req.RepositoryName}",
                     (int)ContainerWorkflowOptions.ContainerExecutionTimeout.TotalSeconds),
                 ContainerWorkflowOptions.Wait);
+            succeeded = result.Succeeded;
 
             ContainerOutputParser.Parse(result);
             await ReportChatExecutionMetricsAsync(req, result);
@@ -123,6 +135,33 @@ public class ClaudeCodeChatWorkflow
             await Workflow.ExecuteActivityAsync(
                 (ContainerActivities a) => a.CleanupContainerAsync(containerId),
                 ContainerWorkflowOptions.Cleanup);
+
+            // A failed lazy-clone run must not leave the labelled volume behind, or the
+            // repo shows up as "already onboarded" on the next chat turn. Runs after
+            // container cleanup because Docker refuses to delete a mounted volume.
+            if (!succeeded && req.IsNewRepository)
+                await RemoveVolumeAsync(volumeName);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort volume removal on the failure path; never throws so it can't mask the
+    /// original failure or suppress the user-facing notification.
+    /// </summary>
+    private static async Task RemoveVolumeAsync(string volumeName)
+    {
+        try
+        {
+            await Workflow.ExecuteActivityAsync(
+                (ContainerActivities a) => a.RemoveWorkspaceVolumeAsync(volumeName),
+                ContainerWorkflowOptions.Cleanup);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Workflow.Logger.LogWarning(ex,
+                "Could not remove workspace volume '{VolumeName}' after failed lazy-clone run; " +
+                "the repo may still appear in ListTenantRepositories until it is offboarded.",
+                volumeName);
         }
     }
 
@@ -144,9 +183,9 @@ public class ClaudeCodeChatWorkflow
     {
         try
         {
-            // Chat runs carry git-ref / platform inside the resolved inputs rather than on a
+            // Chat runs carry platform inside the resolved inputs rather than on a
             // dedicated field (see SupervisorSubagentTools.RunClaudeCodeOnRepository), so pull
-            // them from there to keep metadata symmetric with the webhook path.
+            // it from there to keep metadata symmetric with the webhook path.
             var ctx = new ExecutionMetricsContext
             {
                 Category         = ExecutionMetrics.ChatCategory,
@@ -155,7 +194,6 @@ public class ClaudeCodeChatWorkflow
                 TenantId         = req.TenantId,
                 RepositoryUrl    = req.RepositoryUrl,
                 RepositoryName   = req.RepositoryName,
-                GitRef           = InputOrEmpty(req.Inputs, "git-ref"),
                 Platform         = InputOrEmpty(req.Inputs, "platform"),
                 Prompt           = req.Prompt,
                 MaxBudgetUsd     = req.MaxBudgetUsd,

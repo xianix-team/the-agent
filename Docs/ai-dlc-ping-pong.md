@@ -311,7 +311,7 @@ A reference cron workflow lives at `Scripts/scheduler/ai-dlc-scanners.yml` (to b
 
 ## 9. Inputs to extract from each event
 
-Structural execution context — `platform`, `repository.url`, and (for refs you need to check out) `repository.ref` — is declared at the **execution level**, not under `use-inputs`. The agent auto-injects the resolved values into `XIANIX_INPUTS` under the canonical kebab-case keys `platform`, `repository-url`, and `git-ref`. The short `repository-name` (e.g. `owner/repo`) is **derived** from `repository-url` (platform-aware: handles GitHub, Azure DevOps `_git` URLs, etc.) and injected alongside them — there is no `repository.name` knob in the schema. See [`rules-json.md`](./rules-json.md#1b-platform--repository--structural-execution-context) for the full schema.
+Structural execution context — `platform` and `repository.url` — is declared at the **execution level**, not under `use-inputs`. The agent auto-injects the resolved values into `XIANIX_INPUTS` under the canonical kebab-case keys `platform` and `repository-url`. The short `repository-name` (e.g. `owner/repo`) is **derived** from `repository-url` (platform-aware: handles GitHub, Azure DevOps `_git` URLs, etc.) and injected alongside them — there is no `repository.name` knob in the schema. The executor always starts on the default-branch HEAD; plugins resolve task-specific refs from the prompt. See [`rules-json.md`](./rules-json.md#1b-platform--repository--structural-execution-context) for the full schema.
 
 For **GitHub issues**:
 

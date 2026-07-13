@@ -6,8 +6,12 @@ Reads configuration from environment variables injected by the control plane:
   TENANT_ID            - identifies the tenant
   EXECUTION_ID         - unique ID for this execution
   WORK_DIR             - absolute path to the workspace (repo worktree or empty directory)
-  CLAUDE_CODE_PLUGINS  - JSON array of {"plugin-name", "marketplace"?} descriptors
+  CLAUDE_CODE_PLUGINS  - JSON array of {"plugin-name", "marketplace"?, "slash-command"?}
+                         descriptors
   PROMPT               - fully-interpolated Claude Code prompt to execute
+                         (a short host-context preamble is prepended before Claude Code
+                         sees it when XIANIX_INPUTS.platform is set and/or the plugins
+                         declare slash commands)
   ANTHROPIC_API_KEY    - Anthropic API key (read automatically by the SDK)
 
 Writes a structured JSON envelope to stdout (see `build_output`).
@@ -29,6 +33,8 @@ from claude_agent_sdk import (
     SystemMessage,
     ResultMessage,
 )
+
+from host_context import prepend_host_context
 
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -98,16 +104,23 @@ def parse_float_env(name: str) -> float | None:
 # ── Session reuse (opt-in) ─────────────────────────────────────────────────────
 # Back-to-back runs against the same conversation (e.g. PR re-reviews on `synchronize`)
 # can resume the prior Claude Code session instead of rebuilding context from scratch.
-# The session id is persisted on the tenant volume keyed by repo + PR/issue/work-item, and
-# Claude's session history is persisted via CLAUDE_CONFIG_DIR (set in run_prompt.sh). Off by
-# default (XIANIX_RESUME_SESSIONS) and always best-effort — a failed resume falls back to a
-# fresh run so re-reviews can never be broken by a stale/missing session.
+# The session id is persisted on the tenant volume keyed by the generic `conversation-id`
+# input, and Claude's session history is persisted via CLAUDE_CONFIG_DIR (set in
+# run_prompt.sh). Off by default (XIANIX_RESUME_SESSIONS) and always best-effort — a
+# failed resume falls back to a fresh run so re-reviews can never be broken by a
+# stale/missing session.
 
 _SESSION_DIR = "/workspace/repo/xianix-sessions"
 
 
 def session_key(inputs_raw: str | None) -> str | None:
-    """Stable per-conversation key (repo + PR/issue/work-item) for session resume, or None."""
+    """Filename-safe session-resume key from the generic `conversation-id` input, or None.
+
+    `conversation-id` is an opaque value authored in rules.json `use-inputs` (e.g. mapped
+    from the payload's PR / work-item id); this executor only sanitises it for use as a
+    filename and attaches no meaning to its contents — task-specific input names are
+    never read here.
+    """
     if not inputs_raw:
         return None
     try:
@@ -117,12 +130,10 @@ def session_key(inputs_raw: str | None) -> str | None:
     if not isinstance(data, dict):
         return None
 
-    repo = data.get("repository-name") or data.get("repository-url") or ""
-    item = (data.get("pr-number") or data.get("issue-number")
-            or data.get("work-item-id") or data.get("workitem-id") or "")
-    if not repo or not item:
+    conversation_id = data.get("conversation-id") or ""
+    if not conversation_id:
         return None
-    return re.sub(r"[^A-Za-z0-9._-]", "_", f"{repo}#{item}")
+    return re.sub(r"[^A-Za-z0-9._-]", "_", str(conversation_id))
 
 
 def read_prior_session(key: str) -> str | None:
@@ -471,6 +482,12 @@ async def main() -> None:
     prompt       = require_env("PROMPT")
     work_dir     = os.environ.get("WORK_DIR", "/workspace")
     plugins      = parse_plugins(os.environ.get("CLAUDE_CODE_PLUGINS", "[]"))
+
+    # When rules.json declares platform, surface it in the prompt so free-form plugin
+    # runs (comment instructions, etc.) pick the right host APIs. Env alone is easy to miss.
+    # Passing the plugins along also lists their slash commands in the preamble so a
+    # free-form prompt that never names the command doesn't leave Claude Code guessing.
+    prompt = prepend_host_context(prompt, os.environ.get("XIANIX_INPUTS"), plugins)
 
     # ── Cost-control levers (all optional; injected by the control plane) ─────
     # Primary model: XIANIX_MODEL (first-class rules.json `model`) wins, then a raw

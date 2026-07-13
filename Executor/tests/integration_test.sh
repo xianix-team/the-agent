@@ -16,12 +16,16 @@
 #
 # TEST TIERS
 # ----------
+#   Tier 0 (always runs, free, no Docker):
+#     0. host_context.py unit tests (platform preamble for PROMPT).
+#
 #   Tier 1 (always runs, free):
 #     1. "prepare" mode clones the repo onto the volume.
 #     2. A second "prepare" run reuses the existing clone (fetch, not re-clone).
 #     3. A new commit pushed to the fixture is picked up on the next run.
 #     4. A bad repository URL produces the structured prepare error envelope.
-#     5. A deleted head branch falls back to the platform PR ref (refs/pull/N/head).
+#     5. Worktree is created from the default branch (HEAD); plugins resolve
+#        any task-specific refs from the prompt themselves.
 #
 #   Tier 2 (needs ANTHROPIC_API_KEY, costs ~$0.01, skipped when the key is absent):
 #     6. A full prepare-and-execute run where Claude Code must read a planted
@@ -336,57 +340,46 @@ test_bad_url_error_envelope() {
     fi
 }
 
-test_deleted_branch_falls_back_to_pr_ref() {
-    banner "Test 5: deleted head branch falls back to the platform PR ref"
+test_worktree_uses_default_branch() {
+    banner "Test 5: worktree is created from the default branch (HEAD)"
 
-    # Simulate GitHub's post-merge state: the PR's head branch has been deleted
-    # from the remote, but the synthetic refs/pull/<n>/head still points at the
-    # head commit. (Production failure mode: a review triggered on an
-    # already-merged PR died with "couldn't find remote ref <branch>".)
-    fixture_git checkout -q -b pr-branch-deleted
-    echo "A change from a PR whose branch gets deleted after merge" > "${FIXTURE_SRC}/PR.md"
-    fixture_git add -A
-    fixture_git commit -q -m "PR head commit"
-    local pr_sha
-    pr_sha="$(fixture_git rev-parse HEAD)"
-    fixture_git push -q origin pr-branch-deleted
-    fixture_git checkout -q main
-    git -C "${FIXTURE_BARE}" update-ref refs/pull/7/head "${pr_sha}"
-    git -C "${FIXTURE_BARE}" branch -D pr-branch-deleted >/dev/null
+    # Every run starts on the default branch; plugins resolve/fetch any
+    # task-specific refs from the prompt themselves. The executor never sees
+    # the PR number as a checkout target.
+    local main_sha
+    main_sha="$(fixture_git rev-parse main)"
 
     local inputs
     inputs="$(jq -cn --arg url "${REPO_URL_IN_CONTAINER}" \
-        '{"repository-url": $url, "platform": "local",
-          "git-ref": "pr-branch-deleted",
-          "pr-link": "https://api.github.com/repos/acme/fixture/pulls/7"}')"
+        '{"repository-url": $url, "platform": "local", "pr-number": "9"}')"
 
-    # Run only the prepare script: prepare-and-execute mode is what enables
-    # worktree creation, but going through the full entrypoint would chain into
-    # run_prompt.sh, which needs an API key.
+    # Prepare script only — avoids chaining into run_prompt.sh (needs API key).
     run_executor "${VOLUME_MAIN}" \
         --entrypoint /workspace/prepare_repo.sh \
         -e "TENANT-ID=integration-test" \
-        -e "EXECUTION-ID=it-pr-fallback" \
+        -e "EXECUTION-ID=it-default-head" \
         -e "XIANIX-MODE=prepare-and-execute" \
         -e "XIANIX-INPUTS=${inputs}"
 
     if [ "${LAST_EXIT}" -eq 0 ]; then
-        t_pass "container exited 0 despite the deleted branch"
+        t_pass "container exited 0"
     else
         t_fail "container exited ${LAST_EXIT}, expected 0"
         return
     fi
 
-    if grep -q "falling back to 'refs/pull/7/head'" "${STDERR_FILE}"; then
-        t_pass "logged the fallback to refs/pull/7/head"
+    if grep -q "Creating worktree for HEAD" "${STDERR_FILE}"; then
+        t_pass "worktree was created from HEAD (default branch)"
     else
-        t_fail "expected a fallback log line mentioning refs/pull/7/head"
+        t_fail "expected a 'Creating worktree for HEAD' log line"
     fi
 
-    if inspect_volume "${VOLUME_MAIN}" "git -C /workspace/repo cat-file -e ${pr_sha}" >/dev/null 2>&1; then
-        t_pass "PR head commit (${pr_sha:0:12}) was fetched into the bare clone"
+    local volume_sha
+    volume_sha="$(inspect_volume "${VOLUME_MAIN}" 'git -C /workspace/repo rev-parse HEAD' 2>/dev/null || echo '?')"
+    if [ "${volume_sha}" = "${main_sha}" ]; then
+        t_pass "bare-clone HEAD matches the fixture's default branch (${main_sha:0:12})"
     else
-        t_fail "PR head commit ${pr_sha} is missing from the bare clone"
+        t_fail "bare-clone HEAD is '${volume_sha}', expected '${main_sha}'"
     fi
 }
 
@@ -466,9 +459,16 @@ test_claude_reads_planted_secret() {
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-for tool in docker git jq; do
+for tool in docker git jq python3; do
     command -v "${tool}" >/dev/null || { echo "FATAL: '${tool}' is required." >&2; exit 1; }
 done
+
+banner "Unit: host_context preamble"
+if python3 "${SCRIPT_DIR}/test_host_context.py"; then
+    t_pass "host_context.py unit tests"
+else
+    t_fail "host_context.py unit tests"
+fi
 
 if [ -z "${SKIP_BUILD:-}" ]; then
     banner "Building executor image (${IMAGE})"
@@ -484,7 +484,7 @@ test_prepare_clones_repo
 test_prepare_reuses_clone
 test_new_commit_is_picked_up
 test_bad_url_error_envelope
-test_deleted_branch_falls_back_to_pr_ref
+test_worktree_uses_default_branch
 test_claude_reads_planted_secret
 
 banner "Results"

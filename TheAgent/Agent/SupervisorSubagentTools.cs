@@ -63,15 +63,25 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         "List the marketplace plugins that are pre-vetted for this agent (sourced from the " +
         "`Rules` knowledge document). Returns a JSON array where each entry has `pluginName` " +
         "(format: `name@marketplace` — pass this verbatim to RunClaudeCodeOnRepository), " +
-        "`marketplace`, `requiredEnvs` (env var names + whether they are mandatory), and " +
-        "`usageExamples` (the webhook execution names plus their `executePrompt` templates " +
-        "and `inputs`). " +
-        "Each input has a `source`: `auto` means the chat tool fills it from the chosen " +
-        "repository (do NOT pass it); `constant` means it is hard-coded in `rules.json` and " +
-        "is injected automatically; `caller` means YOU must supply it via the `inputs` " +
-        "parameter on RunClaudeCodeOnRepository whenever `mandatory` is true. The input " +
-        "names also appear as `{{name}}` placeholders inside `executePrompt` — substitute " +
-        "them with the same values you pass via `inputs`. " +
+        "`marketplace`, `slashCommand` (the Claude Code slash command that invokes the " +
+        "plugin, e.g. `/pr-review` — use this verbatim; NEVER invent a different command " +
+        "like `/code-review`), `requiredEnvs` (env var names + whether they are mandatory), " +
+        "and `usageExamples`. " +
+        "A plugin exposed for chat (declared under a root-level `chat` rule set) has an " +
+        "EMPTY `usageExamples` array: there is no prompt template or fixed inputs — YOU " +
+        "compose the `prompt` as `{slashCommand} {target}` where `target` is whatever the " +
+        "user gave you (PR number, branch name, …). Example: catalog says " +
+        "`slashCommand: \"/pr-review\"` and user asked to review PR 42 → prompt " +
+        "`/pr-review 42`. Still pass its `pluginName`. Do NOT invent slash commands from " +
+        "the plugin name or description. " +
+        "A plugin backed only by webhook rules instead lists one or more `usageExamples`, " +
+        "each with an `executePrompt` template and an `inputs` array. Each input has a " +
+        "`source`: `auto` means the chat tool fills it from the chosen repository (do NOT " +
+        "pass it); `constant` means it is hard-coded in `rules.json` and is injected " +
+        "automatically; `caller` means YOU must supply it via the `inputs` parameter on " +
+        "RunClaudeCodeOnRepository whenever `mandatory` is true. The input names also appear " +
+        "as `{{name}}` placeholders inside `executePrompt` — substitute them with the same " +
+        "values you pass via `inputs`. " +
         "Call this whenever the user's request looks like it could be served by an existing " +
         "plugin (e.g. \"review this PR\", \"analyse this issue\") so you can decide whether " +
         "to install one and what to ask the user for.")]
@@ -94,25 +104,33 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
             {
                 pluginName = p.PluginName,
                 marketplace = p.Marketplace,
+                slashCommand = string.IsNullOrWhiteSpace(p.SlashCommand) ? null : p.SlashCommand,
                 requiredEnvs = p.RequiredEnvs.Select(e => new { name = e.Name, mandatory = e.Mandatory }),
-                usageExamples = p.UsageExamples.Select(u => new
-                {
-                    executionName = u.ExecutionName,
-                    executePrompt = u.ExecutePrompt,
-                    inputs = u.Inputs.Select(i => new
+                // Chat-exposed plugins carry a single tuning-only usage example with an empty
+                // prompt (the supervisor authors the prompt itself from slashCommand + target).
+                // Hide those from the model — an empty template is noise — so a chat plugin
+                // surfaces as `usageExamples: []`, its documented "compose from slashCommand"
+                // signal. Webhook-fallback plugins keep their real templates + inputs.
+                usageExamples = p.UsageExamples
+                    .Where(u => !string.IsNullOrWhiteSpace(u.ExecutePrompt))
+                    .Select(u => new
                     {
-                        name = i.Name,
-                        mandatory = i.Mandatory,
-                        source = i.Source switch
+                        executionName = u.ExecutionName,
+                        executePrompt = u.ExecutePrompt,
+                        inputs = u.Inputs.Select(i => new
                         {
-                            InputSourceKind.AutoFromRepository => "auto",
-                            InputSourceKind.Constant           => "constant",
-                            _                                  => "caller",
-                        },
-                        constantValue = i.ConstantValue,
-                        pathHint = i.PathHint,
+                            name = i.Name,
+                            mandatory = i.Mandatory,
+                            source = i.Source switch
+                            {
+                                InputSourceKind.AutoFromRepository => "auto",
+                                InputSourceKind.Constant           => "constant",
+                                _                                  => "caller",
+                            },
+                            constantValue = i.ConstantValue,
+                            pathHint = i.PathHint,
+                        }),
                     }),
-                }),
             }),
         });
     }
@@ -208,25 +226,32 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         "running anything against it, or when the URL host is non-standard (self-hosted " +
         "GHES / on-prem ADO) and the user must pick the platform explicitly. " +
         "If the user's request matches a marketplace plugin (see ListAvailablePlugins), pass " +
-        "its `pluginName` in `pluginNames` AND supply every `caller`-source mandatory input " +
-        "from one of that plugin's `usageExamples` via `inputs` — the run is rejected if any " +
-        "mandatory input is missing. Plugin names and inputs are validated against the catalog. " +
-        "Inputs use the kebab-case names from rules.json (e.g. `pr-number`, `pr-title`). " +
-        "Pass `git-ref` (branch / commit / tag) when the chosen plugin's usage example lists " +
-        "it as a `caller` input — it controls which ref the executor checks out into the " +
-        "worktree. Do NOT pass `repository-url`, `repository-name`, or `platform` — they are " +
-        "auto-filled from the chosen repository / rule. When using a plugin, craft `prompt` from the " +
-        "plugin's `usageExamples.executePrompt` template (e.g. `/code-review`, " +
-        "`/requirement-analysis 42`) substituting the same `{{placeholders}}` you supply via " +
-        "`inputs`. " +
+        "its `pluginName` in `pluginNames`. How to build `prompt` and `inputs` depends on the " +
+        "plugin's `usageExamples`: " +
+        "For a CHAT plugin (EMPTY `usageExamples`): set `prompt` to " +
+        "`{slashCommand} {target}` using the catalog's `slashCommand` field verbatim " +
+        "(e.g. `/pr-review 42` or `/pr-review feature/login`) and OMIT `inputs`. " +
+        "NEVER invent a slash command — if `slashCommand` is missing, ask / fail rather " +
+        "than guessing names like `/code-review`. " +
+        "For a webhook-backed plugin (non-empty `usageExamples`): craft `prompt` from the " +
+        "chosen example's `executePrompt` template (e.g. `/requirement-analysis 42`) AND " +
+        "supply every `caller`-source mandatory input from that example via `inputs` — the " +
+        "run is rejected if any mandatory input is missing. Inputs use the kebab-case names " +
+        "from rules.json (e.g. `pr-number`, `pr-title`) and match the `{{placeholders}}` you " +
+        "substituted in the prompt. Plugin names and inputs are validated against the catalog. " +
+        "The run always starts on the repository's default branch; plugins resolve any " +
+        "task-specific refs from the prompt (e.g. a PR's source/target branches from the " +
+        "PR number). " +
+        "Do NOT pass `repository-url`, `repository-name`, or `platform` — they are " +
+        "auto-filled from the chosen repository / rule. " +
         "Returns immediately after starting the run; progress and the final result are " +
         "streamed back to the user as separate chat messages by the workflow itself, " +
         "so do NOT echo or summarise the result yourself.")]
     public async Task<string> RunClaudeCodeOnRepository(
         [Description("The repository URL to operate on. May be one already in ListTenantRepositories OR a brand-new URL on github.com / dev.azure.com / *.visualstudio.com (it will be cloned in-flight). For self-hosted hosts, call OnboardRepository first with an explicit platform.")] string repositoryUrl,
-        [Description("The full Claude Code prompt to execute. For plugin runs, use the plugin's executePrompt template with placeholders substituted.")] string prompt,
+        [Description("The full Claude Code prompt to execute. For a chat plugin (empty usageExamples) this MUST be `{slashCommand} {target}` from ListAvailablePlugins — never invent a command. For a webhook-backed plugin use the chosen example's executePrompt template with placeholders substituted.")] string prompt,
         [Description("Optional plugin specs (e.g. [\"pr-reviewer@xianix-plugins-official\"]). Each must come from ListAvailablePlugins. Omit or pass an empty array for a no-plugin run.")] string[]? pluginNames = null,
-        [Description("Mandatory inputs for the chosen plugin's usage example, keyed by the rules.json kebab-case input name (e.g. {\"pr-number\":\"42\",\"pr-title\":\"Fix bug\",\"git-ref\":\"feat/x\"}). Include `git-ref` whenever the plugin lists it as a caller input — it determines the worktree state. Omit when no plugin is used. Never include repository-url, repository-name, or platform — those are auto-filled.")] Dictionary<string, string>? inputs = null)
+        [Description("Mandatory inputs for a webhook-backed plugin's chosen usage example, keyed by the rules.json kebab-case input name (e.g. {\"pr-number\":\"42\",\"pr-title\":\"Fix bug\"}). Omit for chat plugins (empty usageExamples — the target goes in the prompt instead) and for no-plugin runs. Never include repository-url, repository-name, or platform — those are auto-filled.")] Dictionary<string, string>? inputs = null)
     {
         if (string.IsNullOrWhiteSpace(repositoryUrl))
             return "ERROR: repositoryUrl is required. Call ListTenantRepositories first.";
@@ -276,6 +301,8 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         if (resolution is ResolutionResult.Missing missing)
             return BuildMissingInputsError(missing);
 
+        var success = (ResolutionResult.Success)resolution;
+
         // Force `platform` to the URL-inferred value so the executor's _common.sh picks the
         // correct credential helper. PluginInputResolver only injects `platform` as a side
         // effect of a winning plugin usage example carrying it as a Constant — so a no-plugin
@@ -286,11 +313,34 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         // constant: a plugin tagged `platform=github` against an ADO URL would auth-fail in
         // exactly the same way.
         var effectiveInputs = new Dictionary<string, string>(
-            ((ResolutionResult.Success)resolution).Inputs,
+            success.Inputs,
             StringComparer.OrdinalIgnoreCase)
         {
             [AvailablePluginsCatalog.PlatformInput] = platform,
         };
+
+        // Apply the rules.json cost/control knobs (model, budget, turn cap, tool lists,
+        // session resume) to the chat dispatch. For a chat-rule-set plugin these come from
+        // its synthesised tuning-only usage example (root-level knobs on the chat rule
+        // set); for a webhook-fallback plugin, from the winning webhook usage example.
+        // Without this, a chat plugin run silently loses its rules.json tuning and falls
+        // back to the executor's untuned defaults (e.g. Sonnet at the default $10 budget
+        // cap instead of the $3-5 the rule declares). Taken from the first winning usage
+        // example — the common case is one plugin per chat dispatch, so there is exactly
+        // one; a multi-plugin dispatch logs which example's settings won so the choice is
+        // traceable.
+        var winningExample = success.WinningExamples.Count > 0
+            ? success.WinningExamples[0].Example
+            : null;
+        if (success.WinningExamples.Count > 1)
+        {
+            _logger.LogInformation(
+                "Chat run resolved {PluginCount} plugin(s) ({Plugins}); using cost/control settings from '{PrimaryPlugin}' usage example '{PrimaryExample}' for all of them.",
+                success.WinningExamples.Count,
+                string.Join(", ", success.WinningExamples.Select(w => w.PluginName)),
+                success.WinningExamples[0].PluginName,
+                winningExample!.ExecutionName);
+        }
 
         // Chat-driven runs have no matched WebhookExecution to source `with-envs` from, so
         // we treat rules.json as the manifest of "every credential this agent ever needs"
@@ -300,9 +350,9 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         // needed secret) would only get the platform PAT and would fail the moment Claude
         // Code reached for any other tenant credential.
         //
-        // `RulesEnvCatalog.LoadEnvsForPlatformAsync` returns both the rule-set-wide
-        // common envs (`WebhookRuleSet.WithEnvs` — applied to every execution by design,
-        // so always included regardless of platform) AND the per-execution envs that
+        // `RulesEnvCatalog.LoadEnvsForPlatformAsync` returns the rule-set-wide common
+        // envs from webhook AND chat rule sets (applied to every execution by design,
+        // so always included regardless of platform) plus the per-execution envs that
         // match the requested platform (or are platform-agnostic). That keeps the chat
         // path symmetric with the webhook merge in WebhookRulesEvaluator: anything
         // declared as a rule-set common shows up here too.
@@ -320,22 +370,32 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
 
         var req = new ClaudeCodeChatRequest
         {
-            TenantId       = tenantId,
-            ParticipantId  = participantId,
-            RepositoryUrl  = repositoryUrl,
-            RepositoryName = repoName,
-            Prompt         = prompt,
-            Plugins        = resolvedPlugins.Select(p => p.Source).ToList(),
-            WithEnvs       = withEnvs,
-            Inputs         = effectiveInputs,
-            Scope          = scope,
+            TenantId        = tenantId,
+            ParticipantId   = participantId,
+            RepositoryUrl   = repositoryUrl,
+            RepositoryName  = repoName,
+            Prompt          = prompt,
+            Plugins         = resolvedPlugins.Select(p => p.Source).ToList(),
+            WithEnvs        = withEnvs,
+            Inputs          = effectiveInputs,
+            Scope           = scope,
+            Model           = winningExample?.Model ?? "",
+            MaxTurns        = winningExample?.MaxTurns,
+            AllowedTools    = winningExample?.AllowedTools ?? [],
+            DisallowedTools = winningExample?.DisallowedTools ?? [],
+            MaxBudgetUsd    = winningExample?.MaxBudgetUsd,
+            ResumeSessions  = winningExample?.ResumeSessions ?? false,
+            IsNewRepository = !isKnownRepo,
         };
 
         _logger.LogInformation(
-            "Dispatching Claude Code run: tenant={TenantId} participant={ParticipantId} repo={RepoName} url={RepositoryUrl} platform={Platform} known={KnownRepo} plugins={Plugins} inputs={Inputs} promptLength={PromptLength}\n--- prompt ---\n{Prompt}\n--- end prompt ---",
+            "Dispatching Claude Code run: tenant={TenantId} participant={ParticipantId} repo={RepoName} url={RepositoryUrl} platform={Platform} known={KnownRepo} plugins={Plugins} inputs={Inputs} model={Model} maxBudgetUsd={MaxBudgetUsd} maxTurns={MaxTurns} promptLength={PromptLength}\n--- prompt ---\n{Prompt}\n--- end prompt ---",
             tenantId, participantId, repoName, repositoryUrl, platform, isKnownRepo,
             resolvedPlugins.Count == 0 ? "(none)" : string.Join(",", resolvedPlugins.Select(p => p.PluginName)),
             string.Join(",", effectiveInputs.Keys),
+            req.Model.Length == 0 ? "(default)" : req.Model,
+            req.MaxBudgetUsd?.ToString("0.##") ?? "(none)",
+            req.MaxTurns?.ToString() ?? "(none)",
             prompt.Length, prompt);
 
         // SubWorkflowService.StartAsync routes via Temporal client when called outside a

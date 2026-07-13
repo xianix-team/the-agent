@@ -85,4 +85,13 @@ public sealed record ClaudeCodeChatRequest
 
     /// <summary>When true, resume the prior session for this conversation (best-effort). Defaults to false.</summary>
     public bool ResumeSessions { get; init; }
+
+    /// <summary>
+    /// True when the URL was not in <c>ListTenantRepositories</c> at dispatch time, i.e. this
+    /// run lazy-clones the repository. On failure the workflow then deletes the freshly
+    /// labelled workspace volume so a repo whose first run failed doesn't show up as
+    /// "already onboarded". Never set for known repos — their volume holds a good clone
+    /// that must survive a failed run.
+    /// </summary>
+    public bool IsNewRepository { get; init; }
 }

@@ -88,50 +88,76 @@ _plugin_entry='select(
 if [ -n "${CLAUDE_CODE_PLUGINS:-}" ] && [ "${CLAUDE_CODE_PLUGINS}" != "[]" ]; then
     log "--- Installing Claude Code plugins ---"
 
+    # ── Force a fresh clone of every marketplace this run needs ──────────────
+    #
+    # Marketplace clones live on the persistent volume, but neither
+    # `marketplace add` nor `marketplace update` reliably refreshes an already
+    # registered clone: `add` is a no-op ("already on disk") and `update` cannot
+    # cleanly recover a clone whose branch was force-pushed. A force-pushed (or
+    # otherwise diverged) clone ends up with its top-level marketplace.json
+    # updated while an individual plugin's own plugin.json — the file that
+    # `plugin install` actually reads the version from — stays stale, so the run
+    # silently installs an old plugin version. The only reliable recovery is to
+    # remove the registration and re-add it, which re-clones from source. So drop
+    # every non-official registration first, then add the ones we need fresh.
+    # `marketplace remove` also uninstalls that marketplace's plugins, giving the
+    # install loop below a clean slate.
+    { claude plugin marketplace list --json 2>/dev/null \
+        | jq -r '.[] | select(.name != "claude-plugins-official") | .name' 2>/dev/null \
+        | while IFS= read -r _name; do
+            [ -z "${_name}" ] && continue
+            log "  Removing stale marketplace clone '${_name}'"
+            claude plugin marketplace remove "${_name}" >&2 2>/dev/null || true
+        done ; } || true
+
     echo "${CLAUDE_CODE_PLUGINS}" | jq -r ".[] | ${_plugin_entry} | .marketplace // empty" | sort -u | while IFS= read -r mkt; do
         [ -z "${mkt}" ] && continue
         [ "${mkt}" = "anthropics/claude-plugins-official" ] && continue
-        if claude plugin marketplace list 2>/dev/null | grep -qF "${mkt}"; then
-            log "  Marketplace '${mkt}' already registered — skipping"
-        else
-            log "  Registering marketplace '${mkt}'"
-            claude plugin marketplace add "${mkt}" >&2 || \
-                log "  WARNING: failed to register marketplace '${mkt}' — continuing"
-        fi
+        log "  Registering marketplace '${mkt}' (fresh clone)"
+        claude plugin marketplace add "${mkt}" >&2 || \
+            log "  WARNING: failed to register marketplace '${mkt}' — continuing"
     done
 
-    # Registered marketplaces are cached on the persistent volume and are not
-    # refreshed by `marketplace add` when already present, so their clones can
-    # pin plugins to a stale version. Refresh all marketplaces from source so
-    # `plugin install`/`plugin update` below resolve the latest versions.
-    log "  Updating registered marketplaces to latest"
-    claude plugin marketplace update >&2 || \
-        log "  WARNING: marketplace update failed — plugin versions may be stale"
+    # Report the version+path currently installed for a plugin id (tab-separated),
+    # read straight from `claude plugin list` so it reflects the on-disk cache.
+    _installed_info() {
+        claude plugin list --json 2>/dev/null \
+            | jq -r --arg id "$1" '
+                first(.[] | select(.id == $id) | "\(.version // "unknown")\t\(.installPath // "")")
+              ' 2>/dev/null
+    }
+
+    # Per-plugin cache lives under the (persistent) config dir. Wiping a plugin's
+    # cache dir before install forces `plugin install` to re-copy from the fresh
+    # marketplace clone — covering the case where a plugin's contents changed but
+    # its version string did not (which would otherwise reuse the stale cache).
+    _cache_base="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/plugins/cache"
 
     echo "${CLAUDE_CODE_PLUGINS}" | jq -c ".[] | ${_plugin_entry}" | while IFS= read -r plugin; do
-        name=$(echo "${plugin}" | jq -r '.["plugin-name"]' | cut -d@ -f1)
         url=$(echo "${plugin}"  | jq -r '.["plugin-name"]')
+        name="${url%@*}"          # plugin short name (before @)
+        mkt_name="${url##*@}"     # marketplace name (after @)
+        [ "${mkt_name}" = "${url}" ] && mkt_name=""   # no @ → marketplace unknown
 
         log "  Installing plugin '${name}' (${url})"
-        if claude plugin install "${url}" --scope project >&2; then
-            # A prior run may have cached an older version; `plugin install` is a
-            # no-op when already installed, so bump to the latest now available in
-            # the refreshed marketplace. Best-effort — a failure just leaves the
-            # currently installed version in place.
-            claude plugin update "${url}" --scope project >&2 || true
-            installed_info=$(claude plugin list --json 2>/dev/null \
-                | jq -r --arg id "${url}" '
-                    first(.[] | select(.id == $id) | "\(.version // "unknown")\t\(.installPath // "")")
-                  ' 2>/dev/null) || true
-            if [ -n "${installed_info}" ]; then
-                installed_version="${installed_info%%$'\t'*}"
-                installed_path="${installed_info#*$'\t'}"
-                log "  Installed '${name}' version ${installed_version}${installed_path:+ (path: ${installed_path})}"
-            else
-                log "  Installed '${name}' (version unavailable from 'claude plugin list')"
-            fi
-        else
+
+        # Clear any prior install record + cached copy so install always resolves
+        # and copies the version from the freshly cloned marketplace.
+        claude plugin uninstall "${url}" --scope project >&2 2>/dev/null || true
+        [ -n "${mkt_name}" ] && rm -rf "${_cache_base}/${mkt_name}/${name}" 2>/dev/null || true
+
+        if ! claude plugin install "${url}" --scope project >&2; then
             log "  WARNING: failed to install plugin '${name}' — continuing"
+            continue
+        fi
+
+        installed_info="$(_installed_info "${url}")" || true
+        if [ -n "${installed_info}" ]; then
+            installed_version="${installed_info%%$'\t'*}"
+            installed_path="${installed_info#*$'\t'}"
+            log "  Installed '${name}' version ${installed_version}${installed_path:+ (path: ${installed_path})}"
+        else
+            log "  Installed '${name}' (version unavailable from 'claude plugin list')"
         fi
     done
     log "--- Plugin installation complete ---"
@@ -165,7 +191,7 @@ fi
 log "--- Executing prompt ---"
 log "Working directory:   ${WORK_DIR}"
 if [ -n "${PROMPT:-}" ]; then
-    log "Prompt (${#PROMPT} chars) on ${REPOSITORY_URL:-<no repo>}${GIT_REF:+@${GIT_REF}}:"
+    log "Prompt (${#PROMPT} chars) on ${REPOSITORY_URL:-<no repo>}:"
     log "┌──────────────────────── PROMPT ────────────────────────"
     while IFS= read -r _line; do
         log "│ ${_line}"

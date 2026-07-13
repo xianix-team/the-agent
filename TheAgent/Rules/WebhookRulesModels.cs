@@ -49,6 +49,77 @@ public sealed class WebhookRuleSet
     public List<WebhookExecution> Executions { get; init; } = [];
 }
 
+/// <summary>
+/// A chat-triggered rule set — the root-level sibling of <see cref="WebhookRuleSet"/> (keyed
+/// on <c>"webhook"</c>) and the schedule rule set (keyed on <c>"schedule"</c>). Instead of
+/// matching an inbound event, a chat rule set lists the marketplace plugins the chat tool
+/// (<c>SupervisorSubagentTools.RunClaudeCodeOnRepository</c>) may offer the user, via
+/// <see cref="AvailablePluginsCatalog"/>, together with the cost/control tuning to apply to
+/// those chat dispatches. Discriminated by a non-empty <see cref="ChatName"/> so the same
+/// top-level <c>rules.json</c> array can hold webhook, schedule, and chat rule sets side by
+/// side — <see cref="RulesKnowledge.LoadAsync"/> keeps only the ones with a <c>"webhook"</c>
+/// name, so chat rule sets never leak into the webhook evaluator.
+///
+/// Unlike a webhook rule set, a chat rule set has <em>no</em> <c>executions</c> array: a chat
+/// run's prompt is authored by the supervisor as <c>{slash-command} {user-target}</c> from
+/// the <see cref="PluginEntry.SlashCommand"/> on each listed plugin (there is nothing to
+/// interpolate from a payload), so a per-execution <c>execute-prompt</c> / <c>use-inputs</c>
+/// shape would be redundant. The tuning knobs and plugin list therefore live at the rule-set
+/// root and apply uniformly to every chat dispatch that uses one of <see cref="Plugins"/>.
+/// Author separate chat rule sets when different plugins need different tuning.
+/// </summary>
+public sealed class ChatRuleSet
+{
+    /// <summary>
+    /// Discriminator + label for this chat rule set (e.g. <c>"chat"</c>). Any non-empty value
+    /// marks the object as a chat rule set; the value itself is only used for logs/diagnostics
+    /// (there is no external event name to match, unlike <see cref="WebhookRuleSet.WebhookName"/>).
+    /// </summary>
+    [JsonPropertyName("chat")]
+    public string ChatName { get; init; } = "";
+
+    /// <summary>
+    /// Rule-set-wide common environment variables applied to every chat dispatch, mirroring
+    /// <see cref="WebhookRuleSet.WithEnvs"/>. Surfaced to chat runs via
+    /// <see cref="RulesEnvCatalog"/> (platform-agnostic, like the webhook rule-set commons).
+    /// </summary>
+    [JsonPropertyName("with-envs")]
+    public List<EnvEntry> WithEnvs { get; init; } = [];
+
+    /// <summary>
+    /// The marketplace plugins this chat rule set makes available to the chat tool. Each is
+    /// surfaced by <see cref="AvailablePluginsCatalog"/> so the supervisor can offer it; the
+    /// tuning below is applied whenever the supervisor picks one of these for a chat run.
+    /// </summary>
+    [JsonPropertyName("use-plugins")]
+    public List<PluginEntry> Plugins { get; init; } = [];
+
+    /// <summary>Model override for chat dispatches using this rule set's plugins (mirrors
+    /// <see cref="WebhookExecution.Model"/>). Empty means the executor's default.</summary>
+    [JsonPropertyName("model")]
+    public string Model { get; init; } = "";
+
+    /// <summary>Turn cap for chat dispatches (mirrors <see cref="WebhookExecution.MaxTurns"/>).</summary>
+    [JsonPropertyName("max-turns")]
+    public int? MaxTurns { get; init; }
+
+    /// <summary>Allow-list of tools for chat dispatches (mirrors <see cref="WebhookExecution.AllowedTools"/>).</summary>
+    [JsonPropertyName("allowed-tools")]
+    public List<string> AllowedTools { get; init; } = [];
+
+    /// <summary>Deny-list of tools for chat dispatches (mirrors <see cref="WebhookExecution.DisallowedTools"/>).</summary>
+    [JsonPropertyName("disallowed-tools")]
+    public List<string> DisallowedTools { get; init; } = [];
+
+    /// <summary>Per-run budget cap in USD for chat dispatches (mirrors <see cref="WebhookExecution.MaxBudgetUsd"/>).</summary>
+    [JsonPropertyName("max-budget-usd")]
+    public double? MaxBudgetUsd { get; init; }
+
+    /// <summary>Whether chat dispatches resume prior sessions (mirrors <see cref="WebhookExecution.ResumeSessions"/>).</summary>
+    [JsonPropertyName("resume-sessions")]
+    public bool ResumeSessions { get; init; }
+}
+
 public sealed class WebhookExecution
 {
     /// <summary>Optional label for this execution block (used in skip reasons and logs).</summary>
@@ -68,16 +139,16 @@ public sealed class WebhookExecution
 
     /// <summary>
     /// Structural binding for the repository this execution operates on. When present, every
-    /// declared sub-field (<see cref="RepositoryBindingTemplate.Url"/>,
-    /// <see cref="RepositoryBindingTemplate.Ref"/>) is treated as mandatory — if any
-    /// declared JSON path doesn't resolve, the execution block is skipped before any
-    /// container starts. Resolved values are auto-injected into <c>XIANIX_INPUTS</c> as
-    /// <c>repository-url</c> / <c>git-ref</c> so plugin prompt templates and the executor
-    /// entrypoint can read them off the same canonical kebab-case keys. The short
-    /// <c>repository-name</c> identifier is derived from <c>repository.url</c> via
+    /// declared sub-field (<see cref="RepositoryBindingTemplate.Url"/>) is treated as
+    /// mandatory — if any declared JSON path doesn't resolve, the execution block is skipped
+    /// before any container starts. Resolved values are auto-injected into <c>XIANIX_INPUTS</c>
+    /// as <c>repository-url</c> so plugin prompt templates and the executor entrypoint can
+    /// read them off the same canonical kebab-case keys. The short <c>repository-name</c>
+    /// identifier is derived from <c>repository.url</c> via
     /// <see cref="RepositoryNaming.DeriveName"/> and injected alongside them — it is not
-    /// authored in <c>rules.json</c>. Omit the whole block for executions that don't
-    /// operate on a specific repo (e.g. Azure DevOps work-item analysis).
+    /// authored in <c>rules.json</c>. The executor always checks out the repository's default
+    /// branch; task-specific refs are the plugin's responsibility. Omit the whole block for
+    /// executions that don't operate on a specific repo (e.g. Azure DevOps work-item analysis).
     /// </summary>
     [JsonPropertyName("repository")]
     public RepositoryBindingTemplate? Repository { get; init; }
@@ -151,14 +222,30 @@ public sealed class WebhookExecution
     public double? MaxBudgetUsd { get; init; }
 
     /// <summary>
-    /// When true, back-to-back runs against the same conversation (repo + PR/issue) resume the
-    /// prior Claude Code session instead of rebuilding context — a cost lever for bursty
+    /// When true, back-to-back runs against the same conversation resume the prior Claude
+    /// Code session instead of rebuilding context — a cost lever for bursty
     /// <c>synchronize</c>/re-review flows. Surfaced to the container as
     /// <c>XIANIX-RESUME-SESSIONS</c>; the executor treats it as best-effort (a failed resume
-    /// falls back to a fresh run). Defaults to <c>false</c>.
+    /// falls back to a fresh run). Which runs count as "the same conversation" is defined by
+    /// <see cref="ConversationKey"/>. Defaults to <c>false</c>.
     /// </summary>
     [JsonPropertyName("resume-sessions")]
     public bool ResumeSessions { get; init; }
+
+    /// <summary>
+    /// Structural binding that identifies the conversation this execution belongs to, for
+    /// session-resume keying (e.g. <c>"pull_request.number"</c> so every run on the same PR
+    /// shares one session). Same polymorphic shape as the <c>repository</c> sub-fields:
+    /// a bare string is a JSON path into the webhook payload; the object form with
+    /// <c>"constant": true</c> pins a literal. The resolved value is auto-injected into
+    /// <c>XIANIX_INPUTS</c> as the canonical <c>conversation-id</c> key, which the executor
+    /// treats as an opaque filename-sanitised session key — it attaches no meaning to the
+    /// contents. Only consulted when <see cref="ResumeSessions"/> is enabled; unlike the
+    /// <c>repository</c> sub-fields it is best-effort, so an unresolvable path never skips
+    /// the execution (the run simply starts a fresh session).
+    /// </summary>
+    [JsonPropertyName("conversation-key")]
+    public RepoFieldBinding? ConversationKey { get; init; }
 
     /// <summary>
     /// Prompt template to execute after all plugins are installed.
@@ -197,6 +284,16 @@ public sealed class PluginEntry
     /// </summary>
     [JsonPropertyName("marketplace")]
     public string Marketplace { get; init; } = "";
+
+    /// <summary>
+    /// The Claude Code slash command that invokes this plugin (e.g. <c>/pr-review</c>).
+    /// Required for chat-rule-set listings so the supervisor can compose
+    /// <c>{slash-command} {user}</c> without inventing a command name. Surfaced by
+    /// <see cref="AvailablePluginsCatalog"/> / <c>ListAvailablePlugins</c>. Optional on
+    /// webhook <c>use-plugins</c> entries (those already carry an <c>execute-prompt</c>).
+    /// </summary>
+    [JsonPropertyName("slash-command")]
+    public string SlashCommand { get; init; } = "";
 }
 
 /// <summary>
@@ -248,10 +345,17 @@ public sealed class MatchEntry
 /// the webhook payload (the common case for webhook-driven runs) or carry a hard-coded
 /// literal (for runs whose repository is fixed regardless of the payload — cron pings,
 /// single-tenant agents pinned to one repo, manual triggers). Resolved strings flow on
-/// <see cref="EvaluationResult.RepositoryUrl"/> and <see cref="EvaluationResult.GitRef"/>.
-/// The short <c>repository-name</c> identifier is derived from the resolved URL via
-/// <see cref="RepositoryNaming.DeriveName"/> — it is not authored here.
+/// <see cref="EvaluationResult.RepositoryUrl"/>. The short <c>repository-name</c> identifier
+/// is derived from the resolved URL via <see cref="RepositoryNaming.DeriveName"/> — it is
+/// not authored here. The executor always starts on the default-branch HEAD; plugins perform
+/// any task-specific checkout inside the worktree.
+/// <para/>
+/// Accepts either a bare string (JSON-path shorthand for <see cref="Url"/>, e.g.
+/// <c>"repository": "repository.clone_url"</c>) or the object form
+/// <c>{ "url": "..." }</c>. Constant clone URLs still use the object form with
+/// <c>{ "url": { "value": "...", "constant": true } }</c>.
 /// </summary>
+[JsonConverter(typeof(RepositoryBindingTemplateJsonConverter))]
 public sealed class RepositoryBindingTemplate
 {
     /// <summary>
@@ -264,17 +368,83 @@ public sealed class RepositoryBindingTemplate
     public RepoFieldBinding? Url { get; init; }
 
     /// <summary>
-    /// Git ref (branch, commit SHA, or tag) the executor should check out into the per-run
-    /// worktree. Treated as <em>mandatory when declared</em> — if a declared JSON path
-    /// doesn't resolve, the execution block is skipped (same semantics as <see cref="Url"/>).
-    /// Set the object form <c>{ "value": "main", "constant": true }</c> to pin to a fixed
-    /// branch/tag. Omit the field entirely to run against the bare-clone HEAD.
-    /// </summary>
-    [JsonPropertyName("ref")]
-    public RepoFieldBinding? Ref { get; init; }
+    /// Optional short repository identifier binding. Prefer omitting this — the framework
+    /// derives <c>repository-name</c> from <see cref="Url"/> via
+    /// <see cref="RepositoryNaming.DeriveName"/>.
     /// </summary>
     [JsonPropertyName("name")]
     public RepoFieldBinding? Name { get; init; }
+}
+
+/// <summary>
+/// Custom converter so the execution-level <c>repository</c> field accepts either a bare
+/// string (JSON-path shorthand for <c>url</c>) or the full object form. Mirrors the
+/// <see cref="RepoFieldBindingJsonConverter"/> envelope used by nested sub-fields.
+/// </summary>
+internal sealed class RepositoryBindingTemplateJsonConverter : JsonConverter<RepositoryBindingTemplate>
+{
+    public override RepositoryBindingTemplate? Read(
+        ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        switch (reader.TokenType)
+        {
+            case JsonTokenType.Null:
+                return null;
+
+            case JsonTokenType.String:
+                // Bare-string shorthand — equivalent to { "url": "<path>" }.
+                var path = reader.GetString() ?? "";
+                return new RepositoryBindingTemplate { Url = RepoFieldBinding.Path(path) };
+
+            case JsonTokenType.StartObject:
+                RepoFieldBinding? url = null;
+                RepoFieldBinding? name = null;
+                while (reader.Read())
+                {
+                    if (reader.TokenType == JsonTokenType.EndObject)
+                        return new RepositoryBindingTemplate { Url = url, Name = name };
+
+                    if (reader.TokenType != JsonTokenType.PropertyName)
+                        throw new JsonException(
+                            $"Unexpected token '{reader.TokenType}' inside repository binding.");
+
+                    var prop = reader.GetString() ?? "";
+                    reader.Read();
+
+                    if (string.Equals(prop, "url", StringComparison.OrdinalIgnoreCase))
+                        url = JsonSerializer.Deserialize<RepoFieldBinding>(ref reader, options);
+                    else if (string.Equals(prop, "name", StringComparison.OrdinalIgnoreCase))
+                        name = JsonSerializer.Deserialize<RepoFieldBinding>(ref reader, options);
+                    else
+                        // Forward-compat: ignore unknown sibling fields (e.g. legacy "ref").
+                        reader.Skip();
+                }
+
+                throw new JsonException("Unexpected end of JSON inside repository binding.");
+
+            default:
+                throw new JsonException(
+                    $"Repository binding must be a string (JSON path for url) or object " +
+                    $"with 'url'/'name' — got '{reader.TokenType}'.");
+        }
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer, RepositoryBindingTemplate value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        if (value.Url is not null)
+        {
+            writer.WritePropertyName("url");
+            JsonSerializer.Serialize(writer, value.Url, options);
+        }
+        if (value.Name is not null)
+        {
+            writer.WritePropertyName("name");
+            JsonSerializer.Serialize(writer, value.Name, options);
+        }
+        writer.WriteEndObject();
+    }
 }
 
 /// <summary>
@@ -304,7 +474,7 @@ public sealed class RepoFieldBinding
 }
 
 /// <summary>
-/// Custom converter so the <c>repository.url</c> / <c>repository.ref</c> fields accept
+/// Custom converter so the <c>repository.url</c> / <c>repository.name</c> fields accept
 /// either a bare string ("treat as JSON path") or an object ("respect explicit
 /// <c>constant</c> flag") — the same envelope already used by <see cref="InputRuleEntry"/>.
 /// Property name matching is case-insensitive to stay consistent with
