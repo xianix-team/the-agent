@@ -47,7 +47,7 @@ public class AvailablePluginsCatalogTests
         };
 
     // A flat, root-level chat rule set: a plugin list plus rule-set-wide tuning knobs
-    // (no executions — a chat run's prompt is authored by the supervisor).
+    // (no executions — a chat run's prompt is authored by the supervisor from slashCommand).
     private static ChatRuleSet ChatSet(
         string pluginName,
         string model = "",
@@ -56,11 +56,20 @@ public class AvailablePluginsCatalogTests
         IReadOnlyList<string>? allowedTools = null,
         IReadOnlyList<string>? disallowedTools = null,
         bool resumeSessions = false,
-        IEnumerable<EnvEntry>? withEnvs = null) =>
+        IEnumerable<EnvEntry>? withEnvs = null,
+        string slashCommand = "") =>
         new()
         {
             ChatName        = "chat",
-            Plugins         = [new PluginEntry { PluginName = pluginName, Marketplace = "mp" }],
+            Plugins         =
+            [
+                new PluginEntry
+                {
+                    PluginName   = pluginName,
+                    Marketplace  = "mp",
+                    SlashCommand = slashCommand,
+                },
+            ],
             Model           = model,
             MaxBudgetUsd    = maxBudgetUsd,
             MaxTurns        = maxTurns,
@@ -280,13 +289,15 @@ public class AvailablePluginsCatalogTests
     /// A plugin listed by a root-level chat rule set is served by that chat rule set's
     /// tuning-only usage example exclusively — its webhook rule-set ones are hidden from the
     /// chat catalog. The chat usage example carries no prompt template (the supervisor
-    /// authors the prompt) and the chat rule set's model, not the webhook block's.
+    /// authors the prompt from slashCommand + target) and the chat rule set's model, not the
+    /// webhook block's. The chat listing's slash-command wins even when the webhook listing
+    /// omitted one.
     /// </summary>
     [Fact]
     public void BuildCatalog_PluginInChatRuleSet_UsesChatTuningExclusively()
     {
         var webhookRules = new[] { RuleSetWith(Execution("github", "pr-reviewer")) };
-        var chatRules    = new[] { ChatSet("pr-reviewer", model: "chat-model") };
+        var chatRules    = new[] { ChatSet("pr-reviewer", model: "chat-model", slashCommand: "/pr-review") };
 
         var plugin  = Assert.Single(AvailablePluginsCatalog.BuildCatalog(webhookRules, chatRules));
         var example = Assert.Single(plugin.UsageExamples);
@@ -294,6 +305,22 @@ public class AvailablePluginsCatalogTests
         Assert.Equal("chat-model", example.Model);
         Assert.Equal("", example.ExecutePrompt);
         Assert.Empty(example.Inputs);
+        Assert.Equal("/pr-review", plugin.SlashCommand);
+    }
+
+    /// <summary>
+    /// Chat <c>slash-command</c> is surfaced on the catalog entry so ListAvailablePlugins can
+    /// tell the supervisor the exact command — no inventing <c>/code-review</c> from the
+    /// plugin name.
+    /// </summary>
+    [Fact]
+    public void BuildCatalog_ChatRuleSet_SurfacesSlashCommand()
+    {
+        var chatRules = new[] { ChatSet("pr-reviewer", slashCommand: "/pr-review") };
+
+        var plugin = Assert.Single(AvailablePluginsCatalog.BuildCatalog([], chatRules));
+
+        Assert.Equal("/pr-review", plugin.SlashCommand);
     }
 
     /// <summary>

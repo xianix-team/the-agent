@@ -61,7 +61,8 @@ public sealed class WebhookRuleSet
 /// name, so chat rule sets never leak into the webhook evaluator.
 ///
 /// Unlike a webhook rule set, a chat rule set has <em>no</em> <c>executions</c> array: a chat
-/// run's prompt is authored by the supervisor from the user's own message (there is nothing to
+/// run's prompt is authored by the supervisor as <c>{slash-command} {user-target}</c> from
+/// the <see cref="PluginEntry.SlashCommand"/> on each listed plugin (there is nothing to
 /// interpolate from a payload), so a per-execution <c>execute-prompt</c> / <c>use-inputs</c>
 /// shape would be redundant. The tuning knobs and plugin list therefore live at the rule-set
 /// root and apply uniformly to every chat dispatch that uses one of <see cref="Plugins"/>.
@@ -283,6 +284,16 @@ public sealed class PluginEntry
     /// </summary>
     [JsonPropertyName("marketplace")]
     public string Marketplace { get; init; } = "";
+
+    /// <summary>
+    /// The Claude Code slash command that invokes this plugin (e.g. <c>/pr-review</c>).
+    /// Required for chat-rule-set listings so the supervisor can compose
+    /// <c>{slash-command} {user}</c> without inventing a command name. Surfaced by
+    /// <see cref="AvailablePluginsCatalog"/> / <c>ListAvailablePlugins</c>. Optional on
+    /// webhook <c>use-plugins</c> entries (those already carry an <c>execute-prompt</c>).
+    /// </summary>
+    [JsonPropertyName("slash-command")]
+    public string SlashCommand { get; init; } = "";
 }
 
 /// <summary>

@@ -230,7 +230,8 @@
         "use-plugins": [
             {
                 "plugin-name": "pr-reviewer@xianix-plugins-official",
-                "marketplace": "xianix-team/plugins-official"
+                "marketplace": "xianix-team/plugins-official",
+                "slash-command": "/pr-review"
             }
         ]
     }

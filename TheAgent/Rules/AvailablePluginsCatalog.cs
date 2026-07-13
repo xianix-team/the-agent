@@ -96,6 +96,8 @@ internal static class AvailablePluginsCatalog
         // chat rule set has no executions — its prompt is authored by the supervisor from the
         // user's message — so each listed plugin gets a single synthesised usage example that
         // carries only the rule-set's cost/control knobs (no prompt template, no inputs).
+        // The chat listing's slash-command (if any) also wins over a webhook listing that
+        // omitted it, so ListAvailablePlugins can tell the supervisor the exact command.
         foreach (var set in chatRuleSets ?? [])
         {
             foreach (var plugin in set.Plugins)
@@ -109,7 +111,7 @@ internal static class AvailablePluginsCatalog
                     builder = new CatalogPluginBuilder(plugin);
                     byKey[key] = builder;
                 }
-                builder.AddChatUsage(set);
+                builder.AddChatUsage(set, plugin);
             }
         }
 
@@ -211,9 +213,14 @@ internal static class AvailablePluginsCatalog
         // keep one entry.
         private readonly Dictionary<string, EnvEntry> _envs = new(StringComparer.Ordinal);
 
+        // Prefer the chat listing's slash-command when present (AddChatUsage), else whatever
+        // was on the PluginEntry that first created this builder.
+        private string _slashCommand;
+
         public CatalogPluginBuilder(PluginEntry source)
         {
             _source = source;
+            _slashCommand = source.SlashCommand?.Trim() ?? "";
         }
 
         public void AddUsage(WebhookExecution execution, IReadOnlyList<EnvEntry> ruleSetCommonEnvs)
@@ -317,10 +324,17 @@ internal static class AvailablePluginsCatalog
         /// and no <c>Inputs</c> — it exists purely to (a) mark the plugin as chat-available and
         /// (b) carry the rule-set's cost/control knobs through <see cref="PluginInputResolver"/>
         /// to the chat dispatch. Empty inputs means it always wins input resolution.
+        /// When <paramref name="chatPlugin"/> declares a <c>slash-command</c>, that value
+        /// becomes the catalog's authoritative command for this plugin.
         /// </summary>
-        public void AddChatUsage(ChatRuleSet set)
+        public void AddChatUsage(ChatRuleSet set, PluginEntry chatPlugin)
         {
             ArgumentNullException.ThrowIfNull(set);
+            ArgumentNullException.ThrowIfNull(chatPlugin);
+
+            var chatSlash = chatPlugin.SlashCommand?.Trim() ?? "";
+            if (!string.IsNullOrEmpty(chatSlash))
+                _slashCommand = chatSlash;
 
             _chatUsages.Add(new CatalogUsageExample(
                 ExecutionName:   string.IsNullOrWhiteSpace(set.ChatName) ? "chat" : set.ChatName.Trim(),
@@ -375,6 +389,7 @@ internal static class AvailablePluginsCatalog
         public CatalogPlugin Build() => new(
             PluginName:      _source.PluginName,
             Marketplace:     _source.Marketplace,
+            SlashCommand:    _slashCommand,
             RequiredEnvs:    _envs.Values
                 .Select(e => new CatalogEnvRequirement(e.Name, e.Mandatory))
                 .ToList(),
@@ -390,6 +405,10 @@ internal static class AvailablePluginsCatalog
 /// Public, model-facing description of a plugin available to the tenant. Field names are
 /// camelCase-friendly so the JSON the chat tool emits is easy for the LLM to read.
 /// </summary>
+/// <param name="SlashCommand">Claude Code slash command that invokes this plugin
+/// (e.g. <c>/pr-review</c>), taken from <c>rules.json</c> <c>slash-command</c>. Empty when
+/// the rule author omitted it — chat plugins should always declare one so the supervisor
+/// does not invent a command name.</param>
 /// <param name="RequiredEnvs">Names + mandatory flags of every env declared on at least one
 /// execution that uses this plugin. Surfaced to the model so it knows which envs the tenant
 /// must have configured (typically via <c>secrets.*</c>). The actual env values forwarded to
@@ -401,6 +420,7 @@ internal static class AvailablePluginsCatalog
 internal sealed record CatalogPlugin(
     string PluginName,
     string Marketplace,
+    string SlashCommand,
     IReadOnlyList<CatalogEnvRequirement> RequiredEnvs,
     IReadOnlyList<CatalogUsageExample> UsageExamples,
     PluginEntry Source);

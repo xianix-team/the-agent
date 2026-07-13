@@ -63,14 +63,17 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         "List the marketplace plugins that are pre-vetted for this agent (sourced from the " +
         "`Rules` knowledge document). Returns a JSON array where each entry has `pluginName` " +
         "(format: `name@marketplace` — pass this verbatim to RunClaudeCodeOnRepository), " +
-        "`marketplace`, `requiredEnvs` (env var names + whether they are mandatory), and " +
-        "`usageExamples`. " +
+        "`marketplace`, `slashCommand` (the Claude Code slash command that invokes the " +
+        "plugin, e.g. `/pr-review` — use this verbatim; NEVER invent a different command " +
+        "like `/code-review`), `requiredEnvs` (env var names + whether they are mandatory), " +
+        "and `usageExamples`. " +
         "A plugin exposed for chat (declared under a root-level `chat` rule set) has an " +
         "EMPTY `usageExamples` array: there is no prompt template or fixed inputs — YOU " +
-        "compose the `prompt` yourself from the user's request, invoking the plugin's own " +
-        "slash command (e.g. a PR-review plugin → `/pr-review <pr-number-or-branch>`). Still " +
-        "pass its `pluginName` and put any target the user gave you (PR number, branch name) " +
-        "directly in the `prompt`. " +
+        "compose the `prompt` as `{slashCommand} {target}` where `target` is whatever the " +
+        "user gave you (PR number, branch name, …). Example: catalog says " +
+        "`slashCommand: \"/pr-review\"` and user asked to review PR 42 → prompt " +
+        "`/pr-review 42`. Still pass its `pluginName`. Do NOT invent slash commands from " +
+        "the plugin name or description. " +
         "A plugin backed only by webhook rules instead lists one or more `usageExamples`, " +
         "each with an `executePrompt` template and an `inputs` array. Each input has a " +
         "`source`: `auto` means the chat tool fills it from the chosen repository (do NOT " +
@@ -101,12 +104,13 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
             {
                 pluginName = p.PluginName,
                 marketplace = p.Marketplace,
+                slashCommand = string.IsNullOrWhiteSpace(p.SlashCommand) ? null : p.SlashCommand,
                 requiredEnvs = p.RequiredEnvs.Select(e => new { name = e.Name, mandatory = e.Mandatory }),
                 // Chat-exposed plugins carry a single tuning-only usage example with an empty
-                // prompt (the supervisor authors the prompt itself). Hide those from the model
-                // — an empty template is noise — so a chat plugin surfaces as `usageExamples: []`,
-                // its documented "compose the prompt yourself" signal. Webhook-fallback plugins
-                // keep their real templates + inputs.
+                // prompt (the supervisor authors the prompt itself from slashCommand + target).
+                // Hide those from the model — an empty template is noise — so a chat plugin
+                // surfaces as `usageExamples: []`, its documented "compose from slashCommand"
+                // signal. Webhook-fallback plugins keep their real templates + inputs.
                 usageExamples = p.UsageExamples
                     .Where(u => !string.IsNullOrWhiteSpace(u.ExecutePrompt))
                     .Select(u => new
@@ -224,9 +228,11 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         "If the user's request matches a marketplace plugin (see ListAvailablePlugins), pass " +
         "its `pluginName` in `pluginNames`. How to build `prompt` and `inputs` depends on the " +
         "plugin's `usageExamples`: " +
-        "For a CHAT plugin (EMPTY `usageExamples`): compose `prompt` yourself around the " +
-        "plugin's slash command with the user's target inline (e.g. `/pr-review 42` or " +
-        "`/pr-review feature/login`) and OMIT `inputs`. " +
+        "For a CHAT plugin (EMPTY `usageExamples`): set `prompt` to " +
+        "`{slashCommand} {target}` using the catalog's `slashCommand` field verbatim " +
+        "(e.g. `/pr-review 42` or `/pr-review feature/login`) and OMIT `inputs`. " +
+        "NEVER invent a slash command — if `slashCommand` is missing, ask / fail rather " +
+        "than guessing names like `/code-review`. " +
         "For a webhook-backed plugin (non-empty `usageExamples`): craft `prompt` from the " +
         "chosen example's `executePrompt` template (e.g. `/requirement-analysis 42`) AND " +
         "supply every `caller`-source mandatory input from that example via `inputs` — the " +
@@ -245,7 +251,7 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         "so do NOT echo or summarise the result yourself.")]
     public async Task<string> RunClaudeCodeOnRepository(
         [Description("The repository URL to operate on. May be one already in ListTenantRepositories OR a brand-new URL on github.com / dev.azure.com / *.visualstudio.com (it will be cloned in-flight). For self-hosted hosts, call OnboardRepository first with an explicit platform.")] string repositoryUrl,
-        [Description("The full Claude Code prompt to execute. For a chat plugin (empty usageExamples) compose it yourself around the plugin's slash command; for a webhook-backed plugin use the chosen example's executePrompt template with placeholders substituted.")] string prompt,
+        [Description("The full Claude Code prompt to execute. For a chat plugin (empty usageExamples) this MUST be `{slashCommand} {target}` from ListAvailablePlugins — never invent a command. For a webhook-backed plugin use the chosen example's executePrompt template with placeholders substituted.")] string prompt,
         [Description("Optional plugin specs (e.g. [\"pr-reviewer@xianix-plugins-official\"]). Each must come from ListAvailablePlugins. Omit or pass an empty array for a no-plugin run.")] string[]? pluginNames = null,
         [Description("Mandatory inputs for a webhook-backed plugin's chosen usage example, keyed by the rules.json kebab-case input name (e.g. {\"pr-number\":\"42\",\"pr-title\":\"Fix bug\"}). Omit for chat plugins (empty usageExamples — the target goes in the prompt instead) and for no-plugin runs. `git-ref` is optional — include it only when the user explicitly named a branch/commit/tag; otherwise the run starts on the default branch and the plugin resolves the rest from the prompt. Never include repository-url, repository-name, or platform — those are auto-filled.")] Dictionary<string, string>? inputs = null)
     {

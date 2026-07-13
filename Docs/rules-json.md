@@ -119,7 +119,11 @@ Unlike a webhook rule set, **a chat rule set has no `executions` array.** A chat
   "chat": "chat",
   "with-envs": [ /* optional, rule-set-wide — same shape as a webhook rule set */ ],
   "use-plugins": [
-    { "plugin-name": "pr-reviewer@xianix-plugins-official", "marketplace": "xianix-team/plugins-official" }
+    {
+      "plugin-name": "pr-reviewer@xianix-plugins-official",
+      "marketplace": "xianix-team/plugins-official",
+      "slash-command": "/pr-review"
+    }
   ],
   "model": "claude-sonnet-4-5",
   "max-budget-usd": 5.0
@@ -140,7 +144,7 @@ Unlike a webhook rule set, **a chat rule set has no `executions` array.** A chat
 | Field | Description |
 |-------|-------------|
 | `chat` | Discriminator + label. Any non-empty value marks the object as a chat rule set (the value is only used in logs — there's no external event to match). |
-| `use-plugins` | The plugins this rule set makes available to the chat tool. Same `plugin-name@marketplace` shape as a webhook execution's `use-plugins`. |
+| `use-plugins` | The plugins this rule set makes available to the chat tool. Same `plugin-name@marketplace` shape as a webhook execution's `use-plugins`, plus a required **`slash-command`** (e.g. `/pr-review`) so the supervisor composes `{slash-command} {user-target}` without inventing a command name. |
 | `model` / `max-turns` / `allowed-tools` / `disallowed-tools` / `max-budget-usd` / `resume-sessions` | Cost/control tuning applied to every chat dispatch that uses one of `use-plugins`. Same meaning as the identically-named per-execution knobs on a webhook block. |
 | `with-envs` | Optional rule-set-wide common environment variables shipped to chat dispatches by `RulesEnvCatalog` (platform-agnostic, like a webhook rule set's commons). |
 
@@ -150,11 +154,11 @@ If the chat catalog had to reuse a plugin's *webhook* execution blocks for its t
 
 Author **separate chat rule sets** when different plugins need different tuning.
 
-### Invocation guidance — no prompt template
+### Invocation guidance — slash command, not invented prompts
 
-Because a chat run's prompt comes from the user's message, a chat rule set carries no `execute-prompt`. The supervisor composes the prompt itself and invokes the plugin's slash command, passing whatever target the user gave (a PR number, a branch name, …) as its argument — e.g. "review PR 42" → `/pr-review 42`, "review my `feature/login` branch" → `/pr-review feature/login`. It infers the command from the plugin's name/purpose (see `system-prompt.md`). This is why one plugin listing serves both the "by PR number" and "by branch" cases that previously needed two execution blocks.
+Because a chat run's prompt comes from the user's message, a chat rule set carries no `execute-prompt`. The supervisor composes the prompt as `{slash-command} {target}` using the **`slash-command` declared on the chat `use-plugins` entry** (surfaced by `ListAvailablePlugins` as `slashCommand`), appending whatever target the user gave (a PR number, a branch name, …) — e.g. "review PR 42" → `/pr-review 42`, "review my `feature/login` branch" → `/pr-review feature/login`. It must **not** invent alternate command names from the plugin name (e.g. do not turn `pr-reviewer` into `/code-review`). This is why one plugin listing serves both the "by PR number" and "by branch" cases that previously needed two execution blocks.
 
-`ListAvailablePlugins` surfaces a chat-listed plugin with an **empty** `usageExamples` array — the signal to the supervisor that it must compose the prompt itself. (Internally the catalog still synthesises a single tuning-only usage example so `PluginInputResolver` can carry the `model` / `max-budget-usd` / … onto the dispatch; that example has no prompt and no inputs and is filtered out of the model-facing list.)
+`ListAvailablePlugins` surfaces a chat-listed plugin with an **empty** `usageExamples` array and a populated `slashCommand` — the signal to the supervisor that it must compose `{slashCommand} {target}`. (Internally the catalog still synthesises a single tuning-only usage example so `PluginInputResolver` can carry the `model` / `max-budget-usd` / … onto the dispatch; that example has no prompt and no inputs and is filtered out of the model-facing list.)
 
 ### Catalog selection rule (chat-exclusive, else webhook fallback)
 
@@ -534,7 +538,7 @@ Placeholders are replaced case-insensitively. Any `{{name}}` with no matching in
             "marketplace": "xianix-team/plugins-official"
           }
         ],
-        "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{git-ref}}).\n\nRun /code-review to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."
+        "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{git-ref}}).\n\nRun /pr-review {{pr-number}} to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."
       }
     ]
   }
