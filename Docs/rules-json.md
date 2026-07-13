@@ -245,10 +245,18 @@ Each rule is a comparison of a **JSON path** against a **literal value**, option
 <json-path> <operator> <expected-value>
 ```
 
-| Operator | Meaning       | Missing path returns |
-|----------|---------------|----------------------|
-| `==`     | Equals        | `false`              |
-| `!=`     | Not equals    | `true`               |
+| Operator | Meaning       | Case-sensitive | Missing path returns |
+|----------|---------------|----------------|----------------------|
+| `==`     | Equals              | yes | `false` |
+| `!=`     | Not equals          | yes | `true`  |
+| `^=`     | Starts with (prefix) | no  | `false` |
+| `!^=`    | Does not start with  | no  | `true`  |
+| `*=`     | Contains (substring) | no  | `false` |
+| `!*=`    | Does not contain     | no  | `true`  |
+| `?`      | Path exists and is non-null | n/a | `false` |
+| `!?`     | Path missing or null | n/a | `true` |
+
+The text-search operators (`^=`/`!^=` and `*=`/`!*=`) match **case-insensitively** — they are meant for fuzzy human text such as `@`-mentions and message bodies (e.g. `comment.body*='@xianix'` matches `@Xianix`). Equality (`==`/`!=`) stays **case-sensitive** because it targets structured identifiers where case is meaningful (GitHub label and branch names, enum-like statuses).
 
 ### Compound expressions
 

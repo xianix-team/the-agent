@@ -219,6 +219,54 @@ public class WebhookRulesEvaluatorTests
         Assert.False(outcome.Matched);
     }
 
+    [Theory]
+    [InlineData("@xianix")]
+    [InlineData("@Xianix")]
+    [InlineData("@XIANIX")]
+    public void EvaluateWithRules_Contains_IsCaseInsensitive(string mention)
+    {
+        using var doc = JsonDocument.Parse(
+            $$"""
+            { "comment": { "body": "Hey {{mention}}, please review this." } }
+            """);
+
+        var ruleSets = _sut.ParseRules(BuildRulesJson("comment.body*='@xianix'"));
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.True(outcome.Matched);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_NotContains_IsCaseInsensitive()
+    {
+        using var doc = JsonDocument.Parse("""{ "comment": { "body": "ping @Xianix" } }""");
+        var ruleSets = _sut.ParseRules(BuildRulesJson("comment.body!*='@xianix'"));
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.False(outcome.Matched);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_StartsWith_IsCaseInsensitive()
+    {
+        using var doc = JsonDocument.Parse(
+            """{ "message": { "text": "UPDATED the source branch of pull request 13" } }""");
+        var ruleSets = _sut.ParseRules(BuildRulesJson("message.text^='updated the source branch'"));
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.True(outcome.Matched);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_Equals_StaysCaseSensitive()
+    {
+        using var doc = JsonDocument.Parse("""{ "label": { "name": "Ai-DLC/PR/PR-Review" } }""");
+        var ruleSets = _sut.ParseRules(BuildRulesJson("label.name=='ai-dlc/pr/pr-review'"));
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.False(outcome.Matched);
+    }
+
     [Fact]
     public void EvaluateWithRules_ExistsOperator_MatchesWhenPathPresent()
     {

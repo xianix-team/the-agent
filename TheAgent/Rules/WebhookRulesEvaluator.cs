@@ -9,6 +9,8 @@ namespace Xianix.Rules;
 /// then inputs are resolved into a dictionary (JSON paths and optional constant literals).
 /// Atomic match operators include <c>==</c>, <c>!=</c>, <c>^=</c> / <c>!^=</c> (string prefix),
 /// <c>*=</c> / <c>!*=</c> (substring contains), and unary <c>?</c> / <c>!?</c> (exists / not-exists).
+/// The text-search operators (<c>^=</c>/<c>!^=</c> and <c>*=</c>/<c>!*=</c>) match case-insensitively;
+/// equality (<c>==</c>/<c>!=</c>) stays case-sensitive for structured identifiers.
 /// Returns null if no matching webhook, no match entry passes, or the payload is not valid JSON.
 /// </summary>
 public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
@@ -384,7 +386,7 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
                     var s = actualSw.ValueKind == JsonValueKind.String
                         ? actualSw.GetString() ?? ""
                         : actualSw.GetRawText().Trim('"');
-                    var ok = s.StartsWith(expected, StringComparison.Ordinal);
+                    var ok = s.StartsWith(expected, StringComparison.OrdinalIgnoreCase);
                     var pass = negatedSw ? !ok : ok;
                     return
                         $"'{condition}' (actual starts with prefix: {ok}; condition {(pass ? "passes" : "fails")})";
@@ -402,7 +404,7 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
                     var s = actualCt.ValueKind == JsonValueKind.String
                         ? actualCt.GetString() ?? ""
                         : actualCt.GetRawText().Trim('"');
-                    var ok = s.Contains(expected, StringComparison.Ordinal);
+                    var ok = s.Contains(expected, StringComparison.OrdinalIgnoreCase);
                     var pass = negatedCt ? !ok : ok;
                     return
                         $"'{condition}' (actual contains substring: {ok}; condition {(pass ? "passes" : "fails")})";
@@ -919,7 +921,10 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             return false;
 
         var s = actual.GetString();
-        return s is not null && s.StartsWith(prefix, StringComparison.Ordinal);
+        // Prefix match is a fuzzy human-text operator (mentions, message text), so it is
+        // case-insensitive by design — unlike `==`, which stays exact for structured
+        // identifiers (labels, branches, enum-like statuses).
+        return s is not null && s.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -966,7 +971,10 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             return false;
 
         var s = actual.GetString();
-        return s is not null && s.Contains(needle, StringComparison.Ordinal);
+        // Substring match is a fuzzy human-text operator (mentions, message text), so it is
+        // case-insensitive by design — unlike `==`, which stays exact for structured
+        // identifiers (labels, branches, enum-like statuses).
+        return s is not null && s.Contains(needle, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
