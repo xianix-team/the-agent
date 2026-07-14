@@ -1,6 +1,23 @@
 [
     {
       "webhook": "Default",
+      "with-envs": [
+        {
+          "name": "AZURE-DEVOPS-TOKEN",
+          "value": "secrets.AZURE-DEVOPS-TOKEN",
+          "mandatory": false
+        },
+        {
+          "name": "GITHUB-TOKEN",
+          "value": "secrets.GITHUB-TOKEN",
+          "mandatory": false
+        },
+        {
+          "name": "ANTHROPIC-API-KEY",
+          "value": "secrets.ANTHROPIC-API-KEY",
+          "constant": true
+        }
+      ],
       "executions": [
         {
           "name": "azuredevops-pr-agent-comment-instruction",
@@ -33,15 +50,8 @@
           "use-plugins": [
             {
               "plugin-name": "pr-reviewer@xianix-plugins-official",
-              "marketplace": "xianix-team/plugins-official@extract-proper-git-diffs",
+              "marketplace": "xianix-team/plugins-official",
               "slash-command": "/pr-review"
-            }
-          ],
-          "with-envs": [
-            {
-              "name": "AZURE-DEVOPS-TOKEN",
-              "value": "secrets.AZURE-DEVOPS-TOKEN",
-              "mandatory": true
             }
           ],
           "model": "claude-sonnet-4-5",
@@ -85,13 +95,6 @@
               "slash-command": "/requirement-analysis"
             }
           ],
-          "with-envs": [
-            {
-              "name": "GITHUB-TOKEN",
-              "value": "secrets.GITHUB-TOKEN",
-              "mandatory": true
-            }
-          ],
           "model": "claude-sonnet-4-5",
           "max-budget-usd": 5,
           "execute-prompt": "You are @xianix. {{comment-author}} mentioned @xianix in a comment on issue #{{issue-number}}. The comment: \"{{user-instruction}}\"\n\nFirst, decide whether this comment is actually addressed to you, versus just mentioning your name in passing (e.g. referencing past actions, or talking about you to someone else). If the comment is NOT addressed to you, do nothing and post no reply.\n\nIf the comment IS addressed to you, you MUST post a reply back as a comment. IMPORTANT: your text output alone is NOT delivered to the user — you have to create the comment yourself by calling the platform's comment API/CLI noted in the host context above (e.g. `gh pr comment`/`gh api` for GitHub, or the Azure DevOps REST API). A run that produces reply text but never posts a comment is a failure.\n1. If it's a greeting, question, or casual message with no technical task (e.g. \"how are you?\"), post a brief, conversational reply comment.\n2. If it's a direct instruction, strip the @xianix mention, perform the requested action using the tools available to you, then post a comment stating what you did.\n\nGuidelines:\n- Keep your reply concise — state what you did and any findings, don't restate the request back.\n- If the instruction is ambiguous, ask a clarifying question in your reply rather than guessing.\n- If you lack access or the request is out of scope for this issue, say so plainly.\n- If necessary, read the other comments on the issue to understand the context.\n- Stay focused on this issue's scope; do not touch unrelated code or open new work without being asked.\n- Post at most one reply comment per invocation."
@@ -129,15 +132,8 @@
           "use-plugins": [
             {
               "plugin-name": "pr-reviewer@xianix-plugins-official",
-              "marketplace": "xianix-team/plugins-official@extract-proper-git-diffs",
+              "marketplace": "xianix-team/plugins-official",
               "slash-command": "/pr-review"
-            }
-          ],
-          "with-envs": [
-            {
-              "name": "GITHUB-TOKEN",
-              "value": "secrets.GITHUB-TOKEN",
-              "mandatory": true
             }
           ],
           "model": "claude-sonnet-4-5",
@@ -174,7 +170,7 @@
           "use-plugins": [
             {
               "plugin-name": "pr-reviewer@xianix-plugins-official",
-              "marketplace": "xianix-team/plugins-official@extract-proper-git-diffs"
+              "marketplace": "xianix-team/plugins-official"
             }
           ],
           "with-envs": [
@@ -219,7 +215,7 @@
           "use-plugins": [
             {
               "plugin-name": "pr-reviewer@xianix-plugins-official",
-              "marketplace": "xianix-team/plugins-official@extract-proper-git-diffs"
+              "marketplace": "xianix-team/plugins-official"
             }
           ],
           "with-envs": [

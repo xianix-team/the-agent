@@ -74,6 +74,11 @@ public class XianixAgent(
 
         conversationWorkflow.OnUserChatMessage(async (context) =>
         {
+            if (context.Message.Scope == "setup")
+            {
+                await context.ReplyAsync("Hello, how can I help you with your setup????");
+                return;
+            }
             try
             {
                 var reply = await subagent.RunAsync(context, cancellationToken);
