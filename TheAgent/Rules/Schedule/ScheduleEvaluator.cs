@@ -64,7 +64,7 @@ public sealed class ScheduleEvaluator()
                 Use24HourTimeFormat = false
             };
 
-            return $"gen_schedule_'{ExpressionDescriptor.GetDescription(entry.cronExpression, options).ToLowerInvariant().Replace(" ", "_").Replace(",", "").Replace("-", "_").Replace("'", "")}'";
+            return $"gen_schedule_{ExpressionDescriptor.GetDescription(entry.cronExpression, options).ToLowerInvariant().Replace(" ", "_").Replace(",", "").Replace("-", "_").Replace("'", "")}";
         }
         catch (FormatException ex)
         {
