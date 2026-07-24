@@ -40,12 +40,15 @@ public sealed class ScheduleEvaluator()
 
             foreach (var entry in entries)
             {
-                string optionName = GetName(entry);
-                if (string.IsNullOrWhiteSpace(entry.ScheduleName))
+                if (!string.IsNullOrWhiteSpace(entry.cronExpression))
                 {
-                    entry.ScheduleName = optionName;
+                    string optionName = GetName(entry);
+                    if (string.IsNullOrWhiteSpace(entry.ScheduleName))
+                    {
+                        entry.ScheduleName = optionName;
+                    }
+                    result.Add(entry);
                 }
-                result.Add(entry);
             }
             return result;
         }

@@ -7,7 +7,7 @@ public sealed class ScheduleEntry
     [JsonPropertyName("schedule")]
     public string ScheduleName { get; set; } = "";
     [JsonPropertyName("cron")]
-    public string cronExpression { get; init; } = "";
+    public string cronExpression { get; set; } = "";
     [JsonPropertyName("timezone")]
     public string timezone { get; init; } = "UTC";
     [JsonPropertyName("with-envs")]
