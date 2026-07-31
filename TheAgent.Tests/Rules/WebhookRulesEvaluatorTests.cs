@@ -1453,7 +1453,7 @@ public class WebhookRulesEvaluatorTests
     public void EvaluateWithRules_GithubPrCommentMentioningXianix_MatchesPrCommentBlock()
     {
         var rulesJson = File.ReadAllText(
-            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "TheAgent", "Knowledge", "rules.json"));
+            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "Fixtures", "legacy-seed-rules.json"));
         var payloadJson = File.ReadAllText(
             Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "TestScripts", "github-issue-comment-pr-sample.json"));
 

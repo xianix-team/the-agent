@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "plugin": "arch-fitness",
+  "slashCommand": "/arch-fitness",
+  "platforms": {
+    "azuredevops": {
+      "requiredEnvs": [
+        "AZURE-DEVOPS-TOKEN",
+        "ANTHROPIC-API-KEY"
+      ],
+      "suggestedTriggers": [
+        "Work item / PR tag ai-dlc/arch/fitness"
+      ],
+      "executions": [
+        {
+          "name": "azuredevops-arch-fitness",
+          "platform": "azuredevops",
+          "match-any": [
+            {
+              "name": "azuredevops-arch-fitness-tagged",
+              "rule": "eventType==workitem.updated&&resource.revision.fields.\"System.Tags\"*='ai-dlc/arch/fitness'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "workitem-id",
+              "value": "resource.workItemId"
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "arch-fitness@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official",
+              "slash-command": "/arch-fitness"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "AZURE-DEVOPS-TOKEN",
+              "value": "secrets.AZURE-DEVOPS-TOKEN",
+              "mandatory": true
+            },
+            {
+              "name": "ANTHROPIC-API-KEY",
+              "value": "secrets.ANTHROPIC-API-KEY",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 5.0,
+          "execute-prompt": "Work item #{{workitem-id}} requested architecture fitness review. Run /arch-fitness {{workitem-id}}."
+        }
+      ]
+    },
+    "github": {
+      "requiredEnvs": [
+        "GITHUB-TOKEN",
+        "ANTHROPIC-API-KEY"
+      ],
+      "suggestedGitHubWebhookEvents": [
+        "issues",
+        "pull_request"
+      ],
+      "suggestedTriggers": [
+        "Issue/PR label ai-dlc/arch/fitness"
+      ],
+      "executions": [
+        {
+          "name": "github-arch-fitness",
+          "platform": "github",
+          "repository": {
+            "url": {
+              "value": "https://github.com/org/repo.git",
+              "constant": true
+            }
+          },
+          "match-any": [
+            {
+              "name": "github-arch-fitness-tag-applied",
+              "rule": "action==labeled&&label.name=='ai-dlc/arch/fitness'"
+            },
+            {
+              "name": "github-arch-fitness-opened-with-tag",
+              "rule": "action==opened&&issue.labels.*.name=='ai-dlc/arch/fitness'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "issue-number",
+              "value": "issue.number",
+              "mandatory": true
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "arch-fitness@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official",
+              "slash-command": "/arch-fitness"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "GITHUB-TOKEN",
+              "value": "secrets.GITHUB-TOKEN",
+              "mandatory": true
+            },
+            {
+              "name": "ANTHROPIC-API-KEY",
+              "value": "secrets.ANTHROPIC-API-KEY",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 5.0,
+          "execute-prompt": "Issue #{{issue-number}} requested architecture fitness review. Run /arch-fitness {{issue-number}}."
+        }
+      ]
+    }
+  },
+  "chat": {
+    "slashCommand": "/arch-fitness",
+    "model": "claude-sonnet-4-5",
+    "max-budget-usd": 5.0
+  }
+}

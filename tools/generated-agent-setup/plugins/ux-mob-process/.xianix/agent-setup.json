@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "plugin": "ux-mob-process",
+  "slashCommand": "/ux-start",
+  "platforms": {
+    "azuredevops": {
+      "requiredEnvs": [
+        "AZURE-DEVOPS-TOKEN",
+        "ANTHROPIC-API-KEY"
+      ],
+      "suggestedTriggers": [
+        "Chat-driven; optional work item tag ai-dlc/ux/start"
+      ],
+      "notes": "Primarily human-gated chat workflow.",
+      "executions": [
+        {
+          "name": "azuredevops-ux-mob-process",
+          "platform": "azuredevops",
+          "match-any": [
+            {
+              "name": "azuredevops-ux-mob-process-tagged",
+              "rule": "eventType==workitem.updated&&resource.revision.fields.\"System.Tags\"*='ai-dlc/ux/start'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "workitem-id",
+              "value": "resource.workItemId"
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "ux-mob-process@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official",
+              "slash-command": "/ux-start"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "AZURE-DEVOPS-TOKEN",
+              "value": "secrets.AZURE-DEVOPS-TOKEN",
+              "mandatory": true
+            },
+            {
+              "name": "ANTHROPIC-API-KEY",
+              "value": "secrets.ANTHROPIC-API-KEY",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 5.0,
+          "execute-prompt": "Work item #{{workitem-id}} started a UX mob process. Run /ux-start and follow human-gated phases."
+        }
+      ]
+    },
+    "github": {
+      "requiredEnvs": [
+        "GITHUB-TOKEN",
+        "ANTHROPIC-API-KEY"
+      ],
+      "suggestedGitHubWebhookEvents": [
+        "issues"
+      ],
+      "suggestedTriggers": [
+        "Chat-driven; optional label ai-dlc/ux/start"
+      ],
+      "notes": "Primarily human-gated chat workflow.",
+      "executions": [
+        {
+          "name": "github-ux-mob-process",
+          "platform": "github",
+          "repository": {
+            "url": {
+              "value": "https://github.com/org/repo.git",
+              "constant": true
+            }
+          },
+          "match-any": [
+            {
+              "name": "github-ux-mob-process-tag-applied",
+              "rule": "action==labeled&&label.name=='ai-dlc/ux/start'"
+            },
+            {
+              "name": "github-ux-mob-process-opened-with-tag",
+              "rule": "action==opened&&issue.labels.*.name=='ai-dlc/ux/start'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "issue-number",
+              "value": "issue.number",
+              "mandatory": true
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "ux-mob-process@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official",
+              "slash-command": "/ux-start"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "GITHUB-TOKEN",
+              "value": "secrets.GITHUB-TOKEN",
+              "mandatory": true
+            },
+            {
+              "name": "ANTHROPIC-API-KEY",
+              "value": "secrets.ANTHROPIC-API-KEY",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 5.0,
+          "execute-prompt": "Issue #{{issue-number}} started a UX mob process. Run /ux-start and follow human-gated phases."
+        }
+      ]
+    }
+  },
+  "chat": {
+    "slashCommand": "/ux-start",
+    "model": "claude-sonnet-4-5",
+    "max-budget-usd": 5.0
+  }
+}

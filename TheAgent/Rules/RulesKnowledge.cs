@@ -29,7 +29,7 @@ public static class RulesKnowledge
     /// case-insensitive property names, tolerant of comments and trailing commas so
     /// the rules.json file can be authored as JSONC.
     /// </summary>
-    internal static readonly JsonSerializerOptions RulesJsonOptions = new()
+    public static readonly JsonSerializerOptions RulesJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
         ReadCommentHandling         = JsonCommentHandling.Skip,
@@ -81,9 +81,27 @@ public static class RulesKnowledge
             return [];
         }
 
+        return ParseWebhookRuleSets(doc.Content, logger);
+    }
+
+    /// <summary>
+    /// Parses raw <c>rules.json</c> text into webhook rule sets using the canonical
+    /// <see cref="RulesJsonOptions"/> and the same "keep only entries with a webhook name"
+    /// filter as <see cref="LoadAsync"/>. Exposed so callers that already hold the document
+    /// content (e.g. the chat's system-seed plugin catalog, which fetches the system-scoped
+    /// Rules via the Admin API rather than the activation-resolved knowledge channel) can
+    /// build the same models without going through <see cref="XiansContext"/>.
+    /// Returns an empty list for blank or unparseable content.
+    /// </summary>
+    public static List<WebhookRuleSet> ParseWebhookRuleSets(string? content, ILogger? logger = null)
+    {
+        logger ??= NullLogger.Instance;
+        if (string.IsNullOrWhiteSpace(content))
+            return [];
+
         try
         {
-            return [.. (JsonSerializer.Deserialize<List<WebhookRuleSet>>(doc.Content, RulesJsonOptions)
+            return [.. (JsonSerializer.Deserialize<List<WebhookRuleSet>>(content, RulesJsonOptions)
                    ?? []).Where(e => !string.IsNullOrWhiteSpace(e.WebhookName))];
         }
         catch (JsonException ex)
@@ -119,9 +137,24 @@ public static class RulesKnowledge
         if (doc is null || string.IsNullOrWhiteSpace(doc.Content))
             return [];
 
+        return ParseChatRuleSets(doc.Content, logger);
+    }
+
+    /// <summary>
+    /// Parses raw <c>rules.json</c> text into root-level chat rule sets (entries with a
+    /// non-empty <c>"chat"</c> name), the string-content counterpart to
+    /// <see cref="LoadChatRuleSetsAsync"/>. Returns an empty list for blank or unparseable
+    /// content.
+    /// </summary>
+    public static List<ChatRuleSet> ParseChatRuleSets(string? content, ILogger? logger = null)
+    {
+        logger ??= NullLogger.Instance;
+        if (string.IsNullOrWhiteSpace(content))
+            return [];
+
         try
         {
-            return [.. (JsonSerializer.Deserialize<List<ChatRuleSet>>(doc.Content, RulesJsonOptions)
+            return [.. (JsonSerializer.Deserialize<List<ChatRuleSet>>(content, RulesJsonOptions)
                    ?? []).Where(e => !string.IsNullOrWhiteSpace(e.ChatName))];
         }
         catch (JsonException ex)

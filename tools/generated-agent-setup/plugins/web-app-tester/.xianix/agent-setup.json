@@ -1,0 +1,140 @@
+{
+  "schemaVersion": 1,
+  "plugin": "web-app-tester",
+  "slashCommand": "/test-web-app",
+  "platforms": {
+    "azuredevops": {
+      "requiredEnvs": [
+        "AZURE-DEVOPS-TOKEN",
+        "ANTHROPIC-API-KEY"
+      ],
+      "suggestedTriggers": [
+        "PR/work item tag ai-dlc/pr/web-app-test"
+      ],
+      "executions": [
+        {
+          "name": "azuredevops-web-app-tester",
+          "platform": "azuredevops",
+          "repository": {
+            "url": {
+              "value": "https://dev.azure.com/org/project/_git/repo",
+              "constant": true
+            }
+          },
+          "match-any": [
+            {
+              "name": "azuredevops-web-app-tester-tag",
+              "rule": "eventType==git.pullrequest.created&&resource.labels.*.name=='ai-dlc/pr/web-app-test'&&resource.status=='active'"
+            },
+            {
+              "name": "azuredevops-web-app-tester-updated-tag",
+              "rule": "eventType==git.pullrequest.updated&&resource.labels.*.name=='ai-dlc/pr/web-app-test'&&resource.status=='active'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "pr-number",
+              "value": "resource.pullRequestId",
+              "mandatory": true
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "web-app-tester@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official",
+              "slash-command": "/test-web-app"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "AZURE-DEVOPS-TOKEN",
+              "value": "secrets.AZURE-DEVOPS-TOKEN",
+              "mandatory": true
+            },
+            {
+              "name": "ANTHROPIC-API-KEY",
+              "value": "secrets.ANTHROPIC-API-KEY",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 5.0,
+          "execute-prompt": "Pull request #{{pr-number}} requested web app testing. Run /test-web-app {{pr-number}}."
+        }
+      ]
+    },
+    "github": {
+      "requiredEnvs": [
+        "GITHUB-TOKEN",
+        "ANTHROPIC-API-KEY"
+      ],
+      "suggestedGitHubWebhookEvents": [
+        "pull_request",
+        "issues"
+      ],
+      "suggestedTriggers": [
+        "PR/Issue label ai-dlc/pr/web-app-test"
+      ],
+      "executions": [
+        {
+          "name": "github-web-app-tester",
+          "platform": "github",
+          "repository": {
+            "url": {
+              "value": "https://github.com/org/repo.git",
+              "constant": true
+            }
+          },
+          "match-any": [
+            {
+              "name": "github-web-app-tester-tag-applied",
+              "rule": "action==labeled&&label.name=='ai-dlc/pr/web-app-test'&&pull_request.state=='open'"
+            },
+            {
+              "name": "github-web-app-tester-opened-with-tag",
+              "rule": "action==opened&&pull_request.labels.*.name=='ai-dlc/pr/web-app-test'&&pull_request.state=='open'"
+            },
+            {
+              "name": "github-web-app-tester-synchronize-with-tag",
+              "rule": "action==synchronize&&pull_request.labels.*.name=='ai-dlc/pr/web-app-test'&&pull_request.state=='open'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "pr-number",
+              "value": "pull_request.number",
+              "mandatory": true
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "web-app-tester@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official",
+              "slash-command": "/test-web-app"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "GITHUB-TOKEN",
+              "value": "secrets.GITHUB-TOKEN",
+              "mandatory": true
+            },
+            {
+              "name": "ANTHROPIC-API-KEY",
+              "value": "secrets.ANTHROPIC-API-KEY",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 5.0,
+          "execute-prompt": "Pull request #{{pr-number}} requested web app testing. Run /test-web-app {{pr-number}}."
+        }
+      ]
+    }
+  },
+  "chat": {
+    "slashCommand": "/test-web-app",
+    "model": "claude-sonnet-4-5",
+    "max-budget-usd": 5.0
+  }
+}

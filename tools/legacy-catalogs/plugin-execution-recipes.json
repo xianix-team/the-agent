@@ -1,0 +1,2178 @@
+{
+  "schemaVersion": 1,
+  "marketplace": {
+    "repo": "xianix-team/plugins-official",
+    "marketplaceName": "xianix-plugins-official",
+    "defaultMarketplaceRef": "main"
+  },
+  "recipes": {
+    "pr-reviewer": {
+      "slashCommand": "/pr-review",
+      "platforms": {
+        "github": {
+          "requiredEnvs": [
+            "GITHUB-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedGitHubWebhookEvents": [
+            "pull_request",
+            "issue_comment"
+          ],
+          "suggestedTriggers": [
+            "PR label ai-dlc/pr/pr-review",
+            "PR comment mentioning @xianix"
+          ],
+          "executions": [
+            {
+              "name": "github-pull-request-review",
+              "platform": "github",
+              "repository": {
+                "url": {
+                  "value": "https://github.com/org/repo.git",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "github-pr-tag-applied",
+                  "rule": "action==labeled&&label.name=='ai-dlc/pr/pr-review'&&pull_request.state=='open'"
+                },
+                {
+                  "name": "github-pr-opened-with-tag",
+                  "rule": "action==opened&&pull_request.labels.*.name=='ai-dlc/pr/pr-review'&&pull_request.state=='open'"
+                },
+                {
+                  "name": "github-pr-synchronize-with-tag",
+                  "rule": "action==synchronize&&pull_request.labels.*.name=='ai-dlc/pr/pr-review'&&pull_request.state=='open'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "pr-number",
+                  "value": "pull_request.number",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "pr-reviewer@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "GITHUB-TOKEN",
+                  "value": "secrets.GITHUB-TOKEN",
+                  "mandatory": true
+                }
+              ],
+              "conversation-key": "pull_request.number",
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 3.0,
+              "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}}. Run /pr-review {{pr-number}} to perform the automated review."
+            },
+            {
+              "name": "github-pr-agent-comment-instruction",
+              "platform": "github",
+              "repository": {
+                "url": {
+                  "value": "https://github.com/org/repo.git",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "github-pr-agent-re-instruction-requested",
+                  "rule": "action==created&&comment.body*='@xianix'&&issue.pull_request?"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "pr-number",
+                  "value": "issue.number"
+                },
+                {
+                  "name": "user-instruction",
+                  "value": "comment.body"
+                },
+                {
+                  "name": "comment-author",
+                  "value": "comment.user.login"
+                },
+                {
+                  "name": "comment-id",
+                  "value": "comment.id"
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "pr-reviewer@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/pr-review"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "GITHUB-TOKEN",
+                  "value": "secrets.GITHUB-TOKEN",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "You are @xianix. {{comment-author}} mentioned @xianix in a comment on pull request #{{pr-number}}. The comment: \"{{user-instruction}}\"\n\nFirst, decide whether this comment is actually addressed to you. If not, do nothing. If yes, post a reply via the platform comment API and perform any requested action. Post at most one reply comment per invocation."
+            }
+          ]
+        },
+        "azuredevops": {
+          "requiredEnvs": [
+            "AZURE-DEVOPS-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedTriggers": [
+            "PR created / branch updated / agent as reviewer",
+            "PR comment mentioning @xianix"
+          ],
+          "executions": [
+            {
+              "name": "azuredevops-pull-request-review",
+              "platform": "azuredevops",
+              "repository": {
+                "url": {
+                  "value": "https://dev.azure.com/org/project/_git/repo",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "azuredevops-pr-created-with-tag",
+                  "rule": "eventType==git.pullrequest.created&&resource.status=='active'"
+                },
+                {
+                  "name": "azuredevops-pr-source-branch-updated-with-tag",
+                  "rule": "eventType==git.pullrequest.updated&&message.text*='updated the source branch'&&resource.status=='active'"
+                },
+                {
+                  "name": "azuredevops-pr-agent-added-as-reviewer",
+                  "rule": "eventType==git.pullrequest.updated&&message.text*='changed the reviewer list'&&resource.reviewers.*.uniqueName=='xianix-agent@99x.io'&&resource.status=='active'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "pr-number",
+                  "value": "resource.pullRequestId",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "pr-reviewer@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "AZURE-DEVOPS-TOKEN",
+                  "value": "secrets.AZURE-DEVOPS-TOKEN",
+                  "mandatory": true
+                }
+              ],
+              "conversation-key": "resource.pullRequestId",
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}}. Run /pr-review {{pr-number}} to perform the automated review."
+            },
+            {
+              "name": "azuredevops-pr-agent-comment-instruction",
+              "platform": "azuredevops",
+              "repository": {
+                "url": {
+                  "value": "https://dev.azure.com/org/project/_git/repo",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "azuredevops-pr-agent-re-review-requested",
+                  "rule": "eventType==ms.vss-code.git-pullrequest-comment-event&&resource.comment.commentType=='text'&&resource.comment.content*='@xianix'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "pr-number",
+                  "value": "resource.pullRequest.pullRequestId"
+                },
+                {
+                  "name": "user-instruction",
+                  "value": "resource.comment.content"
+                },
+                {
+                  "name": "comment-author",
+                  "value": "resource.comment.author.displayName"
+                },
+                {
+                  "name": "thread-id",
+                  "value": "resource.comment.parentCommentId"
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "pr-reviewer@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/pr-review"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "AZURE-DEVOPS-TOKEN",
+                  "value": "secrets.AZURE-DEVOPS-TOKEN",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "You are @xianix. {{comment-author}} mentioned @xianix in a comment on pull request #{{pr-number}}. The comment: \"{{user-instruction}}\"\n\nFirst, decide whether this comment is actually addressed to you. If not, do nothing. If yes, post a reply via the Azure DevOps REST API and perform any requested action. Post at most one reply comment per invocation."
+            }
+          ]
+        }
+      },
+      "chat": {
+        "slashCommand": "/pr-review",
+        "model": "claude-sonnet-4-5",
+        "max-budget-usd": 5.0
+      }
+    },
+    "req-analyst": {
+      "slashCommand": "/requirement-analysis",
+      "platforms": {
+        "github": {
+          "requiredEnvs": [
+            "GITHUB-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedGitHubWebhookEvents": [
+            "issues",
+            "issue_comment"
+          ],
+          "suggestedTriggers": [
+            "Issue label ai-dlc/issue/analyze",
+            "Issue comment mentioning @xianix"
+          ],
+          "executions": [
+            {
+              "name": "github-issue-requirement-analysis",
+              "platform": "github",
+              "repository": {
+                "url": {
+                  "value": "https://github.com/org/repo.git",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "github-issue-tag-applied",
+                  "rule": "action==labeled&&label.name=='ai-dlc/issue/analyze'"
+                },
+                {
+                  "name": "github-issue-opened-with-tag",
+                  "rule": "action==opened&&issue.labels.*.name=='ai-dlc/issue/analyze'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "issue-number",
+                  "value": "issue.number",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "req-analyst@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official"
+                }
+              ],
+              "model": "claude-haiku-4-5",
+              "execute-prompt": "Issue #{{issue-number}} in the repository {{repository-name}} has been assigned to xianix-agent for requirement analysis.\n\nRun /requirement-analysis {{issue-number}} to perform the automated requirement analysis and elaboration."
+            },
+            {
+              "name": "github-issue-agent-comment-instruction",
+              "platform": "github",
+              "repository": {
+                "url": {
+                  "value": "https://github.com/org/repo.git",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "github-issue-agent-re-instruction-requested",
+                  "rule": "action==created&&comment.body*='@xianix'&&issue.pull_request!?"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "issue-number",
+                  "value": "issue.number"
+                },
+                {
+                  "name": "user-instruction",
+                  "value": "comment.body"
+                },
+                {
+                  "name": "comment-author",
+                  "value": "comment.user.login"
+                },
+                {
+                  "name": "comment-id",
+                  "value": "comment.id"
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "req-analyst@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/requirement-analysis"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "GITHUB-TOKEN",
+                  "value": "secrets.GITHUB-TOKEN",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "You are @xianix. {{comment-author}} mentioned @xianix in a comment on issue #{{issue-number}}. The comment: \"{{user-instruction}}\"\n\nFirst, decide whether this comment is actually addressed to you. If not, do nothing. If yes, post a reply via the platform comment API and perform any requested action. Post at most one reply comment per invocation."
+            }
+          ]
+        },
+        "azuredevops": {
+          "requiredEnvs": [
+            "AZURE-DEVOPS-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedTriggers": [
+            "Work item assigned to xianix-agent"
+          ],
+          "executions": [
+            {
+              "name": "azuredevops-work-item-requirement-analysis",
+              "platform": "azuredevops",
+              "match-any": [
+                {
+                  "name": "azuredevops-workitem-assigned-to-agent",
+                  "rule": "eventType==workitem.updated&&resource.fields.\"System.AssignedTo\".newValue=='xianix-agent <xianix-agent@99x.io>'&&resource.revision.fields.\"System.State\"=='To Do'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "workitem-id",
+                  "value": "resource.workItemId"
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "req-analyst@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "AZURE-DEVOPS-TOKEN",
+                  "value": "secrets.AZURE-DEVOPS-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-MODEL",
+                  "value": "claude-haiku-4-5",
+                  "constant": true
+                }
+              ],
+              "execute-prompt": "Work item #{{workitem-id}} has been assigned to xianix-agent for requirement analysis.\n\nRun /requirement-analysis {{workitem-id}} to perform the automated requirement analysis and elaboration."
+            }
+          ]
+        }
+      },
+      "chat": {
+        "slashCommand": "/requirement-analysis",
+        "model": "claude-haiku-4-5",
+        "max-budget-usd": 3.0
+      }
+    },
+    "test-strategist": {
+      "slashCommand": "/test-strategy",
+      "platforms": {
+        "github": {
+          "requiredEnvs": [
+            "GITHUB-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedGitHubWebhookEvents": [
+            "pull_request"
+          ],
+          "suggestedTriggers": [
+            "PR label ai-dlc/pr/test-strategy"
+          ],
+          "executions": [
+            {
+              "name": "github-test-strategist",
+              "platform": "github",
+              "repository": {
+                "url": {
+                  "value": "https://github.com/org/repo.git",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "github-test-strategist-tag-applied",
+                  "rule": "action==labeled&&label.name=='ai-dlc/pr/test-strategy'&&pull_request.state=='open'"
+                },
+                {
+                  "name": "github-test-strategist-opened-with-tag",
+                  "rule": "action==opened&&pull_request.labels.*.name=='ai-dlc/pr/test-strategy'&&pull_request.state=='open'"
+                },
+                {
+                  "name": "github-test-strategist-synchronize-with-tag",
+                  "rule": "action==synchronize&&pull_request.labels.*.name=='ai-dlc/pr/test-strategy'&&pull_request.state=='open'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "pr-number",
+                  "value": "pull_request.number",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "test-strategist@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/test-strategy"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "GITHUB-TOKEN",
+                  "value": "secrets.GITHUB-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "You are generating a risk-based test strategy for pull request #{{pr-number}}.\n\nRun /test-strategy pr {{pr-number}} to generate the impact analysis and test strategy report."
+            }
+          ]
+        },
+        "azuredevops": {
+          "requiredEnvs": [
+            "AZURE-DEVOPS-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedTriggers": [
+            "PR tag ai-dlc/pr/test-strategy"
+          ],
+          "executions": [
+            {
+              "name": "azuredevops-test-strategist",
+              "platform": "azuredevops",
+              "repository": {
+                "url": {
+                  "value": "https://dev.azure.com/org/project/_git/repo",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "azuredevops-test-strategist-tag",
+                  "rule": "eventType==git.pullrequest.created&&resource.labels.*.name=='ai-dlc/pr/test-strategy'&&resource.status=='active'"
+                },
+                {
+                  "name": "azuredevops-test-strategist-updated-tag",
+                  "rule": "eventType==git.pullrequest.updated&&resource.labels.*.name=='ai-dlc/pr/test-strategy'&&resource.status=='active'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "pr-number",
+                  "value": "resource.pullRequestId",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "test-strategist@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/test-strategy"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "AZURE-DEVOPS-TOKEN",
+                  "value": "secrets.AZURE-DEVOPS-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "You are generating a risk-based test strategy for pull request #{{pr-number}}.\n\nRun /test-strategy pr {{pr-number}} to generate the impact analysis and test strategy report."
+            }
+          ]
+        }
+      },
+      "chat": {
+        "slashCommand": "/test-strategy",
+        "model": "claude-sonnet-4-5",
+        "max-budget-usd": 5.0
+      }
+    },
+    "dependency-optimizer": {
+      "slashCommand": "/dependency-optimizer",
+      "platforms": {
+        "github": {
+          "requiredEnvs": [
+            "GITHUB-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedTriggers": [
+            "Schedule cron 15 0 1,15 * *"
+          ],
+          "executions": [
+            {
+              "schedule": "github-dependency-optimizer-schedule",
+              "platform": "github",
+              "cron": "15 0 1,15 * *",
+              "with-envs": [
+                {
+                  "name": "GITHUB-TOKEN",
+                  "value": "secrets.GITHUB-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "executions": [
+                {
+                  "name": "github-dependency-optimizer",
+                  "platform": "github",
+                  "repository": {
+                    "url": {
+                      "value": "https://github.com/org/repo.git",
+                      "constant": true
+                    }
+                  },
+                  "use-plugins": [
+                    {
+                      "plugin-name": "dependency-optimizer@xianix-plugins-official",
+                      "marketplace": "xianix-team/plugins-official"
+                    }
+                  ],
+                  "model": "claude-sonnet-4-5",
+                  "max-budget-usd": 10.0,
+                  "execute-prompt": "You are xianix-agent assigned for dependency health optimization. Run /dependency-optimizer to scan manifests, verify licenses, and open a remediation pull request when safe."
+                }
+              ]
+            }
+          ]
+        },
+        "azuredevops": {
+          "requiredEnvs": [
+            "AZURE-DEVOPS-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedTriggers": [
+            "Schedule cron 15 0 1,15 * *"
+          ],
+          "executions": [
+            {
+              "schedule": "azuredevops-dependency-optimizer-schedule",
+              "platform": "azuredevops",
+              "cron": "15 0 1,15 * *",
+              "with-envs": [
+                {
+                  "name": "AZURE-DEVOPS-TOKEN",
+                  "value": "secrets.AZURE-DEVOPS-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "executions": [
+                {
+                  "name": "azuredevops-dependency-optimizer",
+                  "platform": "azuredevops",
+                  "repository": {
+                    "url": {
+                      "value": "https://dev.azure.com/org/project/_git/repo",
+                      "constant": true
+                    }
+                  },
+                  "use-plugins": [
+                    {
+                      "plugin-name": "dependency-optimizer@xianix-plugins-official",
+                      "marketplace": "xianix-team/plugins-official"
+                    }
+                  ],
+                  "model": "claude-sonnet-4-5",
+                  "max-budget-usd": 10.0,
+                  "execute-prompt": "You are xianix-agent assigned for dependency health optimization. Run /dependency-optimizer to scan manifests, verify licenses, and open a remediation pull request when safe."
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "chat": {
+        "slashCommand": "/dependency-optimizer",
+        "model": "claude-sonnet-4-5",
+        "max-budget-usd": 10.0
+      }
+    },
+    "doc-writer": {
+      "slashCommand": "/update-docs",
+      "platforms": {
+        "github": {
+          "requiredEnvs": [
+            "GITHUB-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedGitHubWebhookEvents": [
+            "pull_request"
+          ],
+          "suggestedTriggers": [
+            "PR label ai-dlc/update-docs"
+          ],
+          "executions": [
+            {
+              "name": "github-doc-writer",
+              "platform": "github",
+              "repository": {
+                "url": {
+                  "value": "https://github.com/org/repo.git",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "github-doc-writer-tag-applied",
+                  "rule": "action==labeled&&label.name=='ai-dlc/update-docs'&&pull_request.state=='open'"
+                },
+                {
+                  "name": "github-doc-writer-opened-with-tag",
+                  "rule": "action==opened&&pull_request.labels.*.name=='ai-dlc/update-docs'&&pull_request.state=='open'"
+                },
+                {
+                  "name": "github-doc-writer-synchronize-with-tag",
+                  "rule": "action==synchronize&&pull_request.labels.*.name=='ai-dlc/update-docs'&&pull_request.state=='open'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "pr-number",
+                  "value": "pull_request.number",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "doc-writer@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/update-docs"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "GITHUB-TOKEN",
+                  "value": "secrets.GITHUB-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Pull request #{{pr-number}} requested documentation updates. Run /update-docs {{pr-number}} to synchronize docs."
+            }
+          ]
+        },
+        "azuredevops": {
+          "requiredEnvs": [
+            "AZURE-DEVOPS-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedTriggers": [
+            "PR tag ai-dlc/update-docs"
+          ],
+          "executions": [
+            {
+              "name": "azuredevops-doc-writer",
+              "platform": "azuredevops",
+              "repository": {
+                "url": {
+                  "value": "https://dev.azure.com/org/project/_git/repo",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "azuredevops-doc-writer-tag",
+                  "rule": "eventType==git.pullrequest.created&&resource.labels.*.name=='ai-dlc/update-docs'&&resource.status=='active'"
+                },
+                {
+                  "name": "azuredevops-doc-writer-updated-tag",
+                  "rule": "eventType==git.pullrequest.updated&&resource.labels.*.name=='ai-dlc/update-docs'&&resource.status=='active'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "pr-number",
+                  "value": "resource.pullRequestId",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "doc-writer@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/update-docs"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "AZURE-DEVOPS-TOKEN",
+                  "value": "secrets.AZURE-DEVOPS-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Pull request #{{pr-number}} requested documentation updates. Run /update-docs {{pr-number}} to synchronize docs."
+            }
+          ]
+        }
+      },
+      "chat": {
+        "slashCommand": "/update-docs",
+        "model": "claude-sonnet-4-5",
+        "max-budget-usd": 5.0
+      }
+    },
+    "perf-optimizer": {
+      "slashCommand": "/perf-optimize",
+      "platforms": {
+        "github": {
+          "requiredEnvs": [
+            "GITHUB-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedGitHubWebhookEvents": [
+            "issues"
+          ],
+          "suggestedTriggers": [
+            "Issue label ai-dlc/perf/optimize"
+          ],
+          "executions": [
+            {
+              "name": "github-perf-optimizer",
+              "platform": "github",
+              "repository": {
+                "url": {
+                  "value": "https://github.com/org/repo.git",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "github-perf-optimizer-tag-applied",
+                  "rule": "action==labeled&&label.name=='ai-dlc/perf/optimize'"
+                },
+                {
+                  "name": "github-perf-optimizer-opened-with-tag",
+                  "rule": "action==opened&&issue.labels.*.name=='ai-dlc/perf/optimize'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "issue-number",
+                  "value": "issue.number",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "perf-optimizer@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/perf-optimize"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "GITHUB-TOKEN",
+                  "value": "secrets.GITHUB-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Issue #{{issue-number}} requested performance optimization. Run /perf-optimize {{issue-number}}."
+            }
+          ]
+        },
+        "azuredevops": {
+          "requiredEnvs": [
+            "AZURE-DEVOPS-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedTriggers": [
+            "Work item tag ai-dlc/perf/optimize"
+          ],
+          "executions": [
+            {
+              "name": "azuredevops-perf-optimizer",
+              "platform": "azuredevops",
+              "match-any": [
+                {
+                  "name": "azuredevops-perf-optimizer-tagged",
+                  "rule": "eventType==workitem.updated&&resource.revision.fields.\"System.Tags\"*='ai-dlc/perf/optimize'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "workitem-id",
+                  "value": "resource.workItemId"
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "perf-optimizer@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/perf-optimize"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "AZURE-DEVOPS-TOKEN",
+                  "value": "secrets.AZURE-DEVOPS-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Work item #{{workitem-id}} requested performance optimization. Run /perf-optimize {{workitem-id}}."
+            }
+          ]
+        }
+      },
+      "chat": {
+        "slashCommand": "/perf-optimize",
+        "model": "claude-sonnet-4-5",
+        "max-budget-usd": 5.0
+      }
+    },
+    "arch-fitness": {
+      "slashCommand": "/arch-fitness",
+      "platforms": {
+        "github": {
+          "requiredEnvs": [
+            "GITHUB-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedGitHubWebhookEvents": [
+            "issues"
+          ],
+          "suggestedTriggers": [
+            "Issue label ai-dlc/arch/fitness"
+          ],
+          "executions": [
+            {
+              "name": "github-arch-fitness",
+              "platform": "github",
+              "repository": {
+                "url": {
+                  "value": "https://github.com/org/repo.git",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "github-arch-fitness-tag-applied",
+                  "rule": "action==labeled&&label.name=='ai-dlc/arch/fitness'"
+                },
+                {
+                  "name": "github-arch-fitness-opened-with-tag",
+                  "rule": "action==opened&&issue.labels.*.name=='ai-dlc/arch/fitness'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "issue-number",
+                  "value": "issue.number",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "arch-fitness@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/arch-fitness"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "GITHUB-TOKEN",
+                  "value": "secrets.GITHUB-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Issue #{{issue-number}} requested architecture fitness review. Run /arch-fitness {{issue-number}}."
+            }
+          ]
+        },
+        "azuredevops": {
+          "requiredEnvs": [
+            "AZURE-DEVOPS-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedTriggers": [
+            "Work item tag ai-dlc/arch/fitness"
+          ],
+          "executions": [
+            {
+              "name": "azuredevops-arch-fitness",
+              "platform": "azuredevops",
+              "match-any": [
+                {
+                  "name": "azuredevops-arch-fitness-tagged",
+                  "rule": "eventType==workitem.updated&&resource.revision.fields.\"System.Tags\"*='ai-dlc/arch/fitness'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "workitem-id",
+                  "value": "resource.workItemId"
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "arch-fitness@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/arch-fitness"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "AZURE-DEVOPS-TOKEN",
+                  "value": "secrets.AZURE-DEVOPS-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Work item #{{workitem-id}} requested architecture fitness review. Run /arch-fitness {{workitem-id}}."
+            }
+          ]
+        }
+      },
+      "chat": {
+        "slashCommand": "/arch-fitness",
+        "model": "claude-sonnet-4-5",
+        "max-budget-usd": 5.0
+      }
+    },
+    "impact-analyst": {
+      "slashCommand": "/impact-analysis",
+      "platforms": {
+        "github": {
+          "requiredEnvs": [
+            "GITHUB-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedGitHubWebhookEvents": [
+            "pull_request"
+          ],
+          "suggestedTriggers": [
+            "PR label ai-dlc/impact/analyze"
+          ],
+          "executions": [
+            {
+              "name": "github-impact-analyst",
+              "platform": "github",
+              "repository": {
+                "url": {
+                  "value": "https://github.com/org/repo.git",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "github-impact-analyst-tag-applied",
+                  "rule": "action==labeled&&label.name=='ai-dlc/impact/analyze'&&pull_request.state=='open'"
+                },
+                {
+                  "name": "github-impact-analyst-opened-with-tag",
+                  "rule": "action==opened&&pull_request.labels.*.name=='ai-dlc/impact/analyze'&&pull_request.state=='open'"
+                },
+                {
+                  "name": "github-impact-analyst-synchronize-with-tag",
+                  "rule": "action==synchronize&&pull_request.labels.*.name=='ai-dlc/impact/analyze'&&pull_request.state=='open'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "pr-number",
+                  "value": "pull_request.number",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "impact-analyst@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/impact-analysis"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "GITHUB-TOKEN",
+                  "value": "secrets.GITHUB-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Pull request #{{pr-number}} requested impact analysis. Run /impact-analysis pr {{pr-number}}."
+            }
+          ]
+        },
+        "azuredevops": {
+          "requiredEnvs": [
+            "AZURE-DEVOPS-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedTriggers": [
+            "PR tag ai-dlc/impact/analyze"
+          ],
+          "executions": [
+            {
+              "name": "azuredevops-impact-analyst",
+              "platform": "azuredevops",
+              "repository": {
+                "url": {
+                  "value": "https://dev.azure.com/org/project/_git/repo",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "azuredevops-impact-analyst-tag",
+                  "rule": "eventType==git.pullrequest.created&&resource.labels.*.name=='ai-dlc/impact/analyze'&&resource.status=='active'"
+                },
+                {
+                  "name": "azuredevops-impact-analyst-updated-tag",
+                  "rule": "eventType==git.pullrequest.updated&&resource.labels.*.name=='ai-dlc/impact/analyze'&&resource.status=='active'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "pr-number",
+                  "value": "resource.pullRequestId",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "impact-analyst@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/impact-analysis"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "AZURE-DEVOPS-TOKEN",
+                  "value": "secrets.AZURE-DEVOPS-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Pull request #{{pr-number}} requested impact analysis. Run /impact-analysis pr {{pr-number}}."
+            }
+          ]
+        }
+      },
+      "chat": {
+        "slashCommand": "/impact-analysis",
+        "model": "claude-sonnet-4-5",
+        "max-budget-usd": 5.0
+      }
+    },
+    "pr-comment-resolver": {
+      "slashCommand": "/resolve-comments",
+      "platforms": {
+        "github": {
+          "requiredEnvs": [
+            "GITHUB-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedGitHubWebhookEvents": [
+            "pull_request"
+          ],
+          "suggestedTriggers": [
+            "PR label ai-dlc/pr/resolve-comments"
+          ],
+          "executions": [
+            {
+              "name": "github-pr-comment-resolver",
+              "platform": "github",
+              "repository": {
+                "url": {
+                  "value": "https://github.com/org/repo.git",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "github-pr-comment-resolver-tag-applied",
+                  "rule": "action==labeled&&label.name=='ai-dlc/pr/resolve-comments'&&pull_request.state=='open'"
+                },
+                {
+                  "name": "github-pr-comment-resolver-opened-with-tag",
+                  "rule": "action==opened&&pull_request.labels.*.name=='ai-dlc/pr/resolve-comments'&&pull_request.state=='open'"
+                },
+                {
+                  "name": "github-pr-comment-resolver-synchronize-with-tag",
+                  "rule": "action==synchronize&&pull_request.labels.*.name=='ai-dlc/pr/resolve-comments'&&pull_request.state=='open'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "pr-number",
+                  "value": "pull_request.number",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "pr-comment-resolver@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/resolve-comments"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "GITHUB-TOKEN",
+                  "value": "secrets.GITHUB-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Pull request #{{pr-number}} requested comment resolution. Run /resolve-comments {{pr-number}}."
+            }
+          ]
+        },
+        "azuredevops": {
+          "requiredEnvs": [
+            "AZURE-DEVOPS-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedTriggers": [
+            "PR tag ai-dlc/pr/resolve-comments"
+          ],
+          "executions": [
+            {
+              "name": "azuredevops-pr-comment-resolver",
+              "platform": "azuredevops",
+              "repository": {
+                "url": {
+                  "value": "https://dev.azure.com/org/project/_git/repo",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "azuredevops-pr-comment-resolver-tag",
+                  "rule": "eventType==git.pullrequest.created&&resource.labels.*.name=='ai-dlc/pr/resolve-comments'&&resource.status=='active'"
+                },
+                {
+                  "name": "azuredevops-pr-comment-resolver-updated-tag",
+                  "rule": "eventType==git.pullrequest.updated&&resource.labels.*.name=='ai-dlc/pr/resolve-comments'&&resource.status=='active'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "pr-number",
+                  "value": "resource.pullRequestId",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "pr-comment-resolver@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/resolve-comments"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "AZURE-DEVOPS-TOKEN",
+                  "value": "secrets.AZURE-DEVOPS-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Pull request #{{pr-number}} requested comment resolution. Run /resolve-comments {{pr-number}}."
+            }
+          ]
+        }
+      },
+      "chat": {
+        "slashCommand": "/resolve-comments",
+        "model": "claude-sonnet-4-5",
+        "max-budget-usd": 5.0
+      }
+    },
+    "pr-descriptor": {
+      "slashCommand": "/pr-describe",
+      "platforms": {
+        "github": {
+          "requiredEnvs": [
+            "GITHUB-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedGitHubWebhookEvents": [
+            "pull_request"
+          ],
+          "suggestedTriggers": [
+            "PR opened / synchronized / reopened"
+          ],
+          "executions": [
+            {
+              "name": "github-pr-descriptor",
+              "platform": "github",
+              "repository": {
+                "url": {
+                  "value": "https://github.com/org/repo.git",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "github-pr-descriptor-opened",
+                  "rule": "action==opened&&pull_request.state=='open'"
+                },
+                {
+                  "name": "github-pr-descriptor-synchronize",
+                  "rule": "action==synchronize&&pull_request.state=='open'"
+                },
+                {
+                  "name": "github-pr-descriptor-reopened",
+                  "rule": "action==reopened&&pull_request.state=='open'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "pr-number",
+                  "value": "pull_request.number",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "pr-descriptor@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/pr-describe"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "GITHUB-TOKEN",
+                  "value": "secrets.GITHUB-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Pull request #{{pr-number}} needs an updated description. Run /pr-describe {{pr-number}}."
+            }
+          ]
+        },
+        "azuredevops": {
+          "requiredEnvs": [
+            "AZURE-DEVOPS-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedTriggers": [
+            "PR created / source branch updated"
+          ],
+          "executions": [
+            {
+              "name": "azuredevops-pr-descriptor",
+              "platform": "azuredevops",
+              "repository": {
+                "url": {
+                  "value": "https://dev.azure.com/org/project/_git/repo",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "azuredevops-pr-descriptor-created",
+                  "rule": "eventType==git.pullrequest.created&&resource.status=='active'"
+                },
+                {
+                  "name": "azuredevops-pr-descriptor-updated",
+                  "rule": "eventType==git.pullrequest.updated&&message.text*='updated the source branch'&&resource.status=='active'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "pr-number",
+                  "value": "resource.pullRequestId",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "pr-descriptor@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/pr-describe"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "AZURE-DEVOPS-TOKEN",
+                  "value": "secrets.AZURE-DEVOPS-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Pull request #{{pr-number}} needs an updated description. Run /pr-describe {{pr-number}}."
+            }
+          ]
+        }
+      },
+      "chat": {
+        "slashCommand": "/pr-describe",
+        "model": "claude-sonnet-4-5",
+        "max-budget-usd": 5.0
+      }
+    },
+    "release-note-maintainer": {
+      "slashCommand": "/release-notes",
+      "platforms": {
+        "github": {
+          "requiredEnvs": [
+            "GITHUB-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedGitHubWebhookEvents": [
+            "create",
+            "push"
+          ],
+          "suggestedTriggers": [
+            "Git tag created"
+          ],
+          "executions": [
+            {
+              "name": "github-release-note-maintainer",
+              "platform": "github",
+              "repository": {
+                "url": {
+                  "value": "https://github.com/org/repo.git",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "github-release-note-maintainer-tag",
+                  "rule": "ref_type=='tag'"
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "release-note-maintainer@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/release-notes"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "GITHUB-TOKEN",
+                  "value": "secrets.GITHUB-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "A new git tag was published. Run /release-notes to generate structured release notes."
+            }
+          ]
+        },
+        "azuredevops": {
+          "requiredEnvs": [
+            "AZURE-DEVOPS-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedTriggers": [
+            "Git tag push"
+          ],
+          "executions": [
+            {
+              "name": "azuredevops-release-note-maintainer",
+              "platform": "azuredevops",
+              "repository": {
+                "url": {
+                  "value": "https://dev.azure.com/org/project/_git/repo",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "azuredevops-release-note-maintainer-tag",
+                  "rule": "eventType==git.push&&resource.refUpdates.*.name*='refs/tags/'"
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "release-note-maintainer@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/release-notes"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "AZURE-DEVOPS-TOKEN",
+                  "value": "secrets.AZURE-DEVOPS-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "A new git tag was published. Run /release-notes to generate structured release notes."
+            }
+          ]
+        }
+      },
+      "chat": {
+        "slashCommand": "/release-notes",
+        "model": "claude-sonnet-4-5",
+        "max-budget-usd": 5.0
+      }
+    },
+    "web-app-tester": {
+      "slashCommand": "/test-web-app",
+      "platforms": {
+        "github": {
+          "requiredEnvs": [
+            "GITHUB-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedGitHubWebhookEvents": [
+            "pull_request"
+          ],
+          "suggestedTriggers": [
+            "PR label ai-dlc/pr/web-app-test"
+          ],
+          "executions": [
+            {
+              "name": "github-web-app-tester",
+              "platform": "github",
+              "repository": {
+                "url": {
+                  "value": "https://github.com/org/repo.git",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "github-web-app-tester-tag-applied",
+                  "rule": "action==labeled&&label.name=='ai-dlc/pr/web-app-test'&&pull_request.state=='open'"
+                },
+                {
+                  "name": "github-web-app-tester-opened-with-tag",
+                  "rule": "action==opened&&pull_request.labels.*.name=='ai-dlc/pr/web-app-test'&&pull_request.state=='open'"
+                },
+                {
+                  "name": "github-web-app-tester-synchronize-with-tag",
+                  "rule": "action==synchronize&&pull_request.labels.*.name=='ai-dlc/pr/web-app-test'&&pull_request.state=='open'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "pr-number",
+                  "value": "pull_request.number",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "web-app-tester@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/test-web-app"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "GITHUB-TOKEN",
+                  "value": "secrets.GITHUB-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Pull request #{{pr-number}} requested web app testing. Run /test-web-app {{pr-number}}."
+            }
+          ]
+        },
+        "azuredevops": {
+          "requiredEnvs": [
+            "AZURE-DEVOPS-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedTriggers": [
+            "PR tag ai-dlc/pr/web-app-test"
+          ],
+          "executions": [
+            {
+              "name": "azuredevops-web-app-tester",
+              "platform": "azuredevops",
+              "repository": {
+                "url": {
+                  "value": "https://dev.azure.com/org/project/_git/repo",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "azuredevops-web-app-tester-tag",
+                  "rule": "eventType==git.pullrequest.created&&resource.labels.*.name=='ai-dlc/pr/web-app-test'&&resource.status=='active'"
+                },
+                {
+                  "name": "azuredevops-web-app-tester-updated-tag",
+                  "rule": "eventType==git.pullrequest.updated&&resource.labels.*.name=='ai-dlc/pr/web-app-test'&&resource.status=='active'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "pr-number",
+                  "value": "resource.pullRequestId",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "web-app-tester@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/test-web-app"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "AZURE-DEVOPS-TOKEN",
+                  "value": "secrets.AZURE-DEVOPS-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Pull request #{{pr-number}} requested web app testing. Run /test-web-app {{pr-number}}."
+            }
+          ]
+        }
+      },
+      "chat": {
+        "slashCommand": "/test-web-app",
+        "model": "claude-sonnet-4-5",
+        "max-budget-usd": 5.0
+      }
+    },
+    "chatbot-tester": {
+      "slashCommand": "/test-chatbot",
+      "platforms": {
+        "github": {
+          "requiredEnvs": [
+            "GITHUB-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedGitHubWebhookEvents": [
+            "issues"
+          ],
+          "suggestedTriggers": [
+            "Issue label ai-dlc/issue/chatbot-test"
+          ],
+          "executions": [
+            {
+              "name": "github-chatbot-tester",
+              "platform": "github",
+              "repository": {
+                "url": {
+                  "value": "https://github.com/org/repo.git",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "github-chatbot-tester-tag-applied",
+                  "rule": "action==labeled&&label.name=='ai-dlc/issue/chatbot-test'"
+                },
+                {
+                  "name": "github-chatbot-tester-opened-with-tag",
+                  "rule": "action==opened&&issue.labels.*.name=='ai-dlc/issue/chatbot-test'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "issue-number",
+                  "value": "issue.number",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "chatbot-tester@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/test-chatbot"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "GITHUB-TOKEN",
+                  "value": "secrets.GITHUB-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Issue #{{issue-number}} requested chatbot testing. Run /test-chatbot {{issue-number}}."
+            }
+          ]
+        },
+        "azuredevops": {
+          "requiredEnvs": [
+            "AZURE-DEVOPS-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedTriggers": [
+            "Work item tag ai-dlc/issue/chatbot-test"
+          ],
+          "executions": [
+            {
+              "name": "azuredevops-chatbot-tester",
+              "platform": "azuredevops",
+              "match-any": [
+                {
+                  "name": "azuredevops-chatbot-tester-tagged",
+                  "rule": "eventType==workitem.updated&&resource.revision.fields.\"System.Tags\"*='ai-dlc/issue/chatbot-test'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "workitem-id",
+                  "value": "resource.workItemId"
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "chatbot-tester@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/test-chatbot"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "AZURE-DEVOPS-TOKEN",
+                  "value": "secrets.AZURE-DEVOPS-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Work item #{{workitem-id}} requested chatbot testing. Run /test-chatbot {{workitem-id}}."
+            }
+          ]
+        }
+      },
+      "chat": {
+        "slashCommand": "/test-chatbot",
+        "model": "claude-sonnet-4-5",
+        "max-budget-usd": 5.0
+      }
+    },
+    "pentest-agent": {
+      "slashCommand": "/pentest",
+      "platforms": {
+        "github": {
+          "requiredEnvs": [
+            "GITHUB-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedGitHubWebhookEvents": [
+            "issues"
+          ],
+          "suggestedTriggers": [
+            "Issue label ai-dlc/security/pentest"
+          ],
+          "executions": [
+            {
+              "name": "github-pentest-agent",
+              "platform": "github",
+              "repository": {
+                "url": {
+                  "value": "https://github.com/org/repo.git",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "github-pentest-agent-tag-applied",
+                  "rule": "action==labeled&&label.name=='ai-dlc/security/pentest'"
+                },
+                {
+                  "name": "github-pentest-agent-opened-with-tag",
+                  "rule": "action==opened&&issue.labels.*.name=='ai-dlc/security/pentest'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "issue-number",
+                  "value": "issue.number",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "pentest-agent@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/pentest"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "GITHUB-TOKEN",
+                  "value": "secrets.GITHUB-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Issue #{{issue-number}} authorized a pentest. Run /pentest --authorized for the target described in the issue."
+            }
+          ]
+        },
+        "azuredevops": {
+          "requiredEnvs": [
+            "AZURE-DEVOPS-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedTriggers": [
+            "Work item tag ai-dlc/security/pentest"
+          ],
+          "executions": [
+            {
+              "name": "azuredevops-pentest-agent",
+              "platform": "azuredevops",
+              "match-any": [
+                {
+                  "name": "azuredevops-pentest-agent-tagged",
+                  "rule": "eventType==workitem.updated&&resource.revision.fields.\"System.Tags\"*='ai-dlc/security/pentest'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "workitem-id",
+                  "value": "resource.workItemId"
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "pentest-agent@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/pentest"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "AZURE-DEVOPS-TOKEN",
+                  "value": "secrets.AZURE-DEVOPS-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Work item #{{workitem-id}} authorized a pentest. Run /pentest --authorized for the target described in the work item."
+            }
+          ]
+        }
+      },
+      "chat": {
+        "slashCommand": "/pentest",
+        "model": "claude-sonnet-4-5",
+        "max-budget-usd": 5.0
+      }
+    },
+    "infra-scanner": {
+      "slashCommand": "/infra-scan",
+      "platforms": {
+        "github": {
+          "requiredEnvs": [
+            "GITHUB-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedGitHubWebhookEvents": [
+            "issues"
+          ],
+          "suggestedTriggers": [
+            "Issue label ai-dlc/security/infra-scan"
+          ],
+          "executions": [
+            {
+              "name": "github-infra-scanner",
+              "platform": "github",
+              "repository": {
+                "url": {
+                  "value": "https://github.com/org/repo.git",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "github-infra-scanner-tag-applied",
+                  "rule": "action==labeled&&label.name=='ai-dlc/security/infra-scan'"
+                },
+                {
+                  "name": "github-infra-scanner-opened-with-tag",
+                  "rule": "action==opened&&issue.labels.*.name=='ai-dlc/security/infra-scan'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "issue-number",
+                  "value": "issue.number",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "infra-scanner@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/infra-scan"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "GITHUB-TOKEN",
+                  "value": "secrets.GITHUB-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Issue #{{issue-number}} authorized infrastructure scanning. Run /infra-scan --authorized."
+            }
+          ]
+        },
+        "azuredevops": {
+          "requiredEnvs": [
+            "AZURE-DEVOPS-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedTriggers": [
+            "Work item tag ai-dlc/security/infra-scan"
+          ],
+          "executions": [
+            {
+              "name": "azuredevops-infra-scanner",
+              "platform": "azuredevops",
+              "match-any": [
+                {
+                  "name": "azuredevops-infra-scanner-tagged",
+                  "rule": "eventType==workitem.updated&&resource.revision.fields.\"System.Tags\"*='ai-dlc/security/infra-scan'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "workitem-id",
+                  "value": "resource.workItemId"
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "infra-scanner@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/infra-scan"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "AZURE-DEVOPS-TOKEN",
+                  "value": "secrets.AZURE-DEVOPS-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Work item #{{workitem-id}} authorized infrastructure scanning. Run /infra-scan --authorized."
+            }
+          ]
+        }
+      },
+      "chat": {
+        "slashCommand": "/infra-scan",
+        "model": "claude-sonnet-4-5",
+        "max-budget-usd": 5.0
+      }
+    },
+    "ux-mob-process": {
+      "slashCommand": "/ux-start",
+      "platforms": {
+        "github": {
+          "requiredEnvs": [
+            "GITHUB-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedGitHubWebhookEvents": [
+            "issues"
+          ],
+          "suggestedTriggers": [
+            "Issue label ai-dlc/ux/start"
+          ],
+          "executions": [
+            {
+              "name": "github-ux-mob-process",
+              "platform": "github",
+              "repository": {
+                "url": {
+                  "value": "https://github.com/org/repo.git",
+                  "constant": true
+                }
+              },
+              "match-any": [
+                {
+                  "name": "github-ux-mob-process-tag-applied",
+                  "rule": "action==labeled&&label.name=='ai-dlc/ux/start'"
+                },
+                {
+                  "name": "github-ux-mob-process-opened-with-tag",
+                  "rule": "action==opened&&issue.labels.*.name=='ai-dlc/ux/start'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "issue-number",
+                  "value": "issue.number",
+                  "mandatory": true
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "ux-mob-process@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/ux-start"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "GITHUB-TOKEN",
+                  "value": "secrets.GITHUB-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Issue #{{issue-number}} started a UX mob process. Run /ux-start and follow human-gated phases."
+            }
+          ]
+        },
+        "azuredevops": {
+          "requiredEnvs": [
+            "AZURE-DEVOPS-TOKEN",
+            "ANTHROPIC-API-KEY"
+          ],
+          "suggestedTriggers": [
+            "Work item tag ai-dlc/ux/start"
+          ],
+          "executions": [
+            {
+              "name": "azuredevops-ux-mob-process",
+              "platform": "azuredevops",
+              "match-any": [
+                {
+                  "name": "azuredevops-ux-mob-process-tagged",
+                  "rule": "eventType==workitem.updated&&resource.revision.fields.\"System.Tags\"*='ai-dlc/ux/start'"
+                }
+              ],
+              "use-inputs": [
+                {
+                  "name": "workitem-id",
+                  "value": "resource.workItemId"
+                }
+              ],
+              "use-plugins": [
+                {
+                  "plugin-name": "ux-mob-process@xianix-plugins-official",
+                  "marketplace": "xianix-team/plugins-official",
+                  "slash-command": "/ux-start"
+                }
+              ],
+              "with-envs": [
+                {
+                  "name": "AZURE-DEVOPS-TOKEN",
+                  "value": "secrets.AZURE-DEVOPS-TOKEN",
+                  "mandatory": true
+                },
+                {
+                  "name": "ANTHROPIC-API-KEY",
+                  "value": "secrets.ANTHROPIC-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "model": "claude-sonnet-4-5",
+              "max-budget-usd": 5.0,
+              "execute-prompt": "Work item #{{workitem-id}} started a UX mob process. Run /ux-start and follow human-gated phases."
+            }
+          ]
+        }
+      },
+      "chat": {
+        "slashCommand": "/ux-start",
+        "model": "claude-sonnet-4-5",
+        "max-budget-usd": 5.0
+      }
+    }
+  }
+}

@@ -26,7 +26,7 @@ public class XianixAgent(
         var xiansAgent = await CreateAndRegisterAgentAsync(cancellationToken);
 
         logger.LogDebug("Uploading knowledge resources.");
-        await UploadKnowledgeAsync(xiansAgent);
+        await UploadKnowledgeAsync(xiansAgent, logger);
 
         ConfigureCustomWorkflows(xiansAgent);
         ConfigureWebhookWorkflow(xiansAgent, cancellationToken);
@@ -70,7 +70,8 @@ public class XianixAgent(
             EnvConfig.AnthropicDeploymentName,
             supervisorLogger,
             supervisorToolsLogger,
-            loggerFactory);
+            onboardingToolsLogger: loggerFactory?.CreateLogger<OnboardingSubagentTools>(),
+            loggerFactory: loggerFactory);
 
         conversationWorkflow.OnUserChatMessage(async (context) =>
         {
@@ -190,6 +191,26 @@ public class XianixAgent(
                     return;
                 }
 
+                // GitHub sends a "ping" when a hook is created or when we trigger
+                // POST …/hooks/{id}/pings. Acknowledge it without running rules — that keeps
+                // GitHub's last_response green and lets onboarding report "connection established".
+                if (WebhookHeaderHelpers.TryGetHeaderValue(context.Metadata, "X-GitHub-Event", out var ghEvent)
+                    && string.Equals(ghEvent, "ping", StringComparison.OrdinalIgnoreCase))
+                {
+                    logger.LogInformation(
+                        "Acknowledged GitHub webhook ping for '{WebhookName}', tenant='{TenantId}', requestId='{RequestId}'.",
+                        context.Webhook.Name,
+                        context.Webhook.TenantId,
+                        context.Webhook.RequestId);
+                    context.Respond(new
+                    {
+                        status = "success",
+                        eventType = "ping",
+                        message = "GitHub webhook ping acknowledged.",
+                    });
+                    return;
+                }
+
                 var batch = await orchestrator.OrchestrateAsync(
                     context.Webhook.Name,
                     context.Webhook.Payload,
@@ -262,19 +283,73 @@ public class XianixAgent(
         return xiansAgent;
     }
 
-    private static async Task UploadKnowledgeAsync(XiansAgent xiansAgent)
+    private static async Task UploadKnowledgeAsync(XiansAgent xiansAgent, ILogger logger)
     {
+        // SYSTEM SCOPE ONLY (Studio: System). These seeds must never be written at
+        // tenant/organization or agent/activation scope from startup.
+        // Runtime plugin installs go through SaveRules / InstallPlugins → agent scope.
+        await xiansAgent.Knowledge.UploadEmbeddedResourceAsync(
+            resourcePath: "Knowledge/system-prompt.md",
+            knowledgeName: Constants.SystemPromptKnowledgeName,
+            knowledgeType: "markdown"
+        );
+
+        await xiansAgent.Knowledge.UploadEmbeddedResourceAsync(
+            resourcePath: "Knowledge/rules-optimizer-system-prompt.md",
+            knowledgeName: Constants.OnboardingSystemPromptKnowledgeName,
+            knowledgeType: "markdown"
+        );
+
+        // Empty Rules seed at system scope. Plugin installs must NOT edit this document —
+        // they create/update agent-scoped (activation) Knowledge "Rules" via SaveRules /
+        // InstallPlugins so Studio shows updates under Agent, not System.
         await xiansAgent.Knowledge.UploadEmbeddedResourceAsync(
             resourcePath: "Knowledge/rules.json",
             knowledgeName: Constants.RulesKnowledgeName,
             knowledgeType: "json"
         );
 
-        await xiansAgent.Knowledge.UploadEmbeddedResourceAsync(
-            resourcePath: "Knowledge/system-prompt.md",
-            knowledgeName: Constants.SystemPromptKnowledgeName,
-            knowledgeType: "markdown"
-        );
+        // Studio resolution is Agent → Organization → System. Stale Organization overrides
+        // (created via "Override to Organization") keep System marked Overridden even after
+        // we re-upload system seeds. Clear those org copies so System becomes Active again.
+        await ClearOrganizationSeedOverridesAsync(logger).ConfigureAwait(false);
+    }
+
+    private static async Task ClearOrganizationSeedOverridesAsync(ILogger logger)
+    {
+        var adminKey = EnvConfig.XiansAdminApiKey;
+        if (string.IsNullOrWhiteSpace(adminKey))
+            return;
+
+        var tenantId = "default";
+        var agentName = EnvConfig.AgentName;
+        if (string.IsNullOrWhiteSpace(agentName))
+            return;
+
+        var platform = new OnboardingPlatformClient();
+        try
+        {
+            await platform.ClearOrganizationScopedSeedOverridesAsync(
+                    tenantId,
+                    agentName,
+                    [
+                        Constants.SystemPromptKnowledgeName,
+                        Constants.OnboardingSystemPromptKnowledgeName,
+                        Constants.RulesKnowledgeName,
+                    ])
+                .ConfigureAwait(false);
+
+            logger.LogInformation(
+                "Cleared Organization-scope seed overrides for agent '{Agent}' (System Prompt, Rules Optimizer System Prompt, Rules) so Studio shows System as Active.",
+                agentName);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Could not clear Organization-scope seed overrides for agent '{Agent}'. System seeds were still uploaded; delete org overrides in Studio if System stays Overridden.",
+                agentName);
+        }
     }
 
     private void LogWebhookVerificationFailure(

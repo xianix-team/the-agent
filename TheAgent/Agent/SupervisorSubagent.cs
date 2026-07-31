@@ -4,6 +4,7 @@ using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.RegularExpressions;
 using Xianix;
 using Xianix.Workflows;
 using Xians.Lib.Agents.Core;
@@ -25,6 +26,25 @@ namespace Xianix.Agent;
 /// </summary>
 public sealed class SupervisorSubagent
 {
+    /// <summary>
+    /// Replaces a reply that claims plugins were installed when no tool actually read them
+    /// back from activation Knowledge this turn. Without this the model can narrate a
+    /// successful install it never performed, leaving rules.json short a plugin.
+    /// </summary>
+    internal const string UnverifiedInstallClaimFallback =
+        "I could not confirm this change in rules.json, so I won't report it as complete. " +
+        "Ask me to install the plugin again and I will run the install and re-read " +
+        "rules.json before telling you the result.";
+
+    internal const string UnverifiedScmConnectionClaimFallback =
+        "I cannot confirm the SCM webhook connection. For GitHub, registration+ping must succeed " +
+        "first. For Azure DevOps, I only provide the webhook URL — create Service Hooks in " +
+        "Project settings yourself; I do not validate that step.";
+
+    internal const string RulesOptimizerRedirect =
+        "Agent setup runs in a separate guided chat. " +
+        "[Open Rules Optimizer](?topic=project-onboarding), then send your setup request there.";
+
     /// <summary>
     /// User-facing reply we surface when the model finishes a turn without producing
     /// any text content (typically because it ended on a tool call or chose to stay
@@ -76,6 +96,7 @@ public sealed class SupervisorSubagent
     private readonly XiansChatHistoryProvider _historyProvider;
     private readonly ILogger<SupervisorSubagent> _logger;
     private readonly ILogger<SupervisorSubagentTools> _toolsLogger;
+    private readonly ILogger<OnboardingSubagentTools> _onboardingToolsLogger;
     private readonly string _modelName;
 
     // Per-tenant caches. Each tenant gets its own AIAgent (and underlying
@@ -105,6 +126,7 @@ public sealed class SupervisorSubagent
         string modelName,
         ILogger<SupervisorSubagent>? logger = null,
         ILogger<SupervisorSubagentTools>? toolsLogger = null,
+        ILogger<OnboardingSubagentTools>? onboardingToolsLogger = null,
         ILoggerFactory? loggerFactory = null)
     {
         ArgumentNullException.ThrowIfNull(anthropicApiKeyResolver);
@@ -113,6 +135,7 @@ public sealed class SupervisorSubagent
         _apiKeyResolver = anthropicApiKeyResolver;
         _logger = logger ?? NullLogger<SupervisorSubagent>.Instance;
         _toolsLogger = toolsLogger ?? NullLogger<SupervisorSubagentTools>.Instance;
+        _onboardingToolsLogger = onboardingToolsLogger ?? NullLogger<OnboardingSubagentTools>.Instance;
         _modelName = modelName;
 
         var historyLogger = loggerFactory?.CreateLogger<XiansChatHistoryProvider>();
@@ -186,6 +209,18 @@ public sealed class SupervisorSubagent
         if (string.IsNullOrWhiteSpace(context.Message.Text))
             return "I didn't receive any message. Please send a message.";
 
+        var isOnboarding = IsProjectOnboardingScope(context.Message.Scope);
+        if (!isOnboarding && IsRulesSetupRequest(context.Message.Text))
+        {
+            _logger.LogInformation(
+                "Redirecting rules setup request from scope '{Scope}' to Rules Optimizer. " +
+                "Tenant={TenantId}, Participant={ParticipantId}.",
+                context.Message.Scope ?? "(general)",
+                context.Message.TenantId,
+                context.Message.ParticipantId);
+            return RulesOptimizerRedirect;
+        }
+
         // Resolve the agent (and its API key) lazily inside the workflow context so
         // the rules.json knowledge document and the tenant's Xians Secret Vault are
         // both reachable. The cache is keyed by tenant ID — see EnsureAgentForTenantAsync
@@ -193,8 +228,9 @@ public sealed class SupervisorSubagent
         var agent = await EnsureAgentForTenantAsync(
             context.Message.TenantId, cancellationToken).ConfigureAwait(false);
 
-        var baseInstructions = await GetSystemPromptAsync().ConfigureAwait(false);
-        var tools = new SupervisorSubagentTools(context, _toolsLogger);
+        var baseInstructions = await GetSystemPromptAsync(isOnboarding).ConfigureAwait(false);
+        var supervisorTools = isOnboarding ? null : new SupervisorSubagentTools(context, _toolsLogger);
+        var onboardingTools = isOnboarding ? new OnboardingSubagentTools(context, _onboardingToolsLogger) : null;
 
         // Anthropic (especially Haiku) sometimes deterministically returns a turn with
         // zero content blocks for a given (history, system prompt, message, tools) tuple.
@@ -230,15 +266,31 @@ public sealed class SupervisorSubagent
             var runOptions = new ChatClientAgentRunOptions(new ChatOptions
             {
                 Instructions = attempt.Instructions,
-                Tools =
-                [
-                    AIFunctionFactory.Create(tools.GetCurrentDateTime),
-                    AIFunctionFactory.Create(tools.ListTenantRepositories),
-                    AIFunctionFactory.Create(tools.ListAvailablePlugins),
-                    AIFunctionFactory.Create(tools.OnboardRepository),
-                    AIFunctionFactory.Create(tools.OffboardRepository),
-                    AIFunctionFactory.Create(tools.RunClaudeCodeOnRepository),
-                ],
+                Tools = isOnboarding
+                    ?
+                    [
+                        AIFunctionFactory.Create(onboardingTools!.LoadRulesOptimizerSkill),
+                        AIFunctionFactory.Create(onboardingTools.GetCurrentDateTime),
+                        AIFunctionFactory.Create(onboardingTools.CheckTenantSecretExists),
+                        AIFunctionFactory.Create(onboardingTools.CreateWebhookConnection),
+                        AIFunctionFactory.Create(onboardingTools.RegisterGitHubRepositoryWebhook),
+                        AIFunctionFactory.Create(onboardingTools.GetCurrentRules),
+                        AIFunctionFactory.Create(onboardingTools.ListAvailablePlugins),
+                        AIFunctionFactory.Create(onboardingTools.MaterializePluginRules),
+                        AIFunctionFactory.Create(onboardingTools.InstallPlugins),
+                        AIFunctionFactory.Create(onboardingTools.VerifyInstalledPlugins),
+                        AIFunctionFactory.Create(onboardingTools.ValidateRulesJson),
+                        AIFunctionFactory.Create(onboardingTools.SaveRules),
+                    ]
+                    :
+                    [
+                        AIFunctionFactory.Create(supervisorTools!.GetCurrentDateTime),
+                        AIFunctionFactory.Create(supervisorTools.ListTenantRepositories),
+                        AIFunctionFactory.Create(supervisorTools.ListAvailablePlugins),
+                        AIFunctionFactory.Create(supervisorTools.OnboardRepository),
+                        AIFunctionFactory.Create(supervisorTools.OffboardRepository),
+                        AIFunctionFactory.Create(supervisorTools.RunClaudeCodeOnRepository),
+                    ],
             });
 
             lastResponse = await agent
@@ -263,6 +315,39 @@ public sealed class SupervisorSubagent
                         context.Message.TenantId, context.Message.ParticipantId,
                         lastResponse.ResponseId);
                 }
+                if (isOnboarding
+                    && ClaimsPluginsInstalled(text)
+                    && onboardingTools!.VerifiedInstalledShortNames.Count == 0)
+                {
+                    _logger.LogError(
+                        "Blocked unverified install claim in Rules Optimizer reply — no InstallPlugins / " +
+                        "VerifyInstalledPlugins read plugins back from Knowledge this turn. " +
+                        "Tenant={TenantId}, Participant={ParticipantId}, Reply={Reply}.",
+                        context.Message.TenantId,
+                        context.Message.ParticipantId,
+                        Truncate(text, 400));
+
+                    await ReportTurnAsync(succeeded: true, attemptsMade: i + 1).ConfigureAwait(false);
+                    return UnverifiedInstallClaimFallback;
+                }
+
+                if (isOnboarding
+                    && ClaimsScmConnectionEstablished(text)
+                    && !onboardingTools!.VerifiedScmConnectionEstablished)
+                {
+                    _logger.LogError(
+                        "Blocked unverified SCM connection claim in Rules Optimizer reply — " +
+                        "RegisterGitHubRepositoryWebhook did not return established this turn " +
+                        "(Azure DevOps Service Hooks are always manual). " +
+                        "Tenant={TenantId}, Participant={ParticipantId}, Reply={Reply}.",
+                        context.Message.TenantId,
+                        context.Message.ParticipantId,
+                        Truncate(text, 400));
+
+                    await ReportTurnAsync(succeeded: true, attemptsMade: i + 1).ConfigureAwait(false);
+                    return UnverifiedScmConnectionClaimFallback;
+                }
+
                 await ReportTurnAsync(succeeded: true, attemptsMade: i + 1).ConfigureAwait(false);
                 return text;
             }
@@ -388,11 +473,142 @@ public sealed class SupervisorSubagent
             : string.Join(", ", counts.Select(kv => $"{kv.Key}={kv.Value}"));
     }
 
-    private static async Task<string> GetSystemPromptAsync()
+    private static bool IsProjectOnboardingScope(string? scope) =>
+        string.Equals(scope, Constants.ProjectOnboardingScope, StringComparison.OrdinalIgnoreCase);
+
+    internal static bool IsRulesSetupRequest(string text)
     {
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        if (text.Contains("rules optimizer", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("rules.json", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // "set up AI agents for your repository" / "configure automations" — leave general chat.
+        if (Regex.IsMatch(
+                text,
+                @"\b(set\s*up|setup|stup|configur\w*|install\w*|enable\w*)\b.{0,80}\b("
+                + @"ai\s+agents?|agents?|automations?|pr\s+reviews?|issue\s+analysis|"
+                + @"xianix)\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline))
+        {
+            return true;
+        }
+
+        var hasSetupAction = Regex.IsMatch(
+            text,
+            @"\b(set\s*up|setup|stup|configur\w*|install\w*|uninstall\w*|edit\w*|updat\w*|modif\w*|chang\w*|remov\w*|add\w*|creat\w*)\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!hasSetupAction)
+            return false;
+
+        return Regex.IsMatch(
+            text,
+            @"\b(rules?|plugins?|webhooks?|secrets?|env(?:ironment)?\s+var(?:iable)?s?|trigger\s+(?:labels?|tags?))\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    /// <summary>
+    /// True when the reply asserts an install/save already succeeded. Kept deliberately narrow so
+    /// wording like "no plugins installed yet" or "I'll install it next" is not treated as a claim.
+    /// </summary>
+    internal static bool ClaimsPluginsInstalled(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        return Regex.IsMatch(
+            text,
+            @"\b(?:(?:is|are|was|were|has\s+been|have\s+been|successfully|now)\s+"
+            + @"(?:installed|saved|added)|installed\s+and\s+saved|saved\s+to\s+rules\.json)\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    /// <summary>
+    /// True when the reply asserts an SCM webhook connection was established. Narrow enough that
+    /// "not established" / "manual — paste into Service Hooks" wording is not treated as a claim.
+    /// </summary>
+    internal static bool ClaimsScmConnectionEstablished(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        if (Regex.IsMatch(
+                text,
+                @"\b(?:not\s+established|manual\b.{0,40}service\s+hooks?)\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline))
+        {
+            return false;
+        }
+
+        return Regex.IsMatch(
+            text,
+            @"\b(?:azure\s*devops|ado|github|scm|webhook)\b.{0,80}\b(?:connection|webhook)\b.{0,40}\b(?:established|connected)\b"
+            + @"|\b(?:connection|ping)\b.{0,40}\bsucceeded\b"
+            + @"|\bping\s+succeeded\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline);
+    }
+
+    private static async Task<string> GetSystemPromptAsync(bool forOnboarding)
+    {
+        // Prefer the embedded onboarding prompt so local prompt edits apply on restart
+        // without depending on a stale Knowledge document from a previous upload.
+        if (forOnboarding)
+        {
+            var embedded = TryLoadEmbeddedOnboardingPrompt();
+            if (!string.IsNullOrWhiteSpace(embedded))
+            {
+                var index = RulesOptimizerSkillCatalog.FormatIndex();
+                return embedded
+                    + Environment.NewLine
+                    + Environment.NewLine
+                    + "## Embedded skill index"
+                    + Environment.NewLine
+                    + index;
+            }
+        }
+
+        var knowledgeName = forOnboarding
+            ? Constants.OnboardingSystemPromptKnowledgeName
+            : Constants.SystemPromptKnowledgeName;
+
         var prompt = await XiansContext.CurrentAgent.Knowledge
-            .GetAsync(Constants.SystemPromptKnowledgeName)
+            .GetAsync(knowledgeName)
             .ConfigureAwait(false);
-        return prompt?.Content ?? "You are a helpful assistant.";
+
+        if (!string.IsNullOrWhiteSpace(prompt?.Content))
+            return prompt.Content;
+
+        if (forOnboarding)
+        {
+            return
+                "You are the Rules Optimizer agent. On any greeting, do not call tools. " +
+                "Reply briefly: set up the project in a few steps, then ask Step 1 — Platform " +
+                "(GitHub / Azure DevOps / Both). No menus. No existing-rules summaries.";
+        }
+
+        return "You are a helpful assistant.";
+    }
+
+    private static string? TryLoadEmbeddedOnboardingPrompt()
+    {
+        var asm = typeof(SupervisorSubagent).Assembly;
+        foreach (var name in asm.GetManifestResourceNames())
+        {
+            if (!name.EndsWith("rules-optimizer-system-prompt.md", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            using var stream = asm.GetManifestResourceStream(name);
+            if (stream is null)
+                return null;
+
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        }
+
+        return null;
     }
 }
