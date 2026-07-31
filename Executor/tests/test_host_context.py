@@ -140,5 +140,48 @@ class PluginCommandTests(unittest.TestCase):
         self.assertEqual(twice.count(HOST_CONTEXT_MARKER), 1)
 
 
+class ProvisionedRuntimesTests(unittest.TestCase):
+    def test_runtimes_line_rendered_alongside_platform(self) -> None:
+        inputs = json.dumps({"platform": "github"})
+        result = prepend_host_context(
+            "Write unit tests.", inputs, runtimes="dotnet 9.0; node 22.11.0")
+
+        self.assertTrue(result.startswith(HOST_CONTEXT_MARKER))
+        self.assertIn("platform: github", result)
+        self.assertIn(
+            "provisioned runtimes (already installed and on PATH): dotnet 9.0; node 22.11.0",
+            result,
+        )
+        self.assertTrue(result.endswith("Write unit tests."))
+
+    def test_runtimes_alone_still_prepend_block(self) -> None:
+        result = prepend_host_context("Build it.", "{}", runtimes="dotnet 9.0")
+
+        self.assertTrue(result.startswith(HOST_CONTEXT_MARKER))
+        self.assertNotIn("platform:", result)
+        self.assertIn("provisioned runtimes", result)
+        self.assertTrue(result.endswith("Build it."))
+
+    def test_blank_runtimes_do_not_trigger_block(self) -> None:
+        original = "Summarize the repo."
+        self.assertEqual(prepend_host_context(original, "{}", runtimes="  "), original)
+        self.assertEqual(prepend_host_context(original, "{}", runtimes=None), original)
+
+    def test_idempotent_with_runtimes(self) -> None:
+        once = prepend_host_context("Review PR #18", "{}", runtimes="dotnet 9.0")
+        twice = prepend_host_context(once, "{}", runtimes="dotnet 9.0")
+        self.assertEqual(once, twice)
+        self.assertEqual(twice.count(HOST_CONTEXT_MARKER), 1)
+
+    def test_runtimes_precede_plugin_commands_with_separator(self) -> None:
+        plugins = [{"plugin-name": "unit-tester", "slash-command": "/write-tests"}]
+        result = prepend_host_context(
+            "Go.", "{}", plugins, runtimes="dotnet 9.0")
+
+        runtimes_pos = result.index("provisioned runtimes")
+        commands_pos = result.index("Available plugin commands")
+        self.assertLess(runtimes_pos, commands_pos)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

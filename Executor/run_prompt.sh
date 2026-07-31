@@ -178,6 +178,21 @@ if [ -n "${CLAUDE_CODE_PLUGINS:-}" ] && [ "${CLAUDE_CODE_PLUGINS}" != "[]" ]; th
     fi
 fi
 
+# ── Provision plugin-declared runtimes ───────────────────────────────────────
+# Plugins declare build/test runtimes (dotnet, node, ...) in an xianix-runtimes.json
+# manifest at their root. provision_runtimes.sh installs missing ones onto the
+# shared runtime volume (or the per-repo fallback) and writes export lines to an
+# ephemeral env file; sourcing it puts the runtimes on PATH for the Claude Code
+# subprocess below. Best-effort — a provisioning failure never fails the run.
+_runtime_env_file="/tmp/xianix-runtime-env-${EXECUTION_ID}.sh"
+"${SCRIPT_DIR}/provision_runtimes.sh" "${_runtime_env_file}" \
+    || log "WARNING: runtime provisioning failed — continuing without extra runtimes."
+if [ -s "${_runtime_env_file}" ]; then
+    # shellcheck disable=SC1090
+    source "${_runtime_env_file}"
+    log "Runtime environment applied: $(grep -c '^export ' "${_runtime_env_file}") export(s)."
+fi
+
 # ── Prepare cached repo context (CLAUDE.md + symbol map) ─────────────────────
 # Deterministic, token-free orientation cached on the volume and injected into the worktree
 # so the agent doesn't re-explore the codebase from scratch. Best-effort: never fails the run.

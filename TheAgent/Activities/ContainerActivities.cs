@@ -93,6 +93,66 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
         return volumeName;
     }
 
+    /// <summary>
+    /// Creates the shared per-tenant runtime volume if it does not already exist.
+    /// The volume holds user-space runtime installs (dotnet SDKs, alternate node versions,
+    /// package caches, ...) that plugins declare via <c>xianix-runtimes.json</c> manifests.
+    /// It is mounted at <c>/workspace/runtimes</c> on every executor container of the tenant,
+    /// so one SDK download serves every repository and every plugin of that tenant.
+    ///
+    /// Labelled <c>xianix.role=runtimes</c> and deliberately NOT labelled
+    /// <c>xianix.repository</c>, so <see cref="ListTenantRepositoriesAsync"/> and per-repo
+    /// offboarding ignore it. It is removed only when the tenant's last repository is
+    /// offboarded (see <c>TenantVolumeReader.DeleteAsync</c>).
+    /// </summary>
+    [Activity]
+    public async Task<string> EnsureRuntimeVolumeAsync(string tenantId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+
+        var volumeName = BuildRuntimeVolumeName(tenantId);
+        var logger = ActivityExecutionContext.Current.Logger;
+
+        try
+        {
+            await _docker.Volumes.InspectAsync(volumeName);
+            logger.LogDebug("Runtime volume '{VolumeName}' already exists.", volumeName);
+            return volumeName;
+        }
+        catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // Volume does not exist yet — fall through to create.
+        }
+        catch (DockerApiException ex)
+        {
+            logger.LogError(ex, "Docker API error while inspecting runtime volume '{VolumeName}'.", volumeName);
+            throw;
+        }
+
+        try
+        {
+            await _docker.Volumes.CreateAsync(new VolumesCreateParameters
+            {
+                Name   = volumeName,
+                Labels = new Dictionary<string, string>
+                {
+                    ["xianix.tenant"]  = tenantId,
+                    ["xianix.managed"] = "true",
+                    ["xianix.role"]    = "runtimes",
+                },
+            });
+            logger.LogInformation(
+                "Created runtime volume '{VolumeName}' for tenant={TenantId}.", volumeName, tenantId);
+        }
+        catch (DockerApiException ex)
+        {
+            logger.LogError(ex, "Docker API error while ensuring runtime volume '{VolumeName}'.", volumeName);
+            throw;
+        }
+
+        return volumeName;
+    }
+
     private static Dictionary<string, string> BuildVolumeLabels(string tenantId, string? repositoryUrl)
     {
         var labels = new Dictionary<string, string>
@@ -220,6 +280,13 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
 
         var env = await BuildEnvVarsAsync(input);
 
+        // The shared runtime volume is optional: when the workflow didn't ensure one
+        // (e.g. older histories mid-flight during a deploy) the executor falls back to a
+        // per-repo runtime cache under /workspace/repo/xianix-runtimes.
+        var binds = new List<string> { $"{input.VolumeName}:/workspace/repo" };
+        if (!string.IsNullOrWhiteSpace(input.RuntimeVolumeName))
+            binds.Add($"{input.RuntimeVolumeName}:/workspace/runtimes");
+
         var containerParams = new CreateContainerParameters
         {
             Image = image,
@@ -231,7 +298,7 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
             },
             HostConfig = new HostConfig
             {
-                Binds       = [$"{input.VolumeName}:/workspace/repo"],
+                Binds       = binds,
                 Memory      = EnvConfig.ContainerMemoryBytes,
                 NanoCPUs    = (long)(EnvConfig.ContainerCpuCount * 1_000_000_000),
                 PidsLimit   = 256,
@@ -535,6 +602,14 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
     {
         var safeTenant = SanitizeTenantId(tenantId);
         return $"xianix-{safeTenant}-ephemeral";
+    }
+
+    // No collision with BuildVolumeName: repo suffixes are 12 lowercase hex chars,
+    // never the literal "runtimes" (and "ephemeral" is likewise safe).
+    private static string BuildRuntimeVolumeName(string tenantId)
+    {
+        var safeTenant = SanitizeTenantId(tenantId);
+        return $"xianix-{safeTenant}-runtimes";
     }
 
     private static string SanitizeTenantId(string tenantId) =>

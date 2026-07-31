@@ -487,7 +487,14 @@ async def main() -> None:
     # runs (comment instructions, etc.) pick the right host APIs. Env alone is easy to miss.
     # Passing the plugins along also lists their slash commands in the preamble so a
     # free-form prompt that never names the command doesn't leave Claude Code guessing.
-    prompt = prepend_host_context(prompt, os.environ.get("XIANIX_INPUTS"), plugins)
+    # XIANIX_PROVISIONED_RUNTIMES (set by provision_runtimes.sh) is surfaced too, so the
+    # agent knows plugin-declared runtimes (dotnet, node, ...) are already on PATH.
+    prompt = prepend_host_context(
+        prompt,
+        os.environ.get("XIANIX_INPUTS"),
+        plugins,
+        os.environ.get("XIANIX_PROVISIONED_RUNTIMES"),
+    )
 
     # ── Cost-control levers (all optional; injected by the control plane) ─────
     # Primary model: XIANIX_MODEL (first-class rules.json `model`) wins, then a raw

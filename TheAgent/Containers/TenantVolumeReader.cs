@@ -80,6 +80,7 @@ public static class TenantVolumeReader
         try
         {
             await docker.Volumes.RemoveAsync(target.Name, force: false, cancellationToken);
+            await TryRemoveRuntimeVolumeIfLastRepoAsync(docker, tenantId, cancellationToken);
             return DeleteVolumeResult.Deleted;
         }
         catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Conflict)
@@ -90,6 +91,47 @@ public static class TenantVolumeReader
         {
             // Removed between our list and the delete call — treat as success.
             return DeleteVolumeResult.Deleted;
+        }
+    }
+
+    /// <summary>
+    /// Removes the tenant's shared runtime volume (labelled <c>xianix.role=runtimes</c>,
+    /// created by <c>ContainerActivities.EnsureRuntimeVolumeAsync</c>) once no repository
+    /// volumes remain for the tenant. The runtime cache is tenant-scoped, not repo-scoped,
+    /// so it must survive individual repo offboarding but not the last one.
+    ///
+    /// Best-effort by design: a failure (e.g. a concurrently running container still
+    /// mounting it) never fails the repo offboarding that triggered it — the volume is
+    /// simply recreated/reused on the tenant's next run, or reaped on a later offboard.
+    /// </summary>
+    private static async Task TryRemoveRuntimeVolumeIfLastRepoAsync(
+        IDockerClient docker, string tenantId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var volumes = await docker.Volumes.ListAsync(cancellationToken);
+            var all = volumes.Volumes ?? Enumerable.Empty<VolumeResponse>();
+
+            var tenantHasRepos = all.Any(v =>
+                v.Labels != null
+                && v.Labels.TryGetValue("xianix.tenant",     out var t) && t == tenantId
+                && v.Labels.TryGetValue("xianix.repository", out var r) && !string.IsNullOrWhiteSpace(r));
+            if (tenantHasRepos)
+                return;
+
+            var runtimeVolume = all.FirstOrDefault(v =>
+                v.Labels != null
+                && v.Labels.TryGetValue("xianix.tenant",  out var t) && t == tenantId
+                && v.Labels.TryGetValue("xianix.role",    out var role) && role == "runtimes"
+                && v.Labels.TryGetValue("xianix.managed", out var m) && m == "true");
+            if (runtimeVolume is null)
+                return;
+
+            await docker.Volumes.RemoveAsync(runtimeVolume.Name, force: false, cancellationToken);
+        }
+        catch (DockerApiException)
+        {
+            // In use or already gone — leave it; see summary.
         }
     }
 }

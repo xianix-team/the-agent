@@ -81,11 +81,13 @@ def build_host_context_block(
     platform: str,
     repository_name: str = "",
     command_lines: list[str] | None = None,
+    runtimes: str = "",
 ) -> str:
-    """Build the preamble block from a platform hint and/or plugin command list.
+    """Build the preamble block from a platform hint, plugin command list, and/or runtimes.
 
-    At least one of ``platform`` or ``command_lines`` should be non-empty; callers use
-    :func:`prepend_host_context` which only builds the block when there's something to say.
+    At least one of ``platform``, ``command_lines``, or ``runtimes`` should be non-empty;
+    callers use :func:`prepend_host_context` which only builds the block when there's
+    something to say.
     """
     lines = [HOST_CONTEXT_MARKER]
 
@@ -94,8 +96,13 @@ def build_host_context_block(
         if repository_name:
             lines.append(f"repository-name: {repository_name}")
 
+    if runtimes:
+        lines.append(
+            f"provisioned runtimes (already installed and on PATH): {runtimes}"
+        )
+
     if command_lines:
-        if platform:
+        if platform or runtimes:
             lines.append("")
         lines.append(_PLUGIN_COMMANDS_INTRO)
         lines.extend(command_lines)
@@ -110,13 +117,18 @@ def prepend_host_context(
     prompt: str,
     inputs_raw: str | None,
     plugins: list[dict] | None = None,
+    runtimes: str | None = None,
 ) -> str:
-    """Prepend host context when there's a platform and/or plugin commands to surface.
+    """Prepend host context when there's a platform, plugin commands, or runtimes to surface.
 
-    Returns ``prompt`` unchanged when neither a ``platform`` (in ``XIANIX_INPUTS``) nor any
-    plugin ``slash-command`` is available. Idempotent: if ``prompt`` already starts with the
-    host-context marker, return it as-is. Does not invent a platform when the key is absent
-    or empty.
+    ``runtimes`` is the human-readable summary exported by ``provision_runtimes.sh``
+    (``XIANIX_PROVISIONED_RUNTIMES``, e.g. ``dotnet 9.0; node 22.11.0``) — surfacing it
+    tells the agent those tools are already on PATH so it doesn't waste turns probing
+    or trying to install them.
+
+    Returns ``prompt`` unchanged when there is nothing to surface. Idempotent: if
+    ``prompt`` already starts with the host-context marker, return it as-is. Does not
+    invent a platform when the key is absent or empty.
     """
     if not prompt:
         return prompt
@@ -128,9 +140,10 @@ def prepend_host_context(
     inputs = parse_inputs(inputs_raw)
     platform = str(inputs.get("platform") or "").strip()
     command_lines = plugin_command_lines(plugins)
+    runtimes_str = str(runtimes or "").strip()
 
-    if not platform and not command_lines:
+    if not platform and not command_lines and not runtimes_str:
         return prompt
 
     repo_name = str(inputs.get("repository-name") or "").strip()
-    return build_host_context_block(platform, repo_name, command_lines) + prompt
+    return build_host_context_block(platform, repo_name, command_lines, runtimes_str) + prompt

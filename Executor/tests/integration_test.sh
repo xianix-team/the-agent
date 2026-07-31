@@ -26,9 +26,16 @@
 #     4. A bad repository URL produces the structured prepare error envelope.
 #     5. Worktree is created from the default branch (HEAD); plugins resolve
 #        any task-specific refs from the prompt themselves.
+#     6. Runtime provisioner: plugin manifests are collected, cached runtimes
+#        are reused without reinstalling, env exports are emitted, and invalid /
+#        unsupported entries are rejected (fully hermetic — pre-seeded cache).
+#
+#   Tier R (needs XIANIX_IT_RUNTIMES=1; downloads a real .NET SDK, ~200MB):
+#     7. Live dotnet provisioning onto a runtime volume; a second run on the
+#        same volume must hit the cache instead of re-downloading.
 #
 #   Tier 2 (needs ANTHROPIC_API_KEY, costs ~$0.01, skipped when the key is absent):
-#     6. A full prepare-and-execute run where Claude Code must read a planted
+#     8. A full prepare-and-execute run where Claude Code must read a planted
 #        secret token from the repo and return it in the result envelope.
 #
 # HOW TO RUN
@@ -105,9 +112,10 @@ STDERR_FILE="${WORK_ROOT}/last-stderr"
 # cloned repo and hide the failure we want to provoke).
 VOLUME_MAIN="xianix-it-main-$$"
 VOLUME_BADURL="xianix-it-badurl-$$"
+VOLUME_RUNTIMES="xianix-it-runtimes-$$"
 
 cleanup() {
-    docker volume rm -f "${VOLUME_MAIN}" "${VOLUME_BADURL}" >/dev/null 2>&1 || true
+    docker volume rm -f "${VOLUME_MAIN}" "${VOLUME_BADURL}" "${VOLUME_RUNTIMES}" >/dev/null 2>&1 || true
     rm -rf "${WORK_ROOT}"
 }
 trap cleanup EXIT
@@ -383,10 +391,188 @@ test_worktree_uses_default_branch() {
     fi
 }
 
+# ── Tier 1 (cont.): runtime provisioner — hermetic, no network ────────────────
+
+# Writes a fixture "installed plugin" (manifest only) plus a fake `claude` CLI
+# shim that reports it, so provision_runtimes.sh can be exercised end to end
+# without installing real plugins. The runtime cache is pre-seeded with ok
+# markers, so no SDK download happens — this tier stays free and offline.
+create_runtime_fixture() {
+    local plugin_dir="${FIXTURE_MOUNT_DIR}/fake-plugin"
+    mkdir -p "${plugin_dir}"
+    cat > "${plugin_dir}/xianix-runtimes.json" <<'EOF'
+{
+  "runtimes": [
+    { "name": "dotnet", "version": "9.0" },
+    { "name": "node",   "version": "22.11.0" },
+    { "name": "ruby",   "version": "3.3" },
+    { "name": "dotnet", "version": "../evil" }
+  ]
+}
+EOF
+
+    cat > "${FIXTURE_MOUNT_DIR}/claude-shim.sh" <<'EOF'
+#!/usr/bin/env bash
+# Minimal stand-in for the Claude CLI: only `plugin list --json` is used by
+# provision_runtimes.sh.
+if [ "${1:-}" = "plugin" ] && [ "${2:-}" = "list" ]; then
+    echo '[{"id":"fake-plugin@test","installPath":"/fixtures/fake-plugin"}]'
+fi
+exit 0
+EOF
+    chmod +x "${FIXTURE_MOUNT_DIR}/claude-shim.sh"
+}
+
+test_runtime_provisioner_hermetic() {
+    banner "Test 6: runtime provisioner — manifests, cache hits, env exports (hermetic)"
+    create_runtime_fixture
+
+    : > "${STDOUT_FILE}"; : > "${STDERR_FILE}"
+    set +e
+    docker run --rm \
+        -v "${FIXTURE_MOUNT_DIR}:/fixtures:ro" \
+        -v "${VOLUME_RUNTIMES}:/workspace/runtimes" \
+        --entrypoint bash "${IMAGE}" -c '
+            set -e
+            mkdir -p /tmp/bin
+            cp /fixtures/claude-shim.sh /tmp/bin/claude
+            export PATH="/tmp/bin:${PATH}"
+
+            # Pre-seed the cache so both providers take the cache-hit path.
+            mkdir -p /workspace/runtimes/dotnet /workspace/runtimes/node-22.11.0/bin
+            touch /workspace/runtimes/dotnet/.xianix-ok-9.0
+            touch /workspace/runtimes/node-22.11.0/.xianix-ok
+
+            /workspace/provision_runtimes.sh /tmp/runtime-env.sh
+            echo "── env file ──"
+            cat /tmp/runtime-env.sh
+            ls /workspace/runtimes/.meta/ | sed "s/^/meta: /"
+        ' >"${STDOUT_FILE}" 2>"${STDERR_FILE}"
+    LAST_EXIT=$?
+    set -e
+
+    if [ "${LAST_EXIT}" -eq 0 ]; then
+        t_pass "provisioner run exited 0"
+    else
+        t_fail "provisioner run exited ${LAST_EXIT}"
+        sed 's/^/  │ /' "${STDERR_FILE}" | tail -n 30
+        return
+    fi
+
+    if grep -q 'export DOTNET_ROOT="/workspace/runtimes/dotnet"' "${STDOUT_FILE}" \
+        && grep -q 'export NUGET_PACKAGES="/workspace/runtimes/cache/nuget"' "${STDOUT_FILE}"; then
+        t_pass "dotnet env exports emitted (DOTNET_ROOT, NUGET_PACKAGES)"
+    else
+        t_fail "missing dotnet env exports: $(grep '^export' "${STDOUT_FILE}" | tr '\n' ' ')"
+    fi
+
+    if grep -q 'export PATH="/workspace/runtimes/node-22.11.0/bin:\${PATH}"' "${STDOUT_FILE}"; then
+        t_pass "node PATH export emitted"
+    else
+        t_fail "missing node PATH export"
+    fi
+
+    if grep -q 'export XIANIX_PROVISIONED_RUNTIMES="dotnet 9.0; node 22.11.0"' "${STDOUT_FILE}"; then
+        t_pass "provisioned-runtimes summary export emitted"
+    else
+        t_fail "missing/incorrect XIANIX_PROVISIONED_RUNTIMES export"
+    fi
+
+    if grep -q "dotnet 9.0 already provisioned (cache hit)" "${STDERR_FILE}" \
+        && grep -q "node 22.11.0 already provisioned (cache hit)" "${STDERR_FILE}"; then
+        t_pass "both runtimes took the cache-hit path (no downloads)"
+    else
+        t_fail "expected cache-hit log lines for dotnet and node"
+    fi
+
+    if grep -q "unsupported runtime 'ruby'" "${STDERR_FILE}"; then
+        t_pass "unsupported runtime name was rejected"
+    else
+        t_fail "expected a warning for the unsupported 'ruby' runtime"
+    fi
+
+    if grep -q "invalid version '../evil'" "${STDERR_FILE}"; then
+        t_pass "path-traversal version string was rejected"
+    else
+        t_fail "expected a warning for the invalid '../evil' version"
+    fi
+
+    if grep -q "meta: dotnet-9.0.last-used" "${STDOUT_FILE}" \
+        && grep -q "meta: node-22.11.0.last-used" "${STDOUT_FILE}"; then
+        t_pass "last-used markers written for pruning"
+    else
+        t_fail "missing .meta last-used markers"
+    fi
+}
+
+# ── Tier R: live dotnet provisioning (needs network, ~200MB download) ─────────
+
+test_runtime_dotnet_live() {
+    banner "Test 7: live dotnet provisioning + cache reuse (XIANIX_IT_RUNTIMES=1)"
+
+    if [ "${XIANIX_IT_RUNTIMES:-0}" != "1" ]; then
+        t_skip "XIANIX_IT_RUNTIMES is not set — skipping the live .NET SDK download test."
+        return
+    fi
+
+    local live_volume="xianix-it-rt-live-$$"
+    # Live manifest: dotnet only (the hermetic fixture manifest also asks for
+    # node/ruby, which we don't want to download here).
+    local run_cmd='
+        set -e
+        mkdir -p /tmp/bin /tmp/live-plugin
+        echo "{ \"runtimes\": [ { \"name\": \"dotnet\", \"version\": \"9.0\" } ] }" > /tmp/live-plugin/xianix-runtimes.json
+        cat > /tmp/bin/claude <<"SHIM"
+#!/usr/bin/env bash
+if [ "${1:-}" = "plugin" ] && [ "${2:-}" = "list" ]; then
+    echo "[{\"id\":\"live-plugin@test\",\"installPath\":\"/tmp/live-plugin\"}]"
+fi
+exit 0
+SHIM
+        chmod +x /tmp/bin/claude
+        export PATH="/tmp/bin:${PATH}"
+        /workspace/provision_runtimes.sh /tmp/runtime-env.sh
+        source /tmp/runtime-env.sh
+        dotnet --list-sdks
+    '
+
+    : > "${STDERR_FILE}"
+    set +e
+    docker run --rm \
+        -v "${live_volume}:/workspace/runtimes" \
+        --entrypoint bash "${IMAGE}" -c "${run_cmd}" >"${STDOUT_FILE}" 2>"${STDERR_FILE}"
+    LAST_EXIT=$?
+    set -e
+
+    if [ "${LAST_EXIT}" -eq 0 ] && grep -qE '^9\.[0-9]+' "${STDOUT_FILE}"; then
+        t_pass "first run installed dotnet 9 and 'dotnet --list-sdks' works"
+    else
+        t_fail "first live run failed (exit ${LAST_EXIT}): $(tail -n 5 "${STDERR_FILE}" | tr '\n' ' ')"
+        docker volume rm -f "${live_volume}" >/dev/null 2>&1 || true
+        return
+    fi
+
+    : > "${STDERR_FILE}"
+    set +e
+    docker run --rm \
+        -v "${live_volume}:/workspace/runtimes" \
+        --entrypoint bash "${IMAGE}" -c "${run_cmd}" >"${STDOUT_FILE}" 2>"${STDERR_FILE}"
+    LAST_EXIT=$?
+    set -e
+
+    if [ "${LAST_EXIT}" -eq 0 ] && grep -q "dotnet 9.0 already provisioned (cache hit)" "${STDERR_FILE}"; then
+        t_pass "second run on the same volume hit the cache (no re-download)"
+    else
+        t_fail "second live run did not hit the cache (exit ${LAST_EXIT})"
+    fi
+
+    docker volume rm -f "${live_volume}" >/dev/null 2>&1 || true
+}
+
 # ── Tier 2: real Claude Code run (needs ANTHROPIC_API_KEY) ────────────────────
 
 test_claude_reads_planted_secret() {
-    banner "Test 6: Claude Code reads the planted secret token from the repo"
+    banner "Test 8: Claude Code reads the planted secret token from the repo"
 
     if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
         t_skip "ANTHROPIC_API_KEY is not set — skipping the live Claude Code test."
@@ -485,6 +671,8 @@ test_prepare_reuses_clone
 test_new_commit_is_picked_up
 test_bad_url_error_envelope
 test_worktree_uses_default_branch
+test_runtime_provisioner_hermetic
+test_runtime_dotnet_live
 test_claude_reads_planted_secret
 
 banner "Results"

@@ -22,6 +22,8 @@ REPO_DIR="${1:-/workspace/repo}"
 # Retention knobs (host-overridable). Days.
 SESSION_RETENTION_DAYS="${XIANIX_SESSION_RETENTION_DAYS:-30}"
 PLUGIN_CACHE_MAX_AGE_DAYS="${XIANIX_PLUGIN_CACHE_MAX_AGE_DAYS:-7}"
+RUNTIME_MAX_AGE_DAYS="${XIANIX_RUNTIME_MAX_AGE_DAYS:-30}"
+NUGET_CACHE_MAX_MB="${XIANIX_NUGET_CACHE_MAX_MB:-4096}"
 
 if [ ! -d "${REPO_DIR}" ]; then
     log "repo dir '${REPO_DIR}' missing — nothing to maintain."
@@ -67,5 +69,66 @@ if [ -d "${cache_root}" ]; then
         done
     done < <(find "${cache_root}" -mindepth 2 -maxdepth 2 -type d 2>/dev/null)
 fi
+
+# ── 4. Runtime cache: prune runtimes nobody has used in a while ──────────────
+# provision_runtimes.sh touches .meta/<name>-<version>.last-used on every run
+# that requests a runtime; anything whose marker goes stale for the retention
+# window is reaped. Runs against both possible cache roots: the shared runtime
+# volume and the per-repo fallback. The provisioning flock is taken non-blocking
+# so pruning never races a concurrent install — if an install is in flight we
+# simply skip maintenance this round.
+prune_runtime_root() {
+    local root="$1"
+    [ -d "${root}/.meta" ] || return 0
+
+    (
+        flock -n 9 || { log "runtime cache at '${root}' busy (install in flight) — skipping prune."; exit 0; }
+
+        # node-<version> dirs are self-contained: reap dir + marker together.
+        local marker version dir
+        while IFS= read -r marker; do
+            [ -f "${marker}" ] || continue
+            version="$(basename "${marker}")"
+            version="${version#node-}"; version="${version%.last-used}"
+            dir="${root}/node-${version}"
+            rm -rf "${dir}" 2>/dev/null
+            rm -f "${marker}" 2>/dev/null
+            log "Removed stale runtime: node ${version} (unused for ${RUNTIME_MAX_AGE_DAYS}d)."
+        done < <(find "${root}/.meta" -maxdepth 1 -type f -name 'node-*.last-used' \
+                     -mtime +"${RUNTIME_MAX_AGE_DAYS}" 2>/dev/null)
+
+        # dotnet SDK versions share one root (the muxer hosts them side by side),
+        # so a single version can't be carved out safely. Reap the whole root only
+        # once EVERY dotnet last-used marker is stale.
+        if [ -d "${root}/dotnet" ]; then
+            local total fresh
+            total=$(find "${root}/.meta" -maxdepth 1 -type f -name 'dotnet-*.last-used' 2>/dev/null | wc -l)
+            fresh=$(find "${root}/.meta" -maxdepth 1 -type f -name 'dotnet-*.last-used' \
+                        -mtime -"${RUNTIME_MAX_AGE_DAYS}" 2>/dev/null | wc -l)
+            if [ "${total}" -gt 0 ] && [ "${fresh}" -eq 0 ]; then
+                rm -rf "${root}/dotnet" 2>/dev/null
+                find "${root}/.meta" -maxdepth 1 -type f -name 'dotnet-*.last-used' -delete 2>/dev/null
+                log "Removed stale runtime: dotnet (all versions unused for ${RUNTIME_MAX_AGE_DAYS}d)."
+            fi
+        fi
+
+        # NuGet package cache: pure cache, so when it outgrows the cap wipe it
+        # wholesale (the next restore rebuilds what's actually needed). A restore
+        # running concurrently in another container may fail once and self-heal
+        # on its next run — acceptable for a bounded-disk guarantee.
+        local nuget_dir="${root}/cache/nuget"
+        if [ -d "${nuget_dir}" ]; then
+            local size_mb
+            size_mb=$(du -sm "${nuget_dir}" 2>/dev/null | cut -f1)
+            if [ "${size_mb:-0}" -gt "${NUGET_CACHE_MAX_MB}" ]; then
+                rm -rf "${nuget_dir}" 2>/dev/null
+                log "Wiped NuGet cache at '${nuget_dir}' (${size_mb}MB > ${NUGET_CACHE_MAX_MB}MB cap)."
+            fi
+        fi
+    ) 9>"${root}/.provision.lock" 2>/dev/null || true
+}
+
+prune_runtime_root "/workspace/runtimes"
+prune_runtime_root "${REPO_DIR}/xianix-runtimes"
 
 exit 0

@@ -115,6 +115,15 @@ RUN if [ "$INSTALL_INFRA_TOOLS" = "1" ]; then \
         && command -v nmap && command -v hadolint && command -v kubesec && command -v syft ; \
     fi
 
+# Official dotnet-install script, baked at build time (pinned by the release
+# infrastructure behind dot.net; fetched here so provision_runtimes.sh never
+# curl|bash's from the network at runtime). Used by the runtime harness to do
+# user-space .NET SDK installs onto the tenant runtime volume when a plugin's
+# xianix-runtimes.json manifest requests dotnet.
+RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /workspace/dotnet-install.sh \
+    && chmod +x /workspace/dotnet-install.sh \
+    && bash -n /workspace/dotnet-install.sh
+
 COPY execute_plugin.py /workspace/execute_plugin.py
 COPY host_context.py /workspace/host_context.py
 COPY _common.sh /workspace/_common.sh
@@ -122,12 +131,17 @@ COPY prepare_repo.sh /workspace/prepare_repo.sh
 COPY run_prompt.sh /workspace/run_prompt.sh
 COPY generate_context.sh /workspace/generate_context.sh
 COPY maintain_volume.sh /workspace/maintain_volume.sh
+COPY provision_runtimes.sh /workspace/provision_runtimes.sh
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh /workspace/prepare_repo.sh /workspace/run_prompt.sh \
-        /workspace/generate_context.sh /workspace/maintain_volume.sh
+        /workspace/generate_context.sh /workspace/maintain_volume.sh \
+        /workspace/provision_runtimes.sh
 
+# /workspace/runtimes is the mount point for the shared per-tenant runtime
+# volume (plugin-declared dotnet/node installs + package caches). Created and
+# chowned here so the non-root user can write to it on first mount.
 RUN groupadd -r xianix && useradd -r -g xianix -d /workspace xianix \
-    && mkdir -p /workspace/repo \
+    && mkdir -p /workspace/repo /workspace/runtimes \
     && chown -R xianix:xianix /workspace
 USER xianix
 
