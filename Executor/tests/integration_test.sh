@@ -26,9 +26,14 @@
 #     4. A bad repository URL produces the structured prepare error envelope.
 #     5. Worktree is created from the default branch (HEAD); plugins resolve
 #        any task-specific refs from the prompt themselves.
-#     6. Runtime provisioner: plugin manifests are collected, cached runtimes
-#        are reused without reinstalling, env exports are emitted, and invalid /
-#        unsupported entries are rejected (fully hermetic — pre-seeded cache).
+#     6. Runtime provisioner: plugin `.tool-versions` entries are collected,
+#        non-allow-listed tools / backend-prefixed names / traversal versions
+#        are rejected, and an install that cannot reach the network is warned
+#        about rather than failing the run. Runs with --network none, so it is
+#        fully hermetic and downloads nothing.
+#     6b. The repo's own version files (global.json here) are detected without
+#        any Xianix-specific manifest, and XIANIX_RUNTIME_AUTODETECT=0 turns
+#        that off.
 #
 #   Tier R (needs XIANIX_IT_RUNTIMES=1; downloads a real .NET SDK, ~200MB):
 #     7. Live dotnet provisioning onto a runtime volume; a second run on the
@@ -393,22 +398,21 @@ test_worktree_uses_default_branch() {
 
 # ── Tier 1 (cont.): runtime provisioner — hermetic, no network ────────────────
 
-# Writes a fixture "installed plugin" (manifest only) plus a fake `claude` CLI
-# shim that reports it, so provision_runtimes.sh can be exercised end to end
-# without installing real plugins. The runtime cache is pre-seeded with ok
-# markers, so no SDK download happens — this tier stays free and offline.
+# Writes a fixture "installed plugin" (a .tool-versions manifest) plus a fake
+# `claude` CLI shim that reports it, so provision_runtimes.sh can be exercised
+# without installing real plugins. Also a fake worktree carrying a repo-level
+# global.json, to exercise the autodetect path.
 create_runtime_fixture() {
     local plugin_dir="${FIXTURE_MOUNT_DIR}/fake-plugin"
     mkdir -p "${plugin_dir}"
-    cat > "${plugin_dir}/xianix-runtimes.json" <<'EOF'
-{
-  "runtimes": [
-    { "name": "dotnet", "version": "9.0" },
-    { "name": "node",   "version": "22.11.0" },
-    { "name": "ruby",   "version": "3.3" },
-    { "name": "dotnet", "version": "../evil" }
-  ]
-}
+    # Two good entries plus three that must be rejected: a tool outside the
+    # allow-list, mise's explicit backend syntax, and a traversal version.
+    cat > "${plugin_dir}/.tool-versions" <<'EOF'
+dotnet      9.0
+node        22.11.0   # comments are allowed
+terraform   1.9
+cargo:evil  1.0
+python      ../evil
 EOF
 
     cat > "${FIXTURE_MOUNT_DIR}/claude-shim.sh" <<'EOF'
@@ -421,74 +425,81 @@ fi
 exit 0
 EOF
     chmod +x "${FIXTURE_MOUNT_DIR}/claude-shim.sh"
+
+    mkdir -p "${FIXTURE_MOUNT_DIR}/fake-worktree"
+    echo '{ "sdk": { "version": "9.0.100" } }' \
+        > "${FIXTURE_MOUNT_DIR}/fake-worktree/global.json"
 }
 
-test_runtime_provisioner_hermetic() {
-    banner "Test 6: runtime provisioner — manifests, cache hits, env exports (hermetic)"
-    create_runtime_fixture
-
+# Runs provision_runtimes.sh in the image with the fixture mounted and no
+# network, so mise can collect and validate declarations but never downloads.
+# $1 is extra `docker run` args (as a single string), $2 the shell prelude.
+run_provisioner_offline() {
+    local extra_args="$1"
     : > "${STDOUT_FILE}"; : > "${STDERR_FILE}"
     set +e
-    docker run --rm \
+    # shellcheck disable=SC2086  # extra_args is a deliberate arg list
+    docker run --rm --network none \
         -v "${FIXTURE_MOUNT_DIR}:/fixtures:ro" \
         -v "${VOLUME_RUNTIMES}:/workspace/runtimes" \
+        ${extra_args} \
         --entrypoint bash "${IMAGE}" -c '
-            set -e
             mkdir -p /tmp/bin
-            cp /fixtures/claude-shim.sh /tmp/bin/claude
+            if [ "${NO_PLUGINS:-0}" = "1" ]; then
+                printf "#!/usr/bin/env bash\nexit 0\n" > /tmp/bin/claude
+            else
+                cp /fixtures/claude-shim.sh /tmp/bin/claude
+            fi
+            chmod +x /tmp/bin/claude
             export PATH="/tmp/bin:${PATH}"
-
-            # Pre-seed the cache so both providers take the cache-hit path.
-            mkdir -p /workspace/runtimes/dotnet /workspace/runtimes/node-22.11.0/bin
-            touch /workspace/runtimes/dotnet/.xianix-ok-9.0
-            touch /workspace/runtimes/node-22.11.0/.xianix-ok
-
+            if [ "${SETUP_WORKTREE:-0}" = "1" ]; then
+                mkdir -p /tmp/worktree
+                cp -r /fixtures/fake-worktree/. /tmp/worktree/
+            fi
             /workspace/provision_runtimes.sh /tmp/runtime-env.sh
+            rc=$?
             echo "── env file ──"
-            cat /tmp/runtime-env.sh
-            ls /workspace/runtimes/.meta/ | sed "s/^/meta: /"
+            cat /tmp/runtime-env.sh 2>/dev/null
+            exit "${rc}"
         ' >"${STDOUT_FILE}" 2>"${STDERR_FILE}"
     LAST_EXIT=$?
     set -e
+}
+
+test_runtime_provisioner_hermetic() {
+    banner "Test 6: runtime provisioner — declarations, validation, failure isolation (hermetic)"
+    create_runtime_fixture
+
+    # Copy the fixture worktree somewhere writable inside the container: mise
+    # resolves from the worktree, and /fixtures is mounted read-only.
+    run_provisioner_offline "-e WORK_DIR=/tmp/worktree -e XIANIX_RUNTIME_AUTODETECT=1 \
+        -e SETUP_WORKTREE=1"
 
     if [ "${LAST_EXIT}" -eq 0 ]; then
-        t_pass "provisioner run exited 0"
+        t_pass "provisioner exits 0 even when installs can't reach the network"
     else
-        t_fail "provisioner run exited ${LAST_EXIT}"
+        t_fail "provisioner exited ${LAST_EXIT}, expected 0 (it must never fail a run)"
         sed 's/^/  │ /' "${STDERR_FILE}" | tail -n 30
         return
     fi
 
-    if grep -q 'export DOTNET_ROOT="/workspace/runtimes/dotnet"' "${STDOUT_FILE}" \
-        && grep -q 'export NUGET_PACKAGES="/workspace/runtimes/cache/nuget"' "${STDOUT_FILE}"; then
-        t_pass "dotnet env exports emitted (DOTNET_ROOT, NUGET_PACKAGES)"
+    if grep -q 'Plugin-declared runtimes:.*dotnet@9\.0' "${STDERR_FILE}" \
+        && grep -q 'Plugin-declared runtimes:.*node@22\.11\.0' "${STDERR_FILE}"; then
+        t_pass "valid .tool-versions entries were collected"
     else
-        t_fail "missing dotnet env exports: $(grep '^export' "${STDOUT_FILE}" | tr '\n' ' ')"
+        t_fail "expected dotnet@9.0 and node@22.11.0 in the plugin-declared list"
     fi
 
-    if grep -q 'export PATH="/workspace/runtimes/node-22.11.0/bin:\${PATH}"' "${STDOUT_FILE}"; then
-        t_pass "node PATH export emitted"
+    if grep -q "runtime 'terraform' is not allow-listed" "${STDERR_FILE}"; then
+        t_pass "non-allow-listed runtime was rejected"
     else
-        t_fail "missing node PATH export"
+        t_fail "expected an allow-list warning for 'terraform'"
     fi
 
-    if grep -q 'export XIANIX_PROVISIONED_RUNTIMES="dotnet 9.0; node 22.11.0"' "${STDOUT_FILE}"; then
-        t_pass "provisioned-runtimes summary export emitted"
+    if grep -q "runtime 'cargo:evil' is not allow-listed" "${STDERR_FILE}"; then
+        t_pass "explicit backend syntax was rejected"
     else
-        t_fail "missing/incorrect XIANIX_PROVISIONED_RUNTIMES export"
-    fi
-
-    if grep -q "dotnet 9.0 already provisioned (cache hit)" "${STDERR_FILE}" \
-        && grep -q "node 22.11.0 already provisioned (cache hit)" "${STDERR_FILE}"; then
-        t_pass "both runtimes took the cache-hit path (no downloads)"
-    else
-        t_fail "expected cache-hit log lines for dotnet and node"
-    fi
-
-    if grep -q "unsupported runtime 'ruby'" "${STDERR_FILE}"; then
-        t_pass "unsupported runtime name was rejected"
-    else
-        t_fail "expected a warning for the unsupported 'ruby' runtime"
+        t_fail "expected 'cargo:evil' to be rejected"
     fi
 
     if grep -q "invalid version '../evil'" "${STDERR_FILE}"; then
@@ -497,11 +508,130 @@ test_runtime_provisioner_hermetic() {
         t_fail "expected a warning for the invalid '../evil' version"
     fi
 
-    if grep -q "meta: dotnet-9.0.last-used" "${STDOUT_FILE}" \
-        && grep -q "meta: node-22.11.0.last-used" "${STDOUT_FILE}"; then
-        t_pass "last-used markers written for pruning"
+    if grep -q "Runtime cache root: /workspace/runtimes" "${STDERR_FILE}"; then
+        t_pass "installs are targeted at the mounted runtime volume"
     else
-        t_fail "missing .meta last-used markers"
+        t_fail "provisioner did not resolve the mounted runtime volume as its cache root"
+    fi
+}
+
+test_runtime_autodetects_repo_version_file() {
+    banner "Test 6b: runtime provisioner detects the repo's own version files"
+
+    # No plugins this time — the only declaration is the worktree's global.json.
+    run_provisioner_offline "-e WORK_DIR=/tmp/worktree -e SETUP_WORKTREE=1 -e NO_PLUGINS=1"
+
+    if [ "${LAST_EXIT}" -eq 0 ]; then
+        t_pass "provisioner exits 0"
+    else
+        t_fail "provisioner exited ${LAST_EXIT}"
+        return
+    fi
+
+    if grep -q 'Repository runtime declarations:.*global.json' "${STDERR_FILE}"; then
+        t_pass "repo global.json was picked up without any Xianix-specific manifest"
+    else
+        t_fail "expected global.json in the repository declarations"
+    fi
+
+    # Autodetection off must ignore it and, with no plugins, find nothing at all.
+    run_provisioner_offline "-e WORK_DIR=/tmp/worktree -e SETUP_WORKTREE=1 -e NO_PLUGINS=1 \
+        -e XIANIX_RUNTIME_AUTODETECT=0"
+
+    # Wording differs depending on whether the on-demand fallback is armed; the
+    # invariant under test is that nothing was *declared*, so match the prefix.
+    if grep -q "No plugin manifest and no repository version file" "${STDERR_FILE}"; then
+        t_pass "XIANIX_RUNTIME_AUTODETECT=0 ignores the repo's version files"
+    else
+        t_fail "expected no declarations to be found with autodetect disabled and no plugins"
+    fi
+}
+
+test_runtime_fallback_hook_hermetic() {
+    banner "Test 6c: on-demand runtime fallback hook (hermetic)"
+
+    # No plugins, no worktree: the "declares nothing" case the hook exists for.
+    # Everything asserted here happens before any download, so it runs offline.
+    local run_cmd='
+        mkdir -p /tmp/bin
+        printf "#!/usr/bin/env bash\nexit 0\n" > /tmp/bin/claude
+        chmod +x /tmp/bin/claude
+        export PATH="/tmp/bin:${PATH}"
+        /workspace/provision_runtimes.sh /tmp/runtime-env.sh
+        # shellcheck disable=SC1091
+        set -a; . /tmp/runtime-env.sh; set +a
+        echo "bash-env: ${BASH_ENV:-<unset>}"
+        [ -f "${BASH_ENV:-/nonexistent}" ] && echo "hook-file: present"
+        bash -c "terraform version" 2>&1 | sed "s/^/deny-terraform: /"
+        bash -c "nosuchcmd" 2>&1        | sed "s/^/deny-typo: /"
+        bash -c "nosuchcmd"; echo "deny-exit: $?"
+        bash -c "node --version" 2>&1   | sed "s/^/passthrough-node: /"
+        bash -c "cargo --version" 2>&1 | grep -oE "installing [a-z]+@latest" \
+            | sed "s/^/alias-cargo: /"
+        exit 0
+    '
+
+    : > "${STDOUT_FILE}"; : > "${STDERR_FILE}"
+    set +e
+    docker run --rm --network none \
+        -v "${VOLUME_RUNTIMES}:/workspace/runtimes" \
+        --entrypoint bash "${IMAGE}" -c "${run_cmd}" >"${STDOUT_FILE}" 2>"${STDERR_FILE}"
+    LAST_EXIT=$?
+    set -e
+
+    if grep -q '^bash-env: /tmp/xianix-runtime-hook' "${STDOUT_FILE}" \
+        && grep -q '^hook-file: present' "${STDOUT_FILE}"; then
+        t_pass "BASH_ENV hook is emitted even when nothing is declared"
+    else
+        t_fail "expected a BASH_ENV hook file: $(tail -n 5 "${STDERR_FILE}" | tr '\n' ' ')"
+        return
+    fi
+
+    if grep -q '^deny-terraform: bash: terraform: command not found' "${STDOUT_FILE}"; then
+        t_pass "non-allow-listed binary is refused, not installed"
+    else
+        t_fail "expected the hook to refuse 'terraform'"
+    fi
+
+    if grep -q '^deny-typo: bash: nosuchcmd: command not found' "${STDOUT_FILE}" \
+        && grep -q '^deny-exit: 127' "${STDOUT_FILE}"; then
+        t_pass "an unknown command still fails with the conventional 127"
+    else
+        t_fail "expected exit 127 and the standard message for an unknown command"
+    fi
+
+    if grep -qE '^passthrough-node: v[0-9]+' "${STDOUT_FILE}"; then
+        t_pass "a binary already on PATH is untouched by the hook"
+    else
+        t_fail "the hook interfered with the image's own node"
+    fi
+
+    # cargo is provided by the `rust` tool; without the alias table a Rust repo
+    # would fall through even though the runtime is installable.
+    if grep -q '^alias-cargo: installing rust@latest' "${STDOUT_FILE}"; then
+        t_pass "binary-to-tool alias maps 'cargo' onto the rust runtime"
+    else
+        t_fail "expected 'cargo' to resolve to rust@latest"
+    fi
+
+    # And the whole thing must be switchable off.
+    : > "${STDOUT_FILE}"
+    set +e
+    docker run --rm --network none \
+        -e XIANIX_RUNTIME_FALLBACK=0 \
+        -v "${VOLUME_RUNTIMES}:/workspace/runtimes" \
+        --entrypoint bash "${IMAGE}" -c '
+            mkdir -p /tmp/bin; printf "#!/usr/bin/env bash\nexit 0\n" > /tmp/bin/claude
+            chmod +x /tmp/bin/claude; export PATH="/tmp/bin:${PATH}"
+            /workspace/provision_runtimes.sh /tmp/runtime-env.sh
+            grep -c BASH_ENV /tmp/runtime-env.sh || true
+        ' >"${STDOUT_FILE}" 2>/dev/null
+    set -e
+
+    if grep -qx '0' "${STDOUT_FILE}"; then
+        t_pass "XIANIX_RUNTIME_FALLBACK=0 emits no hook"
+    else
+        t_fail "expected no BASH_ENV export with the fallback disabled"
     fi
 }
 
@@ -516,12 +646,15 @@ test_runtime_dotnet_live() {
     fi
 
     local live_volume="xianix-it-rt-live-$$"
-    # Live manifest: dotnet only (the hermetic fixture manifest also asks for
-    # node/ruby, which we don't want to download here).
+    # `dotnet --version` runs the *managed* CLI, unlike `dotnet --list-sdks`
+    # which the native muxer answers on its own. Only the former catches a
+    # missing runtime dependency in the image (libicu, openssl, …), which is
+    # exactly what would break a plugin's `dotnet build` while every cheaper
+    # smoke check still looked green — so assert on both.
     local run_cmd='
         set -e
         mkdir -p /tmp/bin /tmp/live-plugin
-        echo "{ \"runtimes\": [ { \"name\": \"dotnet\", \"version\": \"9.0\" } ] }" > /tmp/live-plugin/xianix-runtimes.json
+        printf "dotnet 9.0\n" > /tmp/live-plugin/.tool-versions
         cat > /tmp/bin/claude <<"SHIM"
 #!/usr/bin/env bash
 if [ "${1:-}" = "plugin" ] && [ "${2:-}" = "list" ]; then
@@ -533,7 +666,9 @@ SHIM
         export PATH="/tmp/bin:${PATH}"
         /workspace/provision_runtimes.sh /tmp/runtime-env.sh
         source /tmp/runtime-env.sh
-        dotnet --list-sdks
+        echo "list-sdks: $(dotnet --list-sdks)"
+        echo "version: $(dotnet --version)"
+        echo "nuget-packages: ${NUGET_PACKAGES:-<unset>}"
     '
 
     : > "${STDERR_FILE}"
@@ -544,12 +679,24 @@ SHIM
     LAST_EXIT=$?
     set -e
 
-    if [ "${LAST_EXIT}" -eq 0 ] && grep -qE '^9\.[0-9]+' "${STDOUT_FILE}"; then
-        t_pass "first run installed dotnet 9 and 'dotnet --list-sdks' works"
+    if [ "${LAST_EXIT}" -eq 0 ] && grep -qE '^list-sdks: 9\.[0-9]+' "${STDOUT_FILE}"; then
+        t_pass "first run installed a .NET 9 SDK onto the volume"
     else
         t_fail "first live run failed (exit ${LAST_EXIT}): $(tail -n 5 "${STDERR_FILE}" | tr '\n' ' ')"
         docker volume rm -f "${live_volume}" >/dev/null 2>&1 || true
         return
+    fi
+
+    if grep -qE '^version: 9\.[0-9]+' "${STDOUT_FILE}"; then
+        t_pass "the managed dotnet CLI starts (image has the SDK's runtime deps)"
+    else
+        t_fail "'dotnet --version' did not run — the image is missing a .NET runtime dependency: $(grep -A3 '^version:' "${STDOUT_FILE}" | tr '\n' ' ')"
+    fi
+
+    if grep -q '^nuget-packages: /workspace/runtimes/cache/nuget' "${STDOUT_FILE}"; then
+        t_pass "NUGET_PACKAGES points at the persistent cache on the volume"
+    else
+        t_fail "NUGET_PACKAGES was not exported onto the runtime volume"
     fi
 
     : > "${STDERR_FILE}"
@@ -560,10 +707,38 @@ SHIM
     LAST_EXIT=$?
     set -e
 
-    if [ "${LAST_EXIT}" -eq 0 ] && grep -q "dotnet 9.0 already provisioned (cache hit)" "${STDERR_FILE}"; then
+    if [ "${LAST_EXIT}" -eq 0 ] \
+        && grep -q "All declared runtimes already provisioned (cache hit)" "${STDERR_FILE}"; then
         t_pass "second run on the same volume hit the cache (no re-download)"
     else
         t_fail "second live run did not hit the cache (exit ${LAST_EXIT})"
+    fi
+
+    # Same SDK, declared the standard way by the repo instead of by a plugin:
+    # must resolve out of the cache the plugin manifest populated.
+    : > "${STDERR_FILE}"
+    set +e
+    docker run --rm \
+        -v "${live_volume}:/workspace/runtimes" \
+        -e WORK_DIR=/tmp/worktree \
+        --entrypoint bash "${IMAGE}" -c '
+            mkdir -p /tmp/bin /tmp/worktree
+            printf "#!/usr/bin/env bash\nexit 0\n" > /tmp/bin/claude && chmod +x /tmp/bin/claude
+            export PATH="/tmp/bin:${PATH}"
+            echo "{ \"sdk\": { \"version\": \"9.0.100\" } }" > /tmp/worktree/global.json
+            /workspace/provision_runtimes.sh /tmp/runtime-env.sh
+            source /tmp/runtime-env.sh
+            echo "version: $(dotnet --version)"
+        ' >"${STDOUT_FILE}" 2>"${STDERR_FILE}"
+    LAST_EXIT=$?
+    set -e
+
+    if [ "${LAST_EXIT}" -eq 0 ] \
+        && grep -q 'Repository runtime declarations: global.json' "${STDERR_FILE}" \
+        && grep -qE '^version: 9\.[0-9]+' "${STDOUT_FILE}"; then
+        t_pass "a repo global.json alone provisions the SDK (no plugin manifest needed)"
+    else
+        t_fail "global.json autodetection did not yield a working dotnet (exit ${LAST_EXIT})"
     fi
 
     docker volume rm -f "${live_volume}" >/dev/null 2>&1 || true
@@ -672,6 +847,8 @@ test_new_commit_is_picked_up
 test_bad_url_error_envelope
 test_worktree_uses_default_branch
 test_runtime_provisioner_hermetic
+test_runtime_autodetects_repo_version_file
+test_runtime_fallback_hook_hermetic
 test_runtime_dotnet_live
 test_claude_reads_planted_secret
 

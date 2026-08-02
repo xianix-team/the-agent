@@ -1,19 +1,32 @@
 #!/usr/bin/env bash
-# Provision plugin-declared runtimes onto the persistent runtime volume.
+# Provision the language runtimes a run needs, using mise (https://mise.jdx.dev)
+# as the installer.
 #
-# Plugins that need to build/run code (e.g. a unit-test writer verifying with
-# `dotnet test`) declare their runtime requirements in a manifest file at the
-# plugin root:
+# Runtimes are declared with standard, tool-agnostic files rather than a
+# Xianix-specific manifest, and come from two sources that are merged:
 #
-#   xianix-runtimes.json:
-#     { "runtimes": [ { "name": "dotnet", "version": "9.0" } ] }
+#   1. The repository being worked on — authoritative, because the repo (not the
+#      plugin) knows which SDK it builds with. mise reads the idiomatic version
+#      files a repo already has: `global.json`, `.nvmrc`, `.node-version`,
+#      `.python-version`, `go.mod`, `.java-version`, a `mise.toml`, … Most repos
+#      therefore need no new file at all. Disable with XIANIX_RUNTIME_AUTODETECT=0.
 #
-# After plugin install, run_prompt.sh calls this script. It collects the
-# manifests of every installed plugin, installs any missing runtimes (user-space
-# only — the container runs as non-root with no-new-privileges, so no apt) into
-# the runtime cache, and writes `export` lines to the env file given as $1.
-# run_prompt.sh sources that file so the runtimes are on PATH for Claude Code's
-# Bash tool.
+#   2. Plugin manifests — a `.tool-versions` file at the plugin root, for plugins
+#      that must build/run code (e.g. a unit-test writer verifying with
+#      `dotnet test`) against repos that declare nothing:
+#
+#        dotnet 9.0
+#        node   22.11.0
+#
+# Plugin manifests are written into a generated mise *global* config, which is
+# the lowest-precedence config file — so whatever the repo declares wins on
+# conflict, and the plugin entry acts as the fallback it should be.
+#
+# After plugin install, run_prompt.sh calls this script. It installs whatever is
+# missing (user-space only — the container runs as non-root with
+# no-new-privileges, so no apt) into the runtime cache, and writes `export` lines
+# to the env file given as $1. run_prompt.sh sources that file so the runtimes
+# are on PATH for Claude Code's Bash tool.
 #
 # Cache location (RUNTIMES_ROOT):
 #   /workspace/runtimes            — the shared per-tenant volume mounted by the
@@ -23,23 +36,25 @@
 #                                    (local `docker run`, older control planes).
 #
 # Cache contract:
-#   * dotnet installs share ONE root (${RUNTIMES_ROOT}/dotnet) — the muxer hosts
-#     multiple SDK versions side by side; a `.xianix-ok-<version>` marker records
-#     each completed channel install.
-#   * node versions get isolated dirs (${RUNTIMES_ROOT}/node-<version>) built in
-#     a temp dir and atomically `mv`ed into place.
-#   * All installs run under one flock (${RUNTIMES_ROOT}/.provision.lock) so
-#     concurrent containers — possibly serving different repos of the tenant —
-#     never clobber each other. Cache hits don't take the lock.
-#   * Every requested runtime touches ${RUNTIMES_ROOT}/.meta/<name>-<version>.last-used
+#   * MISE_DATA_DIR/MISE_CACHE_DIR/MISE_STATE_DIR all live under RUNTIMES_ROOT, so
+#     every download, install and bit of metadata lands on the volume. mise keeps
+#     one install dir per tool+version, and (for dotnet) a shared DOTNET_ROOT that
+#     hosts SDK versions side by side the way the muxer expects.
+#   * Installs run under one flock (${RUNTIMES_ROOT}/.provision.lock) so concurrent
+#     containers — possibly serving different repos of the tenant — never clobber
+#     each other. A fully warm cache skips the lock entirely.
+#   * Every resolved runtime touches ${RUNTIMES_ROOT}/.meta/<tool>@<version>.last-used
 #     so maintain_volume.sh can prune runtimes nobody has used in a while.
 #
-# Security: only allow-listed runtime names are honoured, versions must match a
-# strict pattern, and download URLs are built from constants — a manifest can
-# never make this script fetch an arbitrary URL or run arbitrary commands.
+# Security: mise runs with `safe` mode on, so no config in a plugin or repository
+# can execute code, run a postinstall hook, or inject environment variables — it
+# can only declare tool versions. Plugin manifests are additionally checked
+# against an allow-list of runtime names and a strict version pattern, and the
+# code-executing backends (asdf/vfox) plus the compile-from-source ones are
+# disabled outright, so nothing here can be pointed at an arbitrary source.
 #
-# Best-effort like plugin install: a failed runtime install logs a warning and
-# is skipped; the script always exits 0 so provisioning can never fail a run.
+# Best-effort like plugin install: a failed runtime install logs a warning and is
+# skipped; the script always exits 0 so provisioning can never fail a run.
 set -uo pipefail
 
 log() { echo "[runtimes] $*" >&2; }
@@ -50,10 +65,39 @@ if [ -z "${ENV_FILE}" ]; then
     exit 0
 fi
 : > "${ENV_FILE}" 2>/dev/null || { log "WARNING: cannot write env file '${ENV_FILE}' — skipping provisioning."; exit 0; }
+emit_env() { printf '%s\n' "$1" >> "${ENV_FILE}"; }
 
-MANIFEST_NAME="xianix-runtimes.json"
-DOTNET_INSTALL_SCRIPT="/workspace/dotnet-install.sh"
-NODE_DIST_BASE="https://nodejs.org/dist"
+if ! command -v mise >/dev/null 2>&1; then
+    log "WARNING: mise is not on PATH — skipping provisioning."
+    exit 0
+fi
+
+MANIFEST_NAME=".tool-versions"
+LOCK_WAIT_SECONDS="${XIANIX_RUNTIME_LOCK_WAIT_SECONDS:-600}"
+AUTODETECT="${XIANIX_RUNTIME_AUTODETECT:-1}"
+
+# Runtimes a plugin manifest may ask for, and the tools whose idiomatic version
+# files are honoured in the repo. Language toolchains only — the executor
+# provisions runtimes, not arbitrary CLI tools (those belong in the image).
+ALLOWED_TOOLS="${XIANIX_RUNTIME_ALLOWED_TOOLS:-bun deno dotnet elixir erlang go java kotlin node python ruby rust scala swift zig}"
+
+# Repository files mise can derive a toolchain from — one per idiomatic version
+# file of an allow-listed runtime. Finding one of these is what makes
+# autodetection worth a mise invocation; mise does the actual parsing.
+# Deliberately excludes package.json: mise's node plugin reads `.nvmrc` and
+# `.node-version` only — not `engines.node`, not `volta` — and package.json's
+# `packageManager` field resolves to pnpm/yarn/npm, which are package managers
+# rather than runtimes and so are not allow-listed. Listing it here would fire a
+# mise run for every JS repo and always resolve nothing.
+REPO_DECLARATION_FILES=(
+    mise.toml .mise.toml mise/config.toml .mise/config.toml
+    .config/mise.toml .config/mise/config.toml
+    .tool-versions
+    global.json .nvmrc .node-version .python-version .python-versions
+    .ruby-version Gemfile .java-version .sdkmanrc .go-version go.mod
+    rust-toolchain.toml .swift-version .bun-version .deno-version
+    .exenv-version .zig-version
+)
 
 # ── Resolve the runtime cache root ────────────────────────────────────────────
 # /workspace/runtimes always exists in the image (it's the mount point), so a
@@ -72,10 +116,119 @@ fi
 mkdir -p "${RUNTIMES_ROOT}/.meta" 2>/dev/null || { log "WARNING: cannot create ${RUNTIMES_ROOT} — skipping provisioning."; exit 0; }
 LOCK_FILE="${RUNTIMES_ROOT}/.provision.lock"
 
-# ── Collect manifests from installed plugins ──────────────────────────────────
-# One "name<TAB>version" line per requested runtime, deduplicated. Malformed
-# manifests are logged and skipped, never fatal.
-collect_requests() {
+# ── mise configuration ────────────────────────────────────────────────────────
+# Everything mise persists is redirected onto the runtime volume. The security
+# knobs are set here rather than baked into the image so this script is the one
+# place that defines the sandbox, and they are re-emitted into the env file so
+# any `mise` the agent runs later inherits the same restrictions.
+GENERATED_CONFIG="/tmp/xianix-mise-global-${EXECUTION_ID:-$$}.toml"
+
+export MISE_DATA_DIR="${RUNTIMES_ROOT}/mise"
+export MISE_CACHE_DIR="${RUNTIMES_ROOT}/mise-cache"
+export MISE_STATE_DIR="${RUNTIMES_ROOT}/mise-state"
+export MISE_GLOBAL_CONFIG_FILE="${GENERATED_CONFIG}"
+export MISE_GLOBAL_CONFIG_ROOT="${RUNTIMES_ROOT}"
+# Hard code-execution boundary: configs we don't control (a plugin's, a repo's)
+# can declare tool versions and nothing else — no tasks, no hooks, no [env]
+# injection into the Claude Code process, no overriding these settings.
+export MISE_SAFE=1
+export MISE_YES=1
+# asdf/vfox plugins are arbitrary shell fetched from git; cargo/npm/pipx/gem/spm
+# compile or install from language package registries. None of them are how a
+# language runtime should arrive, and all of them widen the supply chain.
+# `dotnet` and `go` are deliberately absent: those names are core mise plugins as
+# well as backends, and disabling them would take the runtimes with them.
+export MISE_DISABLE_BACKENDS="asdf,vfox,cargo,npm,pipx,gem,spm"
+export MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS="${ALLOWED_TOOLS// /,}"
+export MISE_HTTP_TIMEOUT="${XIANIX_RUNTIME_HTTP_TIMEOUT:-120}"
+# Nothing above /workspace can hold config; stop the upward config walk there so
+# a worktree lookup never scans the container root.
+export MISE_CEILING_PATHS="/workspace"
+
+# ── Environment handed to the agent ───────────────────────────────────────────
+# Emitted on every exit path — including "nothing to provision", which is exactly
+# when the fallback hook below matters most.
+FALLBACK="${XIANIX_RUNTIME_FALLBACK:-1}"
+HOOK_FILE="/tmp/xianix-runtime-hook-${EXECUTION_ID:-$$}.sh"
+
+# Binaries whose name differs from the mise tool that provides them. A lookup
+# table rather than per-runtime logic: without it a Rust repo's `cargo build` and
+# a Java repo's `javac` fall through even though the runtime is installable.
+BIN_ALIASES="cargo:rust rustc:rust rustup:rust javac:java jar:java"
+
+emit_agent_mise_env() {
+    # Hand the agent the same mise sandbox, so a `mise install`/`mise exec` from
+    # the Bash tool reuses the tenant cache and stays inside the same restrictions.
+    emit_env "export MISE_DATA_DIR=\"${MISE_DATA_DIR}\""
+    emit_env "export MISE_CACHE_DIR=\"${MISE_CACHE_DIR}\""
+    emit_env "export MISE_STATE_DIR=\"${MISE_STATE_DIR}\""
+    emit_env "export MISE_SAFE=1"
+    emit_env "export MISE_YES=1"
+    emit_env "export MISE_DISABLE_BACKENDS=\"${MISE_DISABLE_BACKENDS}\""
+
+    [ "${FALLBACK}" = "1" ] || return 0
+
+    # Last resort for a repository that needs a runtime but declares no version.
+    # The eager pass above gives it nothing, and — unlike node and python, which
+    # the image ships — that is a hard `command not found` rather than a silent
+    # fallback. mise installs on first use instead (`exec_auto_install`), so wire
+    # that to bash's command-not-found hook. BASH_ENV is the only entry point that
+    # reaches the agent, which runs every tool call as a fresh `bash -c`.
+    #
+    # Gated on the same allow-list as the eager path, so a typo or a non-runtime
+    # binary is refused immediately without a registry lookup or a download.
+    {
+        printf '%s\n' "# Generated by provision_runtimes.sh — do not edit."
+        printf 'XIANIX_FALLBACK_TOOLS=%q\n'   "${ALLOWED_TOOLS}"
+        printf 'XIANIX_FALLBACK_ALIASES=%q\n' "${BIN_ALIASES}"
+        cat <<'HOOK'
+command_not_found_handle() {
+    local cmd="$1" tool="$1" pair
+    for pair in ${XIANIX_FALLBACK_ALIASES}; do
+        [ "${pair%%:*}" = "${cmd}" ] && { tool="${pair#*:}"; break; }
+    done
+    case " ${XIANIX_FALLBACK_TOOLS} " in
+        *" ${tool} "*)
+            echo "[runtimes] '${cmd}' is not installed and no version file declares it — installing ${tool}@latest into the tenant cache. Pin a version (e.g. global.json, .nvmrc) to install it up front instead." >&2
+            mise exec "${tool}@latest" -- "$@"
+            return $?
+            ;;
+    esac
+    echo "bash: ${cmd}: command not found" >&2
+    return 127
+}
+HOOK
+    } > "${HOOK_FILE}" 2>/dev/null || {
+        log "WARNING: cannot write ${HOOK_FILE} — runtime fallback disabled."
+        return 0
+    }
+    emit_env "export BASH_ENV=\"${HOOK_FILE}\""
+}
+
+# ── Validation of plugin-declared entries ─────────────────────────────────────
+# Tool names are plain registry short-names. Rejecting ':' blocks mise's explicit
+# backend syntax (`cargo:foo`, `asdf:<git-url>`, …) outright, so a manifest can
+# never point the installer at a source of its choosing; the allow-list then
+# narrows what is left to actual language runtimes.
+valid_tool() {
+    [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$ ]] || return 1
+    local allowed
+    for allowed in ${ALLOWED_TOOLS}; do
+        [ "$1" = "${allowed}" ] && return 0
+    done
+    return 1
+}
+
+# Versions become path components and URL segments. Digits/letters/dots/dashes
+# (9.0, 9.0.203, 22.11.0, lts, latest) plus mise's harmless `prefix:` scope.
+# This rejects `ref:` and `path:` (compile from a vcs ref / run a binary from an
+# arbitrary path) and, by excluding '/', any traversal.
+valid_version() { [[ "$1" =~ ^(prefix:)?[A-Za-z0-9][A-Za-z0-9.+-]{0,31}$ ]]; }
+
+# ── Collect plugin manifests ──────────────────────────────────────────────────
+# One "tool<TAB>version" line per entry, deduplicated. `.tool-versions` allows
+# several fallback versions per line; only the first is meaningful here.
+collect_plugin_requests() {
     local install_paths manifest
     install_paths=$(claude plugin list --json 2>/dev/null \
         | jq -r '.[].installPath // empty' 2>/dev/null) || true
@@ -84,196 +237,127 @@ collect_requests() {
         [ -n "${plugin_path}" ] && [ -d "${plugin_path}" ] || continue
         manifest="${plugin_path}/${MANIFEST_NAME}"
         [ -f "${manifest}" ] || continue
-
-        if ! jq -e '.runtimes | type == "array"' "${manifest}" >/dev/null 2>&1; then
-            log "WARNING: ${manifest} is malformed (expected { \"runtimes\": [...] }) — skipping."
-            continue
-        fi
-
-        jq -r '
-            .runtimes[]
-            | select(type == "object")
-            | select((.name | type == "string") and (.name | length > 0))
-            | select((.version | type == "string") and (.version | length > 0))
-            | "\(.name)\t\(.version)"
-        ' "${manifest}" 2>/dev/null
+        sed -e 's/#.*$//' "${manifest}" 2>/dev/null | awk 'NF >= 2 { print $1 "\t" $2 }'
     done <<< "${install_paths}" | sort -u
 }
 
-# ── Validation ────────────────────────────────────────────────────────────────
-# Versions: digits/letters/dots/dashes only (9.0, 9.0.203, 22.11.0, LTS, STS).
-# No slashes or leading dots — version strings become path components and URL
-# segments, so this also blocks traversal.
-valid_version() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,31}$ ]]; }
+REQUESTED=()
+{
+    echo "# Generated by provision_runtimes.sh from the .tool-versions of installed"
+    echo "# plugins. Lowest-precedence config, so repository declarations override it."
+    echo "[tools]"
+} > "${GENERATED_CONFIG}" 2>/dev/null || {
+    log "WARNING: cannot write ${GENERATED_CONFIG} — plugin manifests will be ignored."
+}
 
-# ── Env emission ──────────────────────────────────────────────────────────────
-emit_env() { printf '%s\n' "$1" >> "${ENV_FILE}"; }
+while IFS=$'\t' read -r tool version; do
+    [ -n "${tool}" ] || continue
+    if ! valid_tool "${tool}"; then
+        log "WARNING: runtime '${tool}' is not allow-listed (allowed: ${ALLOWED_TOOLS}) — skipping."
+        continue
+    fi
+    if ! valid_version "${version}"; then
+        log "WARNING: invalid version '${version}' for runtime '${tool}' — skipping."
+        continue
+    fi
+    printf '%s = "%s"\n' "${tool}" "${version}" >> "${GENERATED_CONFIG}" 2>/dev/null || true
+    REQUESTED+=("${tool}@${version}")
+done <<< "$(collect_plugin_requests)"
 
-PROVISIONED=()   # human-readable "name version" entries for the summary export
+# ── Decide where to resolve from ──────────────────────────────────────────────
+# Running mise inside the worktree is what makes the repo's own version files
+# count. With autodetection off (or no worktree) we resolve from an empty scratch
+# directory instead, so only the generated global config applies.
+REPO_DECLARATIONS=""
+CONTEXT_DIR=""
+if [ "${AUTODETECT}" = "1" ] && [ -n "${WORK_DIR:-}" ] && [ -d "${WORK_DIR}" ]; then
+    CONTEXT_DIR="${WORK_DIR}"
+    for _file in "${REPO_DECLARATION_FILES[@]}"; do
+        [ -f "${WORK_DIR}/${_file}" ] || continue
+        REPO_DECLARATIONS="${REPO_DECLARATIONS}${REPO_DECLARATIONS:+, }${_file}"
+    done
+else
+    CONTEXT_DIR="$(mktemp -d "/tmp/xianix-mise-ctx-XXXXXX" 2>/dev/null)" || CONTEXT_DIR="/tmp"
+fi
 
-mark_used() { touch "${RUNTIMES_ROOT}/.meta/$1-$2.last-used" 2>/dev/null || true; }
-
-# ── Provider: dotnet ──────────────────────────────────────────────────────────
-# All versions share one install root; the dotnet muxer resolves the SDK per
-# project (global.json). `version` is passed as --channel for x.y / LTS / STS
-# and as --version for a fully-pinned x.y.z.
-DOTNET_ENV_EMITTED=0
-
-provision_dotnet() {
-    local version="$1"
-    local root="${RUNTIMES_ROOT}/dotnet"
-    local ok_marker="${root}/.xianix-ok-${version}"
-
-    if [ ! -f "${ok_marker}" ]; then
-        if [ ! -f "${DOTNET_INSTALL_SCRIPT}" ]; then
-            log "WARNING: ${DOTNET_INSTALL_SCRIPT} missing from the image — cannot install dotnet ${version}."
-            return 1
-        fi
-
-        (
-            flock -w 600 9 || { log "WARNING: timed out waiting for the provisioning lock."; exit 1; }
-            # Re-check under the lock — a concurrent container may have just installed it.
-            [ -f "${ok_marker}" ] && exit 0
-
-            log "Installing dotnet ${version} into ${root} (first use on this volume)…"
-            mkdir -p "${root}"
-            local selector=(--channel "${version}")
-            [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] && selector=(--version "${version}")
-
-            if bash "${DOTNET_INSTALL_SCRIPT}" "${selector[@]}" \
-                    --install-dir "${root}" --no-path >&2; then
-                touch "${ok_marker}"
-            else
-                log "WARNING: dotnet ${version} install failed."
-                exit 1
-            fi
-        ) 9>"${LOCK_FILE}" || return 1
+if [ "${#REQUESTED[@]}" -eq 0 ] && [ -z "${REPO_DECLARATIONS}" ]; then
+    emit_agent_mise_env
+    if [ "${FALLBACK}" = "1" ]; then
+        log "No plugin manifest and no repository version file — nothing to install up front; runtimes will be fetched on first use."
     else
-        log "dotnet ${version} already provisioned (cache hit)."
+        log "No plugin manifest and no repository version file — nothing to provision."
     fi
-
-    mark_used "dotnet" "${version}"
-
-    if [ "${DOTNET_ENV_EMITTED}" -eq 0 ]; then
-        DOTNET_ENV_EMITTED=1
-        emit_env "export DOTNET_ROOT=\"${root}\""
-        emit_env "export PATH=\"${root}:\${PATH}\""
-        emit_env "export DOTNET_CLI_TELEMETRY_OPTOUT=1"
-        emit_env "export DOTNET_NOLOGO=1"
-        # Persist the NuGet package cache next to the SDK so restores are also
-        # cached tenant-wide (the global-packages folder is concurrency-safe).
-        emit_env "export NUGET_PACKAGES=\"${RUNTIMES_ROOT}/cache/nuget\""
-        mkdir -p "${RUNTIMES_ROOT}/cache/nuget" 2>/dev/null || true
-    fi
-    PROVISIONED+=("dotnet ${version}")
-    return 0
-}
-
-# ── Provider: node ────────────────────────────────────────────────────────────
-# The image ships Node 20 globally; a manifest entry only makes sense for a
-# different version. Each version gets its own dir, prepended to PATH (last
-# manifest entry wins if several are requested — they can still be addressed
-# by absolute path).
-node_arch() {
-    case "$(uname -m)" in
-        x86_64)          echo "x64" ;;
-        aarch64 | arm64) echo "arm64" ;;
-        *)               echo "" ;;
-    esac
-}
-
-# "22" or "22.11" → newest matching full version from the nodejs.org index.
-resolve_node_version() {
-    local version="$1"
-    if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        printf '%s' "${version}"
-        return 0
-    fi
-    curl -fsSL --max-time 30 "${NODE_DIST_BASE}/index.json" 2>/dev/null \
-        | jq -r --arg prefix "v${version}." \
-            'map(select(.version | startswith($prefix))) | first | .version // empty' 2>/dev/null \
-        | sed 's/^v//'
-}
-
-provision_node() {
-    local requested="$1"
-    local arch version dir
-    arch="$(node_arch)"
-    if [ -z "${arch}" ]; then
-        log "WARNING: unsupported architecture '$(uname -m)' for node — skipping."
-        return 1
-    fi
-
-    version="$(resolve_node_version "${requested}")"
-    if [ -z "${version}" ]; then
-        log "WARNING: could not resolve node version '${requested}' — skipping."
-        return 1
-    fi
-
-    dir="${RUNTIMES_ROOT}/node-${version}"
-
-    if [ ! -f "${dir}/.xianix-ok" ]; then
-        (
-            flock -w 600 9 || { log "WARNING: timed out waiting for the provisioning lock."; exit 1; }
-            [ -f "${dir}/.xianix-ok" ] && exit 0
-
-            log "Installing node ${version} into ${dir} (first use on this volume)…"
-            local tmp tarball
-            tmp="$(mktemp -d "${RUNTIMES_ROOT}/.tmp-node-XXXXXX")" || exit 1
-            tarball="node-v${version}-linux-${arch}.tar.gz"
-
-            if curl -fsSL --max-time 600 "${NODE_DIST_BASE}/v${version}/${tarball}" \
-                    | tar -xz -C "${tmp}" --strip-components=1; then
-                touch "${tmp}/.xianix-ok"
-                rm -rf "${dir}" 2>/dev/null
-                mv "${tmp}" "${dir}"
-            else
-                log "WARNING: node ${version} download/extract failed."
-                rm -rf "${tmp}" 2>/dev/null
-                exit 1
-            fi
-        ) 9>"${LOCK_FILE}" || return 1
-    else
-        log "node ${version} already provisioned (cache hit)."
-    fi
-
-    mark_used "node" "${version}"
-    emit_env "export PATH=\"${dir}/bin:\${PATH}\""
-    PROVISIONED+=("node ${version}")
-    return 0
-}
-
-# ── Main ──────────────────────────────────────────────────────────────────────
-requests="$(collect_requests)"
-if [ -z "${requests}" ]; then
-    log "No plugin declared runtime requirements — nothing to provision."
     exit 0
 fi
 
+[ "${#REQUESTED[@]}" -gt 0 ] && log "Plugin-declared runtimes: ${REQUESTED[*]}"
+[ -n "${REPO_DECLARATIONS}" ] && log "Repository runtime declarations: ${REPO_DECLARATIONS}"
 log "Runtime cache root: ${RUNTIMES_ROOT}"
 
-while IFS=$'\t' read -r name version; do
-    [ -n "${name}" ] || continue
+cd "${CONTEXT_DIR}" || { log "WARNING: cannot enter '${CONTEXT_DIR}' — skipping provisioning."; exit 0; }
 
-    if ! valid_version "${version}"; then
-        log "WARNING: invalid version '${version}' for runtime '${name}' — skipping."
-        continue
-    fi
+# ── Install ───────────────────────────────────────────────────────────────────
+# `mise ls --missing` lists declared-but-not-installed tools, so a warm cache
+# costs one process spawn and never contends on the provisioning lock.
+missing_count="$(mise ls --missing --json 2>/dev/null | jq -r 'length' 2>/dev/null)" || missing_count=""
 
-    case "${name}" in
-        dotnet) provision_dotnet "${version}" || true ;;
-        node)   provision_node "${version}"   || true ;;
-        *)      log "WARNING: unsupported runtime '${name}' (supported: dotnet, node) — skipping." ;;
-    esac
-done <<< "${requests}"
-
-if [ "${#PROVISIONED[@]}" -gt 0 ]; then
-    summary="$(printf '%s; ' "${PROVISIONED[@]}")"
-    summary="${summary%; }"
-    # Surfaced in the prompt's host-context block (see host_context.py) so the
-    # agent knows these tools are on PATH without probing.
-    emit_env "export XIANIX_PROVISIONED_RUNTIMES=\"${summary}\""
-    log "Provisioned runtimes: ${summary}"
+if [ "${missing_count}" = "0" ]; then
+    log "All declared runtimes already provisioned (cache hit)."
+else
+    (
+        flock -w "${LOCK_WAIT_SECONDS}" 9 || { log "WARNING: timed out waiting for the provisioning lock."; exit 1; }
+        log "Installing missing runtimes into ${MISE_DATA_DIR} …"
+        mise install >&2
+    ) 9>"${LOCK_FILE}" \
+        || log "WARNING: one or more runtime installs failed — continuing with whatever succeeded."
 fi
+
+# ── Emit the environment ──────────────────────────────────────────────────────
+# `mise env` prints the exact export lines we need (PATH, DOTNET_ROOT, …) for the
+# tools resolved above; run_prompt.sh sources them before launching Claude Code.
+_env_err="$(mktemp 2>/dev/null || echo /dev/null)"
+if ! mise env -s bash >> "${ENV_FILE}" 2>"${_env_err}"; then
+    log "WARNING: 'mise env' failed — continuing without runtime env: $(tr '\n' ' ' < "${_env_err}" 2>/dev/null)"
+fi
+rm -f "${_env_err}" 2>/dev/null || true
+
+# ── Record what actually landed ───────────────────────────────────────────────
+# `mise ls --current` reports the concrete version behind each declaration along
+# with whether it is installed, so the summary and the last-used markers key off
+# what is really on disk rather than the fuzzy string that was requested.
+# Anything that failed to install is reported with installed=false and left out.
+PROVISIONED=()
+while IFS=$'\t' read -r tool version; do
+    [ -n "${tool}" ] && [ -n "${version}" ] || continue
+    touch "${RUNTIMES_ROOT}/.meta/${tool}@${version}.last-used" 2>/dev/null || true
+    PROVISIONED+=("${tool} ${version}")
+done < <(mise ls --current --json 2>/dev/null \
+    | jq -r 'to_entries[] | .key as $t | (.value[0] // empty)
+             | select(.installed == true) | "\($t)\t\(.version)"' 2>/dev/null)
+
+if [ "${#PROVISIONED[@]}" -eq 0 ]; then
+    emit_agent_mise_env
+    log "WARNING: no runtime could be provisioned — the run continues with the image's built-in toolchain."
+    exit 0
+fi
+
+# The .NET SDK restores into a global-packages folder; parking it on the volume
+# next to the SDK makes restores cached tenant-wide (it is concurrency-safe).
+if printf '%s\n' "${PROVISIONED[@]}" | grep -q '^dotnet '; then
+    NUGET_DIR="${RUNTIMES_ROOT}/cache/nuget"
+    mkdir -p "${NUGET_DIR}" 2>/dev/null || true
+    emit_env "export NUGET_PACKAGES=\"${NUGET_DIR}\""
+    emit_env "export DOTNET_CLI_TELEMETRY_OPTOUT=1"
+    emit_env "export DOTNET_NOLOGO=1"
+fi
+
+emit_agent_mise_env
+
+summary="$(printf '%s; ' "${PROVISIONED[@]}")"
+summary="${summary%; }"
+# Surfaced in the prompt's host-context block (see host_context.py) so the agent
+# knows these tools are on PATH without probing.
+emit_env "export XIANIX_PROVISIONED_RUNTIMES=\"${summary}\""
+log "Provisioned runtimes: ${summary}"
 
 exit 0

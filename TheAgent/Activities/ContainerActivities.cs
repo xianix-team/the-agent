@@ -95,8 +95,9 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
 
     /// <summary>
     /// Creates the shared per-tenant runtime volume if it does not already exist.
-    /// The volume holds user-space runtime installs (dotnet SDKs, alternate node versions,
-    /// package caches, ...) that plugins declare via <c>xianix-runtimes.json</c> manifests.
+    /// The volume holds the user-space runtime installs (dotnet SDKs, alternate node
+    /// versions, package caches, ...) that the executor provisions with <c>mise</c> from the
+    /// repository's own version files and any plugin <c>.tool-versions</c> manifest.
     /// It is mounted at <c>/workspace/runtimes</c> on every executor container of the tenant,
     /// so one SDK download serves every repository and every plugin of that tenant.
     ///
@@ -301,7 +302,7 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
                 Binds       = binds,
                 Memory      = EnvConfig.ContainerMemoryBytes,
                 NanoCPUs    = (long)(EnvConfig.ContainerCpuCount * 1_000_000_000),
-                PidsLimit   = 256,
+                PidsLimit   = EnvConfig.ContainerPidsLimit,
                 SecurityOpt = ["no-new-privileges"],
                 AutoRemove  = false,
             },
@@ -667,6 +668,22 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
 
         if (input.ResumeSessions)
             SetRuntime(env, prov, "XIANIX-RESUME-SESSIONS", "1");
+
+        // Tell the toolchains what their actual CPU budget is. They would otherwise size
+        // worker pools from `nproc`, which reports the host's core count because it reads
+        // CPU affinity rather than the cgroup quota — so a 1-CPU container on a 12-core host
+        // fans out 12:1 and spends its slice context-switching. The one Docker knob that
+        // would move `nproc` is --cpuset-cpus, but pinning every tenant container to a fixed
+        // core range serialises a shared pool, so the quota stays and we hint instead.
+        // Only single-variable, well-supported overrides are set here; Node/Next.js has no
+        // equivalent and is left to the (generous) pid ceiling, and JAVA_TOOL_OPTIONS is
+        // avoided because it prints a banner into every JVM's stderr.
+        var cpuBudget = Math.Max(1, (int)Math.Round(EnvConfig.ContainerCpuCount)).ToString();
+        SetRuntime(env, prov, "DOTNET_PROCESSOR_COUNT", cpuBudget);
+        SetRuntime(env, prov, "GOMAXPROCS",             cpuBudget);
+        SetRuntime(env, prov, "CARGO_BUILD_JOBS",       cpuBudget);
+        SetRuntime(env, prov, "RAYON_NUM_THREADS",      cpuBudget);
+        SetRuntime(env, prov, "MAKEFLAGS",              $"-j{cpuBudget}");
 
         // Host-wide opt-in for the hybrid LLM context narrative. Seeded only when enabled so the
         // env summary stays clean by default; a tenant can still flip it per rule-set via

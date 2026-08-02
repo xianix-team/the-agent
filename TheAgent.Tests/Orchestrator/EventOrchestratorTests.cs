@@ -121,11 +121,12 @@ public class EventOrchestratorTests
 
         Assert.True(batch.Handled);
         Assert.Single(batch.Matches);
-        Assert.NotNull(batch.Matches[0].Execution);
-        Assert.Single(batch.Matches[0].Execution!.Plugins);
-        Assert.Equal("github", batch.Matches[0].Execution.Plugins[0].ShortName);
-        Assert.Equal("github@modelcontextprotocol", batch.Matches[0].Execution.Plugins[0].PluginName);
-        Assert.Equal("Review PR #7 in my-org/my-repo", batch.Matches[0].Execution.Prompt);
+        var execution = batch.Matches[0].Execution;
+        Assert.NotNull(execution);
+        Assert.Single(execution!.Plugins);
+        Assert.Equal("github", execution.Plugins[0].ShortName);
+        Assert.Equal("github@modelcontextprotocol", execution.Plugins[0].PluginName);
+        Assert.Equal("Review PR #7 in my-org/my-repo", execution.Prompt);
     }
 
     [Fact]

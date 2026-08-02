@@ -178,12 +178,15 @@ if [ -n "${CLAUDE_CODE_PLUGINS:-}" ] && [ "${CLAUDE_CODE_PLUGINS}" != "[]" ]; th
     fi
 fi
 
-# ── Provision plugin-declared runtimes ───────────────────────────────────────
-# Plugins declare build/test runtimes (dotnet, node, ...) in an xianix-runtimes.json
-# manifest at their root. provision_runtimes.sh installs missing ones onto the
+# ── Provision runtimes ───────────────────────────────────────────────────────
+# Build/test runtimes (dotnet, node, ...) come from the repo's own version files
+# (global.json, .nvmrc, mise.toml, ...) and from a `.tool-versions` at a plugin's
+# root. provision_runtimes.sh drives mise to install whatever is missing onto the
 # shared runtime volume (or the per-repo fallback) and writes export lines to an
 # ephemeral env file; sourcing it puts the runtimes on PATH for the Claude Code
-# subprocess below. Best-effort — a provisioning failure never fails the run.
+# subprocess below. Must run after the worktree exists (it reads the repo's
+# version files) and after plugin install. Best-effort — a provisioning failure
+# never fails the run.
 _runtime_env_file="/tmp/xianix-runtime-env-${EXECUTION_ID}.sh"
 "${SCRIPT_DIR}/provision_runtimes.sh" "${_runtime_env_file}" \
     || log "WARNING: runtime provisioning failed — continuing without extra runtimes."

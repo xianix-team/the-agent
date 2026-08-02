@@ -467,7 +467,7 @@ Each container is created with settings that isolate it from the host and other 
 | `NetworkMode` | `bridge` (default) | Full outbound internet access. Agents may need to install packages, call APIs, read docs, etc. |
 | `Memory` | `512MB–2GB` (configurable per plan) | Prevent OOM on host. |
 | `CpuShares` / `NanoCPUs` | Bounded | Fair scheduling across tenants. |
-| `PidsLimit` | `256` | Prevent fork bombs. |
+| `PidsLimit` | `2048` (`CONTAINER-PIDS-LIMIT`) | Prevent fork bombs. Sized well above the CPU quota on purpose: build tools fan out one worker per *host* core (`nproc` reads CPU affinity, which `--cpus` doesn't change), so a tighter cap kills ordinary builds mid-flight rather than containing abuse. |
 | `SecurityOpt` | `no-new-privileges` | Prevent privilege escalation. |
 | `User` | Non-root (`1000:1000`) | Least privilege. |
 | `CapDrop` | `ALL` | Drop all Linux capabilities. |

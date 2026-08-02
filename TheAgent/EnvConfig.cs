@@ -71,6 +71,13 @@ public static class EnvConfig
     // because [Workflow(...)] attributes require compile-time constants.
     public static string AgentName => Get("AGENT-NAME", Xianix.Constants.AgentName);
 
+    /// <summary>
+    /// Whether the agent registers with the Xians platform as a template. Defaults to
+    /// <c>true</c>.
+    /// </summary>
+    public static bool AgentIsTemplate =>
+        Get("AGENT-IS-TEMPLATE", "true").Trim().ToLowerInvariant() is "1" or "true" or "yes" or "on";
+
     // LLM / Anthropic
     //
     // Returns the host env value if set, otherwise an empty string. The Anthropic key
@@ -96,6 +103,23 @@ public static class EnvConfig
     public static double ContainerCpuCount =>
         double.TryParse(Get("CONTAINER-CPU-COUNT", "1"), System.Globalization.NumberStyles.Any,
             System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 1.0;
+
+    /// <summary>
+    /// Ceiling on the number of processes/threads a single executor container may create.
+    /// This is a fork-bomb guard, not a parallelism budget.
+    ///
+    /// Build tools size their worker pools from <c>nproc</c>, which reads CPU
+    /// <em>affinity</em> — something <c>--cpus</c> (<see cref="ContainerCpuCount"/>) does not
+    /// change. On a 12-core host a 1-CPU container therefore still spawns 12 workers' worth
+    /// of threads. That is survivable, because the quota simply throttles them, but only if
+    /// the pid ceiling leaves room. At the previous value of 256 it did not: an ordinary
+    /// <c>next build</c> died partway through with
+    /// <c>pthread_create: Resource temporarily unavailable</c>, and <c>dotnet build</c>,
+    /// Gradle and Cargo would fail the same way. Hence a deliberately generous default of
+    /// 2048 — still far below what a runaway fork loop needs to hurt the host.
+    /// </summary>
+    public static long ContainerPidsLimit =>
+        long.TryParse(Get("CONTAINER-PIDS-LIMIT", "2048"), out var v) && v > 0 ? v : 2048L;
 
     /// <summary>
     /// Hard wall-clock cap on a single container execution. The container is killed

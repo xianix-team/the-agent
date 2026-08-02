@@ -5,6 +5,10 @@ FROM python:3.12-slim-bookworm
 #   * Avoids Debian trixie's `t64` (64-bit time_t) package-rename transition,
 #     which breaks `playwright install --with-deps` on restricted apt mirrors.
 # System deps + Node 20 (npx/MCP) + git + GitHub CLI (gh) + Azure CLI + azure-devops extension (az devops).
+# libicu72 (bookworm's ICU) is required by any .NET SDK the runtime harness
+# installs: without it the managed `dotnet` CLI FailFast's on startup. The native
+# muxer (`dotnet --list-sdks`) works regardless, so a missing ICU only surfaces
+# once a plugin actually runs `dotnet build`/`dotnet test`.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
@@ -12,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     universal-ctags \
     ca-certificates \
     gnupg \
+    libicu72 \
     && mkdir -p /etc/apt/keyrings \
     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
         | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
@@ -115,14 +120,31 @@ RUN if [ "$INSTALL_INFRA_TOOLS" = "1" ]; then \
         && command -v nmap && command -v hadolint && command -v kubesec && command -v syft ; \
     fi
 
-# Official dotnet-install script, baked at build time (pinned by the release
-# infrastructure behind dot.net; fetched here so provision_runtimes.sh never
-# curl|bash's from the network at runtime). Used by the runtime harness to do
-# user-space .NET SDK installs onto the tenant runtime volume when a plugin's
-# xianix-runtimes.json manifest requests dotnet.
-RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /workspace/dotnet-install.sh \
-    && chmod +x /workspace/dotnet-install.sh \
-    && bash -n /workspace/dotnet-install.sh
+# mise — the runtime installer behind provision_runtimes.sh. A single static
+# binary that does user-space installs of dotnet/node/python/… from standard
+# declarations (`.tool-versions`, `global.json`, `.nvmrc`, `mise.toml`), which is
+# why the image itself ships no language SDKs beyond Python and Node.
+# Pinned and checksum-verified: the release tarball is matched against the
+# SHASUMS256.txt published alongside it, so a bad or swapped download fails the
+# build instead of shipping.
+ARG MISE_VERSION=v2026.8.0
+RUN set -eux; \
+    case "$(dpkg --print-architecture)" in \
+        amd64) mise_arch=x64 ;; \
+        arm64) mise_arch=arm64 ;; \
+        *) echo "unsupported architecture for mise: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac; \
+    tarball="mise-${MISE_VERSION}-linux-${mise_arch}.tar.gz"; \
+    base="https://github.com/jdx/mise/releases/download/${MISE_VERSION}"; \
+    mkdir -p /tmp/mise-dl; cd /tmp/mise-dl; \
+    curl -fsSL "${base}/${tarball}" -o "${tarball}"; \
+    curl -fsSL "${base}/SHASUMS256.txt" -o SHASUMS256.txt; \
+    grep " \./${tarball}\$" SHASUMS256.txt | sha256sum -c -; \
+    tar -xzf "${tarball}"; \
+    mv mise/bin/mise /usr/local/bin/mise; \
+    chmod +x /usr/local/bin/mise; \
+    cd /; rm -rf /tmp/mise-dl; \
+    mise --version
 
 COPY execute_plugin.py /workspace/execute_plugin.py
 COPY host_context.py /workspace/host_context.py
@@ -138,8 +160,8 @@ RUN chmod +x /entrypoint.sh /workspace/prepare_repo.sh /workspace/run_prompt.sh 
         /workspace/provision_runtimes.sh
 
 # /workspace/runtimes is the mount point for the shared per-tenant runtime
-# volume (plugin-declared dotnet/node installs + package caches). Created and
-# chowned here so the non-root user can write to it on first mount.
+# volume (mise-managed SDK installs + package caches). Created and chowned here
+# so the non-root user can write to it on first mount.
 RUN groupadd -r xianix && useradd -r -g xianix -d /workspace xianix \
     && mkdir -p /workspace/repo /workspace/runtimes \
     && chown -R xianix:xianix /workspace

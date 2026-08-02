@@ -15,7 +15,7 @@
         {
           "name": "ANTHROPIC-API-KEY",
           "value": "secrets.ANTHROPIC-API-KEY",
-          "constant": true
+          "mandatory": false
         }
       ],
       "executions": [
