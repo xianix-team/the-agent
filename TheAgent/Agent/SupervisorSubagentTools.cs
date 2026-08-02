@@ -39,8 +39,10 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         """
         List every repository onboarded for the current tenant.
 
-        Returns JSON: { tenantId, repositories: [{ url, lastUsed }] }. When nothing is
-        onboarded yet, `repositories` is empty and a `hint` explains why.
+        Returns JSON: { tenantId, repositories: [{ url, onboardedAt }] }, newest first.
+        `onboardedAt` is when the repository was first added — it is NOT a last-used or
+        last-activity time, so never describe it as one. When nothing is onboarded yet,
+        `repositories` is empty and a `hint` explains why.
 
         Call this FIRST for any request that involves a repository (running a prompt,
         onboarding, offboarding) so you know what already exists. When a repository is
@@ -66,7 +68,7 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         return JsonSerializer.Serialize(new
         {
             tenantId,
-            repositories = repos.Select(r => new { url = r.Url, lastUsed = r.CreatedAt }),
+            repositories = repos.Select(r => new { url = r.Url, onboardedAt = r.OnboardedAt }),
         });
     }
 

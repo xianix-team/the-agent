@@ -76,8 +76,10 @@ them exactly):
    - **Exactly one repository AND no URL from the user** → use it directly
      without asking. Briefly mention which repo you're using.
    - **Multiple repositories AND no URL from the user** → list them (using
-     their `url` and `lastUsed` fields where helpful) and ask which one to
-     operate on. Wait for their reply before proceeding.
+     their `url`, and `onboardedAt` where helpful) and ask which one to
+     operate on. Wait for their reply before proceeding. `onboardedAt` is the
+     date the repo was added; never present it as "last used" or "last
+     activity" — no such timestamp is tracked.
 4. **Decide whether a plugin is needed.** If the user's request looks like it
    could be served by an existing plugin (e.g. "review this PR", "analyse this
    issue", "do a code review"), call `ListAvailablePlugins` and inspect the

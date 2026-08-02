@@ -37,10 +37,10 @@ public static class TenantVolumeReader
                         && !string.IsNullOrWhiteSpace(r))
             .Select(v =>
             {
-                _ = DateTime.TryParse(v.CreatedAt, out var created);
-                return new TenantRepository(v.Labels["xianix.repository"], created);
+                _ = DateTime.TryParse(v.CreatedAt, out var onboardedAt);
+                return new TenantRepository(v.Labels["xianix.repository"], onboardedAt);
             })
-            .OrderByDescending(r => r.CreatedAt)
+            .OrderByDescending(r => r.OnboardedAt)
             .ToList();
     }
 
