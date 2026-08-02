@@ -156,6 +156,9 @@ export MISE_CEILING_PATHS="/workspace"
 # when the fallback hook below matters most.
 FALLBACK="${XIANIX_RUNTIME_FALLBACK:-1}"
 HOOK_FILE="/tmp/xianix-runtime-hook-${EXECUTION_ID:-$$}.sh"
+# Container-local on purpose: tenants share the runtime volume, so a ledger kept
+# there would attribute a concurrent container's download to this execution.
+FALLBACK_LOG="/tmp/xianix-runtime-fallback-${EXECUTION_ID:-$$}.log"
 
 # Binaries whose name differs from the tool providing them, mapped to the
 # comma-separated set of tools to install. A lookup table rather than
@@ -190,24 +193,53 @@ emit_agent_mise_env() {
         printf 'XIANIX_FALLBACK_TOOLS=%q\n'   "${ALLOWED_TOOLS}"
         printf 'XIANIX_FALLBACK_ALIASES=%q\n' "${BIN_ALIASES}"
         printf 'XIANIX_FALLBACK_META_DIR=%q\n' "${RUNTIMES_ROOT}/.meta"
+        printf 'XIANIX_FALLBACK_LOG=%q\n'      "${FALLBACK_LOG}"
         cat <<'HOOK'
-# A runtime reached this way is never "declared", so the provisioner's own
-# last-used bookkeeping never sees it: maintain_volume.sh would adopt it once and
-# then prune it at the retention window however heavily it is being used, forcing
-# a re-download. Record the use here instead. The requested version is always
-# `@latest`, so mise's `latest` alias link resolves to exactly the concrete
-# version that just ran — which is what the marker has to name for
-# `mise uninstall` to accept it later.
-xianix_mark_runtime_used() {
-    local tool="$1" target
-    [ -n "${XIANIX_FALLBACK_META_DIR:-}" ] && [ -n "${MISE_DATA_DIR:-}" ] || return 0
-    target="$(readlink "${MISE_DATA_DIR}/installs/${tool}/latest" 2>/dev/null)" || return 0
-    [ -n "${target}" ] || return 0
-    touch "${XIANIX_FALLBACK_META_DIR}/${tool}@${target##*/}.last-used" 2>/dev/null || true
+# Two jobs, both invisible to the container log otherwise, because everything the
+# hook prints is captured as the agent's tool output rather than executor stderr.
+#
+#   1. Record the use. A runtime reached this way is never "declared", so the
+#      provisioner's own last-used bookkeeping never sees it: maintain_volume.sh
+#      would adopt it once and then prune it at the retention window however
+#      heavily it is used, forcing a re-download.
+#   2. Append to a ledger run_prompt.sh summarises once the agent finishes, so an
+#      operator can attribute a slow run and a growing volume to a real download.
+#
+# The requested version is always `@latest`, so mise's `latest` alias link
+# resolves to exactly the concrete version that just ran — which is what the
+# marker has to name for `mise uninstall` to accept it later.
+xianix_record_runtime() {
+    local tool="$1" fresh="$2" target version state size="-"
+    [ -n "${MISE_DATA_DIR:-}" ] || return 0
+    target="$(readlink "${MISE_DATA_DIR}/installs/${tool}/latest" 2>/dev/null)"
+    if [ -z "${target}" ]; then
+        # No alias to resolve means the install itself never landed — a genuine
+        # failure, as distinct from the agent's command merely exiting non-zero.
+        xianix_ledger "${tool}" latest failed -
+        return 0
+    fi
+    version="${target##*/}"
+    [ -n "${XIANIX_FALLBACK_META_DIR:-}" ] \
+        && touch "${XIANIX_FALLBACK_META_DIR}/${tool}@${version}.last-used" 2>/dev/null
+    if [ "${fresh}" = "1" ]; then
+        state=downloaded
+        # Only worth walking the tree when something was actually fetched.
+        size="$(du -shL "${MISE_DATA_DIR}/installs/${tool}/${version}" 2>/dev/null | cut -f1)"
+        [ -n "${size}" ] || size="-"
+    else
+        state=cached
+    fi
+    xianix_ledger "${tool}" "${version}" "${state}" "${size}"
+    return 0
+}
+
+xianix_ledger() {
+    [ -n "${XIANIX_FALLBACK_LOG:-}" ] || return 0
+    printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "${XIANIX_FALLBACK_LOG}" 2>/dev/null || true
 }
 
 command_not_found_handle() {
-    local cmd="$1" tools="$1" pair tool
+    local cmd="$1" tools="$1" pair tool fresh=" "
     local -a specs=()
     for pair in ${XIANIX_FALLBACK_ALIASES}; do
         [ "${pair%%:*}" = "${cmd}" ] && { tools="${pair#*:}"; break; }
@@ -217,6 +249,9 @@ command_not_found_handle() {
             *" ${tool} "*) specs+=("${tool}@latest") ;;
             *) echo "bash: ${cmd}: command not found" >&2; return 127 ;;
         esac
+        # Sample before mise runs: afterwards every tool looks installed, and the
+        # download/cache-hit distinction is the whole point of the ledger.
+        [ -e "${MISE_DATA_DIR}/installs/${tool}/latest" ] || fresh="${fresh}${tool} "
     done
     # Fires on every call, since an undeclared tool is never put on PATH by the
     # eager pass — so word this for the cached case too, and let mise's own
@@ -224,7 +259,12 @@ command_not_found_handle() {
     echo "[runtimes] '${cmd}' is not on PATH and no version file declares it — resolving ${specs[*]} from the tenant cache (installed on first use). Pin a version (e.g. global.json, .java-version) to provision it up front instead." >&2
     mise exec "${specs[@]}" -- "$@"
     local rc=$?
-    for tool in ${tools//,/ }; do xianix_mark_runtime_used "${tool}"; done
+    for tool in ${tools//,/ }; do
+        case "${fresh}" in
+            *" ${tool} "*) xianix_record_runtime "${tool}" 1 ;;
+            *)             xianix_record_runtime "${tool}" 0 ;;
+        esac
+    done
     return "${rc}"
 }
 HOOK
@@ -233,6 +273,8 @@ HOOK
         return 0
     }
     emit_env "export BASH_ENV=\"${HOOK_FILE}\""
+    # run_prompt.sh reads this once the agent exits to summarise what the hook did.
+    emit_env "export XIANIX_RUNTIME_FALLBACK_LOG=\"${FALLBACK_LOG}\""
 }
 
 # ── Validation of plugin-declared entries ─────────────────────────────────────
@@ -312,10 +354,11 @@ fi
 
 if [ "${#REQUESTED[@]}" -eq 0 ] && [ -z "${REPO_DECLARATIONS}" ]; then
     emit_agent_mise_env
+    log "No plugin manifest and no repository version file — nothing to install up front."
     if [ "${FALLBACK}" = "1" ]; then
-        log "No plugin manifest and no repository version file — nothing to install up front; runtimes will be fetched on first use."
-    else
-        log "No plugin manifest and no repository version file — nothing to provision."
+        # Name the root here too: on this path nothing else in the log says which
+        # volume an on-demand install is about to grow.
+        log "Runtime cache root: ${RUNTIMES_ROOT} — on-demand fallback armed for: ${ALLOWED_TOOLS}."
     fi
     exit 0
 fi

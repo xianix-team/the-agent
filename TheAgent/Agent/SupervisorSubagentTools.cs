@@ -304,6 +304,33 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         var repos = await TenantVolumeReader.ListAsync(tenantId);
         var isKnownRepo = repos.Any(r => string.Equals(r.Url, repositoryUrl, StringComparison.Ordinal));
 
+        // Accepting any well-formed URL on a standard host is what makes lazy-cloning work,
+        // but it also means a URL the model *constructed* is indistinguishable from a repo the
+        // user actually named — and a fabricated one clones as a 404, killing the prepare phase
+        // with a bare "repository not found". The observed failure mode keeps the real repo's
+        // name and invents the host and owner around it, so treat a name that already belongs
+        // to an onboarded repo elsewhere as the mistake it almost always is. A tenant that
+        // genuinely owns two same-named repos on different hosts still has OnboardRepository,
+        // which only rejects an exact-URL duplicate.
+        if (!isKnownRepo)
+        {
+            var slug = RepositoryNaming.DeriveSlug(repositoryUrl);
+            var sameName = repos
+                .Where(r => string.Equals(
+                    RepositoryNaming.DeriveSlug(r.Url), slug, StringComparison.OrdinalIgnoreCase))
+                .Select(r => $"`{r.Url}`")
+                .ToList();
+
+            if (sameName.Count > 0)
+            {
+                return $"ERROR: '{repositoryUrl}' is not onboarded, but this tenant already has a " +
+                       $"repository named '{slug}': {string.Join(", ", sameName)}. Never construct a " +
+                       "repository URL — pass one verbatim from ListTenantRepositories, or one the " +
+                       "user supplied. If you really mean a different repository that happens to " +
+                       "share a name, call OnboardRepository with that URL first.";
+            }
+        }
+
         // Infer the platform either way — known repos still need it for the credential
         // env merge below (in case the chosen plugins didn't declare the matching
         // secrets.* entry), and unknown repos need it to lazy-clone in-flight.

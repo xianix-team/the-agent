@@ -36,8 +36,40 @@ fi
 # EXIT trap guarantees the worktree is removed on both success and failure, while
 # preserving the original exit code so the control plane still sees the real
 # outcome.
+# Everything the runtime fallback hook prints goes to the stderr of the agent's
+# own Bash call, which Claude Code captures as tool output — so a multi-hundred-MB
+# on-demand download leaves no trace in the container log, and neither does a
+# failed one. Replay the hook's ledger here instead, where an operator can
+# attribute a slow run or a grown tenant volume to it.
+summarize_runtimes() {
+    local ledger="${XIANIX_RUNTIME_FALLBACK_LOG:-}" kind detail
+    [ -n "${ledger}" ] && [ -s "${ledger}" ] || return 0
+    while IFS=$'\t' read -r kind detail; do
+        case "${kind}" in
+            downloaded) log "[runtimes] Fetched on demand: ${detail}" ;;
+            cached)     log "[runtimes] Reused from cache: ${detail}" ;;
+            failed)     log "[runtimes] WARNING: on-demand install FAILED: ${detail}" ;;
+        esac
+    done < <(awk -F'\t' '
+        $3 == "downloaded" { d[$1 " " $2] = $4 }
+        $3 == "cached"     { c[$1 " " $2] = 1 }
+        $3 == "failed"     { f[$1] = 1 }
+        END {
+            for (k in d) dl = dl (dl ? ", " : "") k " (" d[k] ")"
+            # A tool downloaded on its first call is "cached" on every later one;
+            # reporting it as both would read as two separate acquisitions.
+            for (k in c) if (!(k in d)) ca = ca (ca ? ", " : "") k
+            for (k in f) fa = fa (fa ? ", " : "") k "@latest"
+            if (dl) print "downloaded\t" dl
+            if (ca) print "cached\t" ca
+            if (fa) print "failed\t" fa
+        }' "${ledger}" 2>/dev/null)
+    return 0
+}
+
 cleanup_workspace() {
     local exit_code=$?
+    summarize_runtimes
     log "--- Cleaning up workspace ---"
     cd /workspace 2>/dev/null || true
     if [ -n "${REPOSITORY_URL:-}" ]; then
@@ -193,7 +225,13 @@ _runtime_env_file="/tmp/xianix-runtime-env-${EXECUTION_ID}.sh"
 if [ -s "${_runtime_env_file}" ]; then
     # shellcheck disable=SC1090
     source "${_runtime_env_file}"
-    log "Runtime environment applied: $(grep -c '^export ' "${_runtime_env_file}") export(s)."
+    # Name what landed on PATH rather than counting exports: on the fallback path
+    # the count is a constant (the mise sandbox) and says nothing at all.
+    if [ -n "${XIANIX_PROVISIONED_RUNTIMES:-}" ]; then
+        log "Runtime environment applied — on PATH: ${XIANIX_PROVISIONED_RUNTIMES}."
+    else
+        log "Runtime environment applied — mise sandbox only; no runtime beyond the image's own."
+    fi
 fi
 
 # ── Prepare cached repo context (CLAUDE.md + symbol map) ─────────────────────

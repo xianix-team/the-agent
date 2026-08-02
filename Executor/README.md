@@ -153,6 +153,28 @@ This resolves `latest` rather than a pinned version and pays the download mid-ru
 strictly a fallback: declaring a version file is still better on both counts, and when one
 exists the tool is already on `PATH` and the hook never fires.
 
+#### What the container log shows
+
+Everything the hook prints — its own message and mise's download progress — goes to the
+stderr of the *agent's* Bash call, which Claude Code captures as tool output. So an on-demand
+install leaves no trace in the executor log, and a failed one leaves none either. The hook
+therefore appends each resolve to a per-execution ledger which `run_prompt.sh` replays once
+the agent exits, giving an operator something to attribute a slow run or a grown tenant volume
+to:
+
+```
+[runtimes] No plugin manifest and no repository version file — nothing to install up front.
+[runtimes] Runtime cache root: /workspace/runtimes — on-demand fallback armed for: bun deno …
+  … agent runs …
+[runtimes] Fetched on demand: java 26.0.2 (389M), maven 3.9.16 (11M)
+```
+
+A cache hit reports as `Reused from cache: java 26.0.2` with no size, and an install that
+never landed as `WARNING: on-demand install FAILED: java@latest`. A tool downloaded on its
+first call is reported only as fetched, not also as cached on subsequent ones. The ledger
+lives in `/tmp` rather than on the volume on purpose: tenants share the volume, so a ledger
+kept there would attribute a concurrent container's download to this execution.
+
 ### Version forms and the allow-list
 
 Versions may be fuzzy (`9.0`, `22`), pinned (`9.0.203`, `22.11.0`), or an alias

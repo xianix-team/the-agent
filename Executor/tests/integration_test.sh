@@ -570,17 +570,34 @@ test_runtime_fallback_hook_hermetic() {
             | sed "s/^/alias-cargo: /"
         bash -c "mvn --version" 2>&1 | grep -oE "resolving [a-z@. ]+" \
             | sed "s/^/alias-mvn: /"
+        # shellcheck disable=SC1090
+        . "${BASH_ENV}"
+        # Those two attempts ran with no network, so nothing installed — the case
+        # that is otherwise invisible, since mise'"'"'s errors land in the agent'"'"'s tool
+        # output rather than the container log.
+        sort -u "${XIANIX_FALLBACK_LOG}" | sed "s/^/ledger: /" | tr "\t" " "
+        : > "${XIANIX_FALLBACK_LOG}"
+
         # A hook-installed runtime is never "declared", so the provisioner never
         # records its use; without the hook doing it, maintenance would adopt the
         # runtime once and then prune it at the retention window however heavily
-        # it is used. Exercise that bookkeeping directly against a stand-in
-        # install layout, so the assertion needs no multi-hundred-MB download.
-        # shellcheck disable=SC1090
-        . "${BASH_ENV}"
-        mkdir -p "${MISE_DATA_DIR}/installs/faketool"
+        # it is used. Exercise that bookkeeping — and the download/cache-hit
+        # accounting beside it — against stand-in install layouts, so the
+        # assertions need no multi-hundred-MB download.
+        mkdir -p "${MISE_DATA_DIR}/installs/faketool/1.2.3"
         ln -sfn ./1.2.3 "${MISE_DATA_DIR}/installs/faketool/latest"
-        xianix_mark_runtime_used faketool
+        xianix_record_runtime faketool 0
+        mkdir -p "${MISE_DATA_DIR}/installs/fakenew/4.5.6"
+        ln -sfn ./4.5.6 "${MISE_DATA_DIR}/installs/fakenew/latest"
+        xianix_record_runtime fakenew 1
+        xianix_record_runtime fakegone 1
         ls /workspace/runtimes/.meta | sed "s/^/meta: /"
+
+        # Render the ledger with run_prompt.sh'"'"'s own summariser, so the operator-facing
+        # line is asserted rather than a copy of it.
+        log() { echo "$*" >&2; }
+        eval "$(awk "/^summarize_runtimes\(\) \{/,/^}/" /workspace/run_prompt.sh)"
+        summarize_runtimes 2>&1 | sed "s/^/summary: /"
         exit 0
     '
 
@@ -640,6 +657,35 @@ test_runtime_fallback_hook_hermetic() {
         t_pass "hook records runtime use so maintenance won't prune it while active"
     else
         t_fail "expected a faketool@1.2.3 last-used marker: $(grep '^meta:' "${STDOUT_FILE}" | tr '\n' ' ')"
+    fi
+
+    # An install that never landed is the one an operator most needs to see, and
+    # the one the container log is otherwise completely silent about.
+    if grep -q '^ledger: java latest failed' "${STDOUT_FILE}" \
+        && grep -q '^ledger: maven latest failed' "${STDOUT_FILE}"; then
+        t_pass "a failed on-demand install is recorded, not swallowed"
+    else
+        t_fail "expected failed ledger rows for the offline mvn attempt: $(grep '^ledger:' "${STDOUT_FILE}" | tr '\n' ' ')"
+    fi
+
+    if grep -qE '^summary: \[runtimes\] Fetched on demand: fakenew 4\.5\.6 \([0-9]' "${STDOUT_FILE}"; then
+        t_pass "summary reports a fresh download with its on-disk size"
+    else
+        t_fail "expected a 'Fetched on demand' line for fakenew: $(grep '^summary:' "${STDOUT_FILE}" | tr '\n' ' ')"
+    fi
+
+    # Separating the two is the point: a cache hit costs nothing and must not read
+    # as another few hundred MB pulled onto the tenant volume.
+    if grep -qxF 'summary: [runtimes] Reused from cache: faketool 1.2.3' "${STDOUT_FILE}"; then
+        t_pass "summary distinguishes a cache hit from a download"
+    else
+        t_fail "expected a 'Reused from cache' line for faketool"
+    fi
+
+    if grep -qxF 'summary: [runtimes] WARNING: on-demand install FAILED: fakegone@latest' "${STDOUT_FILE}"; then
+        t_pass "summary warns about a runtime that never installed"
+    else
+        t_fail "expected a FAILED summary line for fakegone"
     fi
 
     # And the whole thing must be switchable off.

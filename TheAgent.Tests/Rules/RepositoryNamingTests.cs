@@ -26,6 +26,31 @@ public class RepositoryNamingTests
         Assert.Equal(expected, RepositoryNaming.DeriveName(url));
     }
 
+    [Theory]
+    [InlineData("https://github.com/acme/app.git",                   "app")]
+    [InlineData("https://github.com/hasith/dotnet-unit-tests",       "dotnet-unit-tests")]
+    [InlineData("https://dev.azure.com/myorg/myproj/_git/myrepo",    "myrepo")]
+    [InlineData("https://myorg.visualstudio.com/myproj/_git/myrepo", "myrepo")]
+    [InlineData("https://example.com/onlysegment",                   "onlysegment")]
+    [InlineData("",                                                  "")]
+    public void DeriveSlug_ReturnsRepositorySegmentOnly(string url, string expected)
+    {
+        Assert.Equal(expected, RepositoryNaming.DeriveSlug(url));
+    }
+
+    [Fact]
+    public void DeriveSlug_MatchesAcrossHosts_WhereDeriveNameCannot()
+    {
+        // The guard in RunClaudeCodeOnRepository leans on this: a fabricated Azure DevOps URL
+        // that reuses a real repo's name must be recognisable as a collision. DeriveName can't
+        // do it, because ADO contributes the project where GitHub contributes the owner.
+        const string real  = "https://github.com/hasith/dotnet-unit-tests";
+        const string fake  = "https://dev.azure.com/xianix-demo/dotnet-unit-tests/_git/dotnet-unit-tests";
+
+        Assert.NotEqual(RepositoryNaming.DeriveName(real), RepositoryNaming.DeriveName(fake));
+        Assert.Equal(RepositoryNaming.DeriveSlug(real), RepositoryNaming.DeriveSlug(fake));
+    }
+
     [Fact]
     public void DeriveName_NullInput_ReturnsEmpty()
     {
