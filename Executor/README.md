@@ -134,9 +134,20 @@ $ dotnet build          # .csproj present, no global.json
 ```
 
 It is gated on the same allow-list as the eager path, so a typo or a non-runtime binary is
-refused immediately with the usual 127 and no registry lookup. A small binary→tool table
-(`cargo`/`rustc`→`rust`, `javac`→`java`) covers the runtimes whose command name differs
-from the tool that provides it. Set `XIANIX-RUNTIME-FALLBACK=0` to disable.
+refused immediately with the usual 127 and no registry lookup. A binary→tools table covers
+commands whose name differs from the tool providing them, and maps to a *set* where one
+tool isn't enough: `cargo`/`rustc`→`rust`, `javac`→`java`, and `mvn`→`java`+`maven` (mise's
+`maven` ships no JDK, so on its own `mvn` dies with "JAVA_HOME is not defined correctly").
+Set `XIANIX-RUNTIME-FALLBACK=0` to disable.
+
+`maven` and `gradle` are the only non-runtimes on the allow-list, for a structural reason:
+every other ecosystem ships its build tool inside the runtime — the .NET SDK carries
+MSBuild, node carries npm, go carries the go tool, rust carries cargo, python carries pip —
+whereas the JDK ships none, which would otherwise leave every Maven/Gradle repo unbuildable.
+
+Note the hook only fires for a command that is *absent*. A repo driven by the `./mvnw` or
+`./gradlew` wrapper scripts runs a file that does exist, so it fails inside the wrapper with
+a Java error instead. Those repos need a `.java-version` or `.sdkmanrc`.
 
 This resolves `latest` rather than a pinned version and pays the download mid-run, so it is
 strictly a fallback: declaring a version file is still better on both counts, and when one

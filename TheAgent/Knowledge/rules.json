@@ -219,14 +219,14 @@
             }
           ],
           "with-envs": [
-            {
+            { 
               "name": "AZURE-DEVOPS-TOKEN",
               "value": "secrets.AZURE-DEVOPS-TOKEN",
               "mandatory": true
             }
           ],
           "conversation-key": "resource.pullRequestId",
-          "model": "claude-sonnet-4-5",
+          "model": "claude-sonnet-5",
           "max-budget-usd": 5,
           "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}}. Run /pr-review {{pr-number}} to perform the automated review."
         },
@@ -259,7 +259,7 @@
               "marketplace": "xianix-team/plugins-official"
             }
           ],
-          "model": "claude-haiku-4-5",
+          "model": "claude-sonnet-5",
           "execute-prompt": "Issue #{{issue-number}} in the repository {{repository-name}} has been assigned to xianix-agent for requirement analysis.\n\nRun /requirement-analysis {{issue-number}} to perform the automated requirement analysis and elaboration."
         },
         {
@@ -291,7 +291,7 @@
             },
             {
               "name": "ANTHROPIC-MODEL",
-              "value": "claude-haiku-4-5",
+              "value": "claude-sonnet-5",
               "constant": true
             }
           ],
@@ -323,7 +323,7 @@
               "constant": true
             }
           ],
-          "model": "claude-haiku-4-5",
+          "model": "claude-sonnet-5",
           "max-turns": 8,
           "allowed-tools": [
             "Read",
@@ -358,7 +358,7 @@
               "constant": true
             }
           ],
-          "model": "claude-haiku-4-5",
+          "model": "claude-sonnet-5",
           "max-turns": 8,
           "allowed-tools": [
             "Read",
@@ -371,7 +371,7 @@
     },
     {
       "chat": "chat",
-      "model": "claude-sonnet-4-5",
+      "model": "claude-sonnet-5",
       "max-budget-usd": 5,
       "use-plugins": [
         {

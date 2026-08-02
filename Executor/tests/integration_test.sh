@@ -566,8 +566,21 @@ test_runtime_fallback_hook_hermetic() {
         bash -c "nosuchcmd" 2>&1        | sed "s/^/deny-typo: /"
         bash -c "nosuchcmd"; echo "deny-exit: $?"
         bash -c "node --version" 2>&1   | sed "s/^/passthrough-node: /"
-        bash -c "cargo --version" 2>&1 | grep -oE "installing [a-z]+@latest" \
+        bash -c "cargo --version" 2>&1 | grep -oE "resolving [a-z@. ]+" \
             | sed "s/^/alias-cargo: /"
+        bash -c "mvn --version" 2>&1 | grep -oE "resolving [a-z@. ]+" \
+            | sed "s/^/alias-mvn: /"
+        # A hook-installed runtime is never "declared", so the provisioner never
+        # records its use; without the hook doing it, maintenance would adopt the
+        # runtime once and then prune it at the retention window however heavily
+        # it is used. Exercise that bookkeeping directly against a stand-in
+        # install layout, so the assertion needs no multi-hundred-MB download.
+        # shellcheck disable=SC1090
+        . "${BASH_ENV}"
+        mkdir -p "${MISE_DATA_DIR}/installs/faketool"
+        ln -sfn ./1.2.3 "${MISE_DATA_DIR}/installs/faketool/latest"
+        xianix_mark_runtime_used faketool
+        ls /workspace/runtimes/.meta | sed "s/^/meta: /"
         exit 0
     '
 
@@ -608,10 +621,25 @@ test_runtime_fallback_hook_hermetic() {
 
     # cargo is provided by the `rust` tool; without the alias table a Rust repo
     # would fall through even though the runtime is installable.
-    if grep -q '^alias-cargo: installing rust@latest' "${STDOUT_FILE}"; then
+    if grep -q '^alias-cargo: resolving rust@latest' "${STDOUT_FILE}"; then
         t_pass "binary-to-tool alias maps 'cargo' onto the rust runtime"
     else
         t_fail "expected 'cargo' to resolve to rust@latest"
+    fi
+
+    # mvn needs the JDK *and* maven — mise's maven brings no Java of its own.
+    if grep -q '^alias-mvn: resolving java@latest maven@latest' "${STDOUT_FILE}"; then
+        t_pass "'mvn' co-installs the JDK alongside maven"
+    else
+        t_fail "expected 'mvn' to resolve to java@latest + maven@latest"
+    fi
+
+    # The marker must name the concrete version `mise uninstall` accepts, not the
+    # `latest` alias — a marker per alias could uninstall a version still in use.
+    if grep -qx 'meta: faketool@1.2.3.last-used' "${STDOUT_FILE}"; then
+        t_pass "hook records runtime use so maintenance won't prune it while active"
+    else
+        t_fail "expected a faketool@1.2.3 last-used marker: $(grep '^meta:' "${STDOUT_FILE}" | tr '\n' ' ')"
     fi
 
     # And the whole thing must be switchable off.
