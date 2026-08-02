@@ -80,7 +80,11 @@ public class ProcessingWorkflow
             (ContainerActivities a) => a.EnsureWorkspaceVolumeAsync(orchestrationResult.TenantId, repositoryUrl),
             ContainerWorkflowOptions.Standard);
 
-        input = input with { VolumeName = volumeName };
+        var runtimeVolumeName = await Workflow.ExecuteActivityAsync(
+            (ContainerActivities a) => a.EnsureRuntimeVolumeAsync(orchestrationResult.TenantId),
+            ContainerWorkflowOptions.Standard);
+
+        input = input with { VolumeName = volumeName, RuntimeVolumeName = runtimeVolumeName };
 
         var containerId = await Workflow.ExecuteActivityAsync(
             (ContainerActivities a) => a.StartContainerAsync(input),

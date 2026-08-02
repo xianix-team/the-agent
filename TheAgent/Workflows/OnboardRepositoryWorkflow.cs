@@ -47,7 +47,13 @@ public class OnboardRepositoryWorkflow
                 (ContainerActivities a) => a.EnsureWorkspaceVolumeAsync(req.TenantId, req.RepositoryUrl),
                 ContainerWorkflowOptions.Standard);
 
-            await ExecutePipelineAsync(req, volumeName);
+            // Mounted even in prepare mode so volume maintenance (runtime pruning) can
+            // see the shared runtime cache; nothing is installed during onboarding.
+            var runtimeVolumeName = await Workflow.ExecuteActivityAsync(
+                (ContainerActivities a) => a.EnsureRuntimeVolumeAsync(req.TenantId),
+                ContainerWorkflowOptions.Standard);
+
+            await ExecutePipelineAsync(req, volumeName, runtimeVolumeName);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -69,9 +75,11 @@ public class OnboardRepositoryWorkflow
         }
     }
 
-    private static async Task ExecutePipelineAsync(OnboardRepositoryRequest req, string volumeName)
+    private static async Task ExecutePipelineAsync(
+        OnboardRepositoryRequest req, string volumeName, string runtimeVolumeName)
     {
-        var input = BuildContainerInput(req, volumeName, Workflow.NewGuid().ToString("N")[..8]);
+        var input = BuildContainerInput(
+            req, volumeName, Workflow.NewGuid().ToString("N")[..8], runtimeVolumeName);
 
         var containerId = await Workflow.ExecuteActivityAsync(
             (ContainerActivities a) => a.StartContainerAsync(input),
@@ -244,7 +252,8 @@ public class OnboardRepositoryWorkflow
     /// of which can safely regress without breaking the chat onboarding flow.
     /// </summary>
     internal static ContainerExecutionInput BuildContainerInput(
-        OnboardRepositoryRequest req, string volumeName, string executionId)
+        OnboardRepositoryRequest req, string volumeName, string executionId,
+        string runtimeVolumeName = "")
     {
         // Inputs the executor scripts read from XIANIX_INPUTS via jq. Onboarding only
         // needs the structural clone keys — the executor always starts on the default
@@ -265,6 +274,7 @@ public class OnboardRepositoryWorkflow
             WithEnvsJson      = ContainerEnvSerialization.Serialize(req.WithEnvs),
             Prompt            = string.Empty,
             VolumeName        = volumeName,
+            RuntimeVolumeName = runtimeVolumeName,
             Mode              = "prepare",
         };
     }

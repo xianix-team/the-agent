@@ -26,9 +26,21 @@
 #     4. A bad repository URL produces the structured prepare error envelope.
 #     5. Worktree is created from the default branch (HEAD); plugins resolve
 #        any task-specific refs from the prompt themselves.
+#     6. Runtime provisioner: plugin `.tool-versions` entries are collected,
+#        non-allow-listed tools / backend-prefixed names / traversal versions
+#        are rejected, and an install that cannot reach the network is warned
+#        about rather than failing the run. Runs with --network none, so it is
+#        fully hermetic and downloads nothing.
+#     6b. The repo's own version files (global.json here) are detected without
+#        any Xianix-specific manifest, and XIANIX_RUNTIME_AUTODETECT=0 turns
+#        that off.
+#
+#   Tier R (needs XIANIX_IT_RUNTIMES=1; downloads a real .NET SDK, ~200MB):
+#     7. Live dotnet provisioning onto a runtime volume; a second run on the
+#        same volume must hit the cache instead of re-downloading.
 #
 #   Tier 2 (needs ANTHROPIC_API_KEY, costs ~$0.01, skipped when the key is absent):
-#     6. A full prepare-and-execute run where Claude Code must read a planted
+#     8. A full prepare-and-execute run where Claude Code must read a planted
 #        secret token from the repo and return it in the result envelope.
 #
 # HOW TO RUN
@@ -105,9 +117,10 @@ STDERR_FILE="${WORK_ROOT}/last-stderr"
 # cloned repo and hide the failure we want to provoke).
 VOLUME_MAIN="xianix-it-main-$$"
 VOLUME_BADURL="xianix-it-badurl-$$"
+VOLUME_RUNTIMES="xianix-it-runtimes-$$"
 
 cleanup() {
-    docker volume rm -f "${VOLUME_MAIN}" "${VOLUME_BADURL}" >/dev/null 2>&1 || true
+    docker volume rm -f "${VOLUME_MAIN}" "${VOLUME_BADURL}" "${VOLUME_RUNTIMES}" >/dev/null 2>&1 || true
     rm -rf "${WORK_ROOT}"
 }
 trap cleanup EXIT
@@ -383,10 +396,432 @@ test_worktree_uses_default_branch() {
     fi
 }
 
+# ── Tier 1 (cont.): runtime provisioner — hermetic, no network ────────────────
+
+# Writes a fixture "installed plugin" (a .tool-versions manifest) plus a fake
+# `claude` CLI shim that reports it, so provision_runtimes.sh can be exercised
+# without installing real plugins. Also a fake worktree carrying a repo-level
+# global.json, to exercise the autodetect path.
+create_runtime_fixture() {
+    local plugin_dir="${FIXTURE_MOUNT_DIR}/fake-plugin"
+    mkdir -p "${plugin_dir}"
+    # Two good entries plus three that must be rejected: a tool outside the
+    # allow-list, mise's explicit backend syntax, and a traversal version.
+    cat > "${plugin_dir}/.tool-versions" <<'EOF'
+dotnet      9.0
+node        22.11.0   # comments are allowed
+terraform   1.9
+cargo:evil  1.0
+python      ../evil
+EOF
+
+    cat > "${FIXTURE_MOUNT_DIR}/claude-shim.sh" <<'EOF'
+#!/usr/bin/env bash
+# Minimal stand-in for the Claude CLI: only `plugin list --json` is used by
+# provision_runtimes.sh.
+if [ "${1:-}" = "plugin" ] && [ "${2:-}" = "list" ]; then
+    echo '[{"id":"fake-plugin@test","installPath":"/fixtures/fake-plugin"}]'
+fi
+exit 0
+EOF
+    chmod +x "${FIXTURE_MOUNT_DIR}/claude-shim.sh"
+
+    mkdir -p "${FIXTURE_MOUNT_DIR}/fake-worktree"
+    echo '{ "sdk": { "version": "9.0.100" } }' \
+        > "${FIXTURE_MOUNT_DIR}/fake-worktree/global.json"
+}
+
+# Runs provision_runtimes.sh in the image with the fixture mounted and no
+# network, so mise can collect and validate declarations but never downloads.
+# $1 is extra `docker run` args (as a single string), $2 the shell prelude.
+run_provisioner_offline() {
+    local extra_args="$1"
+    : > "${STDOUT_FILE}"; : > "${STDERR_FILE}"
+    set +e
+    # shellcheck disable=SC2086  # extra_args is a deliberate arg list
+    docker run --rm --network none \
+        -v "${FIXTURE_MOUNT_DIR}:/fixtures:ro" \
+        -v "${VOLUME_RUNTIMES}:/workspace/runtimes" \
+        ${extra_args} \
+        --entrypoint bash "${IMAGE}" -c '
+            mkdir -p /tmp/bin
+            if [ "${NO_PLUGINS:-0}" = "1" ]; then
+                printf "#!/usr/bin/env bash\nexit 0\n" > /tmp/bin/claude
+            else
+                cp /fixtures/claude-shim.sh /tmp/bin/claude
+            fi
+            chmod +x /tmp/bin/claude
+            export PATH="/tmp/bin:${PATH}"
+            if [ "${SETUP_WORKTREE:-0}" = "1" ]; then
+                mkdir -p /tmp/worktree
+                cp -r /fixtures/fake-worktree/. /tmp/worktree/
+            fi
+            /workspace/provision_runtimes.sh /tmp/runtime-env.sh
+            rc=$?
+            echo "── env file ──"
+            cat /tmp/runtime-env.sh 2>/dev/null
+            exit "${rc}"
+        ' >"${STDOUT_FILE}" 2>"${STDERR_FILE}"
+    LAST_EXIT=$?
+    set -e
+}
+
+test_runtime_provisioner_hermetic() {
+    banner "Test 6: runtime provisioner — declarations, validation, failure isolation (hermetic)"
+    create_runtime_fixture
+
+    # Copy the fixture worktree somewhere writable inside the container: mise
+    # resolves from the worktree, and /fixtures is mounted read-only.
+    run_provisioner_offline "-e WORK_DIR=/tmp/worktree -e XIANIX_RUNTIME_AUTODETECT=1 \
+        -e SETUP_WORKTREE=1"
+
+    if [ "${LAST_EXIT}" -eq 0 ]; then
+        t_pass "provisioner exits 0 even when installs can't reach the network"
+    else
+        t_fail "provisioner exited ${LAST_EXIT}, expected 0 (it must never fail a run)"
+        sed 's/^/  │ /' "${STDERR_FILE}" | tail -n 30
+        return
+    fi
+
+    if grep -q 'Plugin-declared runtimes:.*dotnet@9\.0' "${STDERR_FILE}" \
+        && grep -q 'Plugin-declared runtimes:.*node@22\.11\.0' "${STDERR_FILE}"; then
+        t_pass "valid .tool-versions entries were collected"
+    else
+        t_fail "expected dotnet@9.0 and node@22.11.0 in the plugin-declared list"
+    fi
+
+    if grep -q "runtime 'terraform' is not allow-listed" "${STDERR_FILE}"; then
+        t_pass "non-allow-listed runtime was rejected"
+    else
+        t_fail "expected an allow-list warning for 'terraform'"
+    fi
+
+    if grep -q "runtime 'cargo:evil' is not allow-listed" "${STDERR_FILE}"; then
+        t_pass "explicit backend syntax was rejected"
+    else
+        t_fail "expected 'cargo:evil' to be rejected"
+    fi
+
+    if grep -q "invalid version '../evil'" "${STDERR_FILE}"; then
+        t_pass "path-traversal version string was rejected"
+    else
+        t_fail "expected a warning for the invalid '../evil' version"
+    fi
+
+    if grep -q "Runtime cache root: /workspace/runtimes" "${STDERR_FILE}"; then
+        t_pass "installs are targeted at the mounted runtime volume"
+    else
+        t_fail "provisioner did not resolve the mounted runtime volume as its cache root"
+    fi
+}
+
+test_runtime_autodetects_repo_version_file() {
+    banner "Test 6b: runtime provisioner detects the repo's own version files"
+
+    # No plugins this time — the only declaration is the worktree's global.json.
+    run_provisioner_offline "-e WORK_DIR=/tmp/worktree -e SETUP_WORKTREE=1 -e NO_PLUGINS=1"
+
+    if [ "${LAST_EXIT}" -eq 0 ]; then
+        t_pass "provisioner exits 0"
+    else
+        t_fail "provisioner exited ${LAST_EXIT}"
+        return
+    fi
+
+    if grep -q 'Repository runtime declarations:.*global.json' "${STDERR_FILE}"; then
+        t_pass "repo global.json was picked up without any Xianix-specific manifest"
+    else
+        t_fail "expected global.json in the repository declarations"
+    fi
+
+    # Autodetection off must ignore it and, with no plugins, find nothing at all.
+    run_provisioner_offline "-e WORK_DIR=/tmp/worktree -e SETUP_WORKTREE=1 -e NO_PLUGINS=1 \
+        -e XIANIX_RUNTIME_AUTODETECT=0"
+
+    # Wording differs depending on whether the on-demand fallback is armed; the
+    # invariant under test is that nothing was *declared*, so match the prefix.
+    if grep -q "No plugin manifest and no repository version file" "${STDERR_FILE}"; then
+        t_pass "XIANIX_RUNTIME_AUTODETECT=0 ignores the repo's version files"
+    else
+        t_fail "expected no declarations to be found with autodetect disabled and no plugins"
+    fi
+}
+
+test_runtime_fallback_hook_hermetic() {
+    banner "Test 6c: on-demand runtime fallback hook (hermetic)"
+
+    # No plugins, no worktree: the "declares nothing" case the hook exists for.
+    # Everything asserted here happens before any download, so it runs offline.
+    local run_cmd='
+        mkdir -p /tmp/bin
+        printf "#!/usr/bin/env bash\nexit 0\n" > /tmp/bin/claude
+        chmod +x /tmp/bin/claude
+        export PATH="/tmp/bin:${PATH}"
+        /workspace/provision_runtimes.sh /tmp/runtime-env.sh
+        # shellcheck disable=SC1091
+        set -a; . /tmp/runtime-env.sh; set +a
+        echo "bash-env: ${BASH_ENV:-<unset>}"
+        [ -f "${BASH_ENV:-/nonexistent}" ] && echo "hook-file: present"
+        bash -c "terraform version" 2>&1 | sed "s/^/deny-terraform: /"
+        bash -c "nosuchcmd" 2>&1        | sed "s/^/deny-typo: /"
+        bash -c "nosuchcmd"; echo "deny-exit: $?"
+        bash -c "node --version" 2>&1   | sed "s/^/passthrough-node: /"
+        bash -c "cargo --version" 2>&1 | grep -oE "resolving [a-z@. ]+" \
+            | sed "s/^/alias-cargo: /"
+        bash -c "mvn --version" 2>&1 | grep -oE "resolving [a-z@. ]+" \
+            | sed "s/^/alias-mvn: /"
+        # shellcheck disable=SC1090
+        . "${BASH_ENV}"
+        # Those two attempts ran with no network, so nothing installed — the case
+        # that is otherwise invisible, since mise'"'"'s errors land in the agent'"'"'s tool
+        # output rather than the container log.
+        sort -u "${XIANIX_FALLBACK_LOG}" | sed "s/^/ledger: /" | tr "\t" " "
+        : > "${XIANIX_FALLBACK_LOG}"
+
+        # A hook-installed runtime is never "declared", so the provisioner never
+        # records its use; without the hook doing it, maintenance would adopt the
+        # runtime once and then prune it at the retention window however heavily
+        # it is used. Exercise that bookkeeping — and the download/cache-hit
+        # accounting beside it — against stand-in install layouts, so the
+        # assertions need no multi-hundred-MB download.
+        mkdir -p "${MISE_DATA_DIR}/installs/faketool/1.2.3"
+        ln -sfn ./1.2.3 "${MISE_DATA_DIR}/installs/faketool/latest"
+        xianix_record_runtime faketool 0
+        mkdir -p "${MISE_DATA_DIR}/installs/fakenew/4.5.6"
+        ln -sfn ./4.5.6 "${MISE_DATA_DIR}/installs/fakenew/latest"
+        xianix_record_runtime fakenew 1
+        xianix_record_runtime fakegone 1
+        ls /workspace/runtimes/.meta | sed "s/^/meta: /"
+
+        # Render the ledger with run_prompt.sh'"'"'s own summariser, so the operator-facing
+        # line is asserted rather than a copy of it.
+        log() { echo "$*" >&2; }
+        eval "$(awk "/^summarize_runtimes\(\) \{/,/^}/" /workspace/run_prompt.sh)"
+        summarize_runtimes 2>&1 | sed "s/^/summary: /"
+        exit 0
+    '
+
+    : > "${STDOUT_FILE}"; : > "${STDERR_FILE}"
+    set +e
+    docker run --rm --network none \
+        -v "${VOLUME_RUNTIMES}:/workspace/runtimes" \
+        --entrypoint bash "${IMAGE}" -c "${run_cmd}" >"${STDOUT_FILE}" 2>"${STDERR_FILE}"
+    LAST_EXIT=$?
+    set -e
+
+    if grep -q '^bash-env: /tmp/xianix-runtime-hook' "${STDOUT_FILE}" \
+        && grep -q '^hook-file: present' "${STDOUT_FILE}"; then
+        t_pass "BASH_ENV hook is emitted even when nothing is declared"
+    else
+        t_fail "expected a BASH_ENV hook file: $(tail -n 5 "${STDERR_FILE}" | tr '\n' ' ')"
+        return
+    fi
+
+    if grep -q '^deny-terraform: bash: terraform: command not found' "${STDOUT_FILE}"; then
+        t_pass "non-allow-listed binary is refused, not installed"
+    else
+        t_fail "expected the hook to refuse 'terraform'"
+    fi
+
+    if grep -q '^deny-typo: bash: nosuchcmd: command not found' "${STDOUT_FILE}" \
+        && grep -q '^deny-exit: 127' "${STDOUT_FILE}"; then
+        t_pass "an unknown command still fails with the conventional 127"
+    else
+        t_fail "expected exit 127 and the standard message for an unknown command"
+    fi
+
+    if grep -qE '^passthrough-node: v[0-9]+' "${STDOUT_FILE}"; then
+        t_pass "a binary already on PATH is untouched by the hook"
+    else
+        t_fail "the hook interfered with the image's own node"
+    fi
+
+    # cargo is provided by the `rust` tool; without the alias table a Rust repo
+    # would fall through even though the runtime is installable.
+    if grep -q '^alias-cargo: resolving rust@latest' "${STDOUT_FILE}"; then
+        t_pass "binary-to-tool alias maps 'cargo' onto the rust runtime"
+    else
+        t_fail "expected 'cargo' to resolve to rust@latest"
+    fi
+
+    # mvn needs the JDK *and* maven — mise's maven brings no Java of its own.
+    if grep -q '^alias-mvn: resolving java@latest maven@latest' "${STDOUT_FILE}"; then
+        t_pass "'mvn' co-installs the JDK alongside maven"
+    else
+        t_fail "expected 'mvn' to resolve to java@latest + maven@latest"
+    fi
+
+    # The marker must name the concrete version `mise uninstall` accepts, not the
+    # `latest` alias — a marker per alias could uninstall a version still in use.
+    if grep -qx 'meta: faketool@1.2.3.last-used' "${STDOUT_FILE}"; then
+        t_pass "hook records runtime use so maintenance won't prune it while active"
+    else
+        t_fail "expected a faketool@1.2.3 last-used marker: $(grep '^meta:' "${STDOUT_FILE}" | tr '\n' ' ')"
+    fi
+
+    # An install that never landed is the one an operator most needs to see, and
+    # the one the container log is otherwise completely silent about.
+    if grep -q '^ledger: java latest failed' "${STDOUT_FILE}" \
+        && grep -q '^ledger: maven latest failed' "${STDOUT_FILE}"; then
+        t_pass "a failed on-demand install is recorded, not swallowed"
+    else
+        t_fail "expected failed ledger rows for the offline mvn attempt: $(grep '^ledger:' "${STDOUT_FILE}" | tr '\n' ' ')"
+    fi
+
+    if grep -qE '^summary: \[runtimes\] Fetched on demand: fakenew 4\.5\.6 \([0-9]' "${STDOUT_FILE}"; then
+        t_pass "summary reports a fresh download with its on-disk size"
+    else
+        t_fail "expected a 'Fetched on demand' line for fakenew: $(grep '^summary:' "${STDOUT_FILE}" | tr '\n' ' ')"
+    fi
+
+    # Separating the two is the point: a cache hit costs nothing and must not read
+    # as another few hundred MB pulled onto the tenant volume.
+    if grep -qxF 'summary: [runtimes] Reused from cache: faketool 1.2.3' "${STDOUT_FILE}"; then
+        t_pass "summary distinguishes a cache hit from a download"
+    else
+        t_fail "expected a 'Reused from cache' line for faketool"
+    fi
+
+    if grep -qxF 'summary: [runtimes] WARNING: on-demand install FAILED: fakegone@latest' "${STDOUT_FILE}"; then
+        t_pass "summary warns about a runtime that never installed"
+    else
+        t_fail "expected a FAILED summary line for fakegone"
+    fi
+
+    # And the whole thing must be switchable off.
+    : > "${STDOUT_FILE}"
+    set +e
+    docker run --rm --network none \
+        -e XIANIX_RUNTIME_FALLBACK=0 \
+        -v "${VOLUME_RUNTIMES}:/workspace/runtimes" \
+        --entrypoint bash "${IMAGE}" -c '
+            mkdir -p /tmp/bin; printf "#!/usr/bin/env bash\nexit 0\n" > /tmp/bin/claude
+            chmod +x /tmp/bin/claude; export PATH="/tmp/bin:${PATH}"
+            /workspace/provision_runtimes.sh /tmp/runtime-env.sh
+            grep -c BASH_ENV /tmp/runtime-env.sh || true
+        ' >"${STDOUT_FILE}" 2>/dev/null
+    set -e
+
+    if grep -qx '0' "${STDOUT_FILE}"; then
+        t_pass "XIANIX_RUNTIME_FALLBACK=0 emits no hook"
+    else
+        t_fail "expected no BASH_ENV export with the fallback disabled"
+    fi
+}
+
+# ── Tier R: live dotnet provisioning (needs network, ~200MB download) ─────────
+
+test_runtime_dotnet_live() {
+    banner "Test 7: live dotnet provisioning + cache reuse (XIANIX_IT_RUNTIMES=1)"
+
+    if [ "${XIANIX_IT_RUNTIMES:-0}" != "1" ]; then
+        t_skip "XIANIX_IT_RUNTIMES is not set — skipping the live .NET SDK download test."
+        return
+    fi
+
+    local live_volume="xianix-it-rt-live-$$"
+    # `dotnet --version` runs the *managed* CLI, unlike `dotnet --list-sdks`
+    # which the native muxer answers on its own. Only the former catches a
+    # missing runtime dependency in the image (libicu, openssl, …), which is
+    # exactly what would break a plugin's `dotnet build` while every cheaper
+    # smoke check still looked green — so assert on both.
+    local run_cmd='
+        set -e
+        mkdir -p /tmp/bin /tmp/live-plugin
+        printf "dotnet 9.0\n" > /tmp/live-plugin/.tool-versions
+        cat > /tmp/bin/claude <<"SHIM"
+#!/usr/bin/env bash
+if [ "${1:-}" = "plugin" ] && [ "${2:-}" = "list" ]; then
+    echo "[{\"id\":\"live-plugin@test\",\"installPath\":\"/tmp/live-plugin\"}]"
+fi
+exit 0
+SHIM
+        chmod +x /tmp/bin/claude
+        export PATH="/tmp/bin:${PATH}"
+        /workspace/provision_runtimes.sh /tmp/runtime-env.sh
+        source /tmp/runtime-env.sh
+        echo "list-sdks: $(dotnet --list-sdks)"
+        echo "version: $(dotnet --version)"
+        echo "nuget-packages: ${NUGET_PACKAGES:-<unset>}"
+    '
+
+    : > "${STDERR_FILE}"
+    set +e
+    docker run --rm \
+        -v "${live_volume}:/workspace/runtimes" \
+        --entrypoint bash "${IMAGE}" -c "${run_cmd}" >"${STDOUT_FILE}" 2>"${STDERR_FILE}"
+    LAST_EXIT=$?
+    set -e
+
+    if [ "${LAST_EXIT}" -eq 0 ] && grep -qE '^list-sdks: 9\.[0-9]+' "${STDOUT_FILE}"; then
+        t_pass "first run installed a .NET 9 SDK onto the volume"
+    else
+        t_fail "first live run failed (exit ${LAST_EXIT}): $(tail -n 5 "${STDERR_FILE}" | tr '\n' ' ')"
+        docker volume rm -f "${live_volume}" >/dev/null 2>&1 || true
+        return
+    fi
+
+    if grep -qE '^version: 9\.[0-9]+' "${STDOUT_FILE}"; then
+        t_pass "the managed dotnet CLI starts (image has the SDK's runtime deps)"
+    else
+        t_fail "'dotnet --version' did not run — the image is missing a .NET runtime dependency: $(grep -A3 '^version:' "${STDOUT_FILE}" | tr '\n' ' ')"
+    fi
+
+    if grep -q '^nuget-packages: /workspace/runtimes/cache/nuget' "${STDOUT_FILE}"; then
+        t_pass "NUGET_PACKAGES points at the persistent cache on the volume"
+    else
+        t_fail "NUGET_PACKAGES was not exported onto the runtime volume"
+    fi
+
+    : > "${STDERR_FILE}"
+    set +e
+    docker run --rm \
+        -v "${live_volume}:/workspace/runtimes" \
+        --entrypoint bash "${IMAGE}" -c "${run_cmd}" >"${STDOUT_FILE}" 2>"${STDERR_FILE}"
+    LAST_EXIT=$?
+    set -e
+
+    if [ "${LAST_EXIT}" -eq 0 ] \
+        && grep -q "All declared runtimes already provisioned (cache hit)" "${STDERR_FILE}"; then
+        t_pass "second run on the same volume hit the cache (no re-download)"
+    else
+        t_fail "second live run did not hit the cache (exit ${LAST_EXIT})"
+    fi
+
+    # Same SDK, declared the standard way by the repo instead of by a plugin:
+    # must resolve out of the cache the plugin manifest populated.
+    : > "${STDERR_FILE}"
+    set +e
+    docker run --rm \
+        -v "${live_volume}:/workspace/runtimes" \
+        -e WORK_DIR=/tmp/worktree \
+        --entrypoint bash "${IMAGE}" -c '
+            mkdir -p /tmp/bin /tmp/worktree
+            printf "#!/usr/bin/env bash\nexit 0\n" > /tmp/bin/claude && chmod +x /tmp/bin/claude
+            export PATH="/tmp/bin:${PATH}"
+            echo "{ \"sdk\": { \"version\": \"9.0.100\" } }" > /tmp/worktree/global.json
+            /workspace/provision_runtimes.sh /tmp/runtime-env.sh
+            source /tmp/runtime-env.sh
+            echo "version: $(dotnet --version)"
+        ' >"${STDOUT_FILE}" 2>"${STDERR_FILE}"
+    LAST_EXIT=$?
+    set -e
+
+    if [ "${LAST_EXIT}" -eq 0 ] \
+        && grep -q 'Repository runtime declarations: global.json' "${STDERR_FILE}" \
+        && grep -qE '^version: 9\.[0-9]+' "${STDOUT_FILE}"; then
+        t_pass "a repo global.json alone provisions the SDK (no plugin manifest needed)"
+    else
+        t_fail "global.json autodetection did not yield a working dotnet (exit ${LAST_EXIT})"
+    fi
+
+    docker volume rm -f "${live_volume}" >/dev/null 2>&1 || true
+}
+
 # ── Tier 2: real Claude Code run (needs ANTHROPIC_API_KEY) ────────────────────
 
 test_claude_reads_planted_secret() {
-    banner "Test 6: Claude Code reads the planted secret token from the repo"
+    banner "Test 8: Claude Code reads the planted secret token from the repo"
 
     if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
         t_skip "ANTHROPIC_API_KEY is not set — skipping the live Claude Code test."
@@ -485,6 +920,10 @@ test_prepare_reuses_clone
 test_new_commit_is_picked_up
 test_bad_url_error_envelope
 test_worktree_uses_default_branch
+test_runtime_provisioner_hermetic
+test_runtime_autodetects_repo_version_file
+test_runtime_fallback_hook_hermetic
+test_runtime_dotnet_live
 test_claude_reads_planted_secret
 
 banner "Results"

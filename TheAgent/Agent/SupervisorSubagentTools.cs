@@ -22,7 +22,10 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
     private readonly ILogger<SupervisorSubagentTools> _logger =
         logger ?? NullLogger<SupervisorSubagentTools>.Instance;
 
-    [Description("Get the current date and time.")]
+    [Description(
+        "Get the current UTC date and time. " +
+        "Call only when the user explicitly asks for the date/time or the task genuinely " +
+        "needs an absolute timestamp. Never call it for greetings or ordinary chat.")]
     public Task<string> GetCurrentDateTime()
     {
         // Return only — let the model phrase the user-facing reply itself. Calling
@@ -33,9 +36,17 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
     }
 
     [Description(
-        "List the repositories available to the current tenant. " +
-        "Returns a JSON array of objects with `url` and `lastUsed` fields. " +
-        "Always call this before RunClaudeCodeOnRepository so the user can pick which repository to operate on.")]
+        """
+        List every repository onboarded for the current tenant.
+
+        Returns JSON: { tenantId, repositories: [{ url, lastUsed }] }. When nothing is
+        onboarded yet, `repositories` is empty and a `hint` explains why.
+
+        Call this FIRST for any request that involves a repository (running a prompt,
+        onboarding, offboarding) so you know what already exists. When a repository is
+        in this list, pass its `url` to other tools exactly as returned — never retype
+        or normalise it.
+        """)]
     public async Task<string> ListTenantRepositories()
     {
         var tenantId = context.Message.TenantId;
@@ -60,31 +71,36 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
     }
 
     [Description(
-        "List the marketplace plugins that are pre-vetted for this agent (sourced from the " +
-        "`Rules` knowledge document). Returns a JSON array where each entry has `pluginName` " +
-        "(format: `name@marketplace` — pass this verbatim to RunClaudeCodeOnRepository), " +
-        "`marketplace`, `slashCommand` (the Claude Code slash command that invokes the " +
-        "plugin, e.g. `/pr-review` — use this verbatim; NEVER invent a different command " +
-        "like `/code-review`), `requiredEnvs` (env var names + whether they are mandatory), " +
-        "and `usageExamples`. " +
-        "A plugin exposed for chat (declared under a root-level `chat` rule set) has an " +
-        "EMPTY `usageExamples` array: there is no prompt template or fixed inputs — YOU " +
-        "compose the `prompt` as `{slashCommand} {target}` where `target` is whatever the " +
-        "user gave you (PR number, branch name, …). Example: catalog says " +
-        "`slashCommand: \"/pr-review\"` and user asked to review PR 42 → prompt " +
-        "`/pr-review 42`. Still pass its `pluginName`. Do NOT invent slash commands from " +
-        "the plugin name or description. " +
-        "A plugin backed only by webhook rules instead lists one or more `usageExamples`, " +
-        "each with an `executePrompt` template and an `inputs` array. Each input has a " +
-        "`source`: `auto` means the chat tool fills it from the chosen repository (do NOT " +
-        "pass it); `constant` means it is hard-coded in `rules.json` and is injected " +
-        "automatically; `caller` means YOU must supply it via the `inputs` parameter on " +
-        "RunClaudeCodeOnRepository whenever `mandatory` is true. The input names also appear " +
-        "as `{{name}}` placeholders inside `executePrompt` — substitute them with the same " +
-        "values you pass via `inputs`. " +
-        "Call this whenever the user's request looks like it could be served by an existing " +
-        "plugin (e.g. \"review this PR\", \"analyse this issue\") so you can decide whether " +
-        "to install one and what to ask the user for.")]
+        """
+        List the marketplace plugins pre-vetted for this agent (sourced from the `Rules`
+        knowledge document). Call this whenever the user's request could match an existing
+        plugin (e.g. "review this PR", "analyse this issue", "do a code review") so you can
+        decide whether to use one and what to ask the user for.
+
+        Returns JSON where each plugin has:
+        - `pluginName` — format `name@marketplace`. Pass verbatim to RunClaudeCodeOnRepository.
+        - `marketplace` — the marketplace the plugin comes from.
+        - `slashCommand` — the Claude Code command that invokes the plugin (e.g. `/pr-review`).
+          Use it verbatim. NEVER invent a different command (do not turn `pr-reviewer` into
+          `/code-review`).
+        - `requiredEnvs` — env var names and whether each is mandatory.
+        - `usageExamples` — determines how you build the run:
+
+        CHAT PLUGIN (usageExamples is EMPTY): there is no prompt template or fixed inputs.
+        YOU compose the prompt as `{slashCommand} {target}`, where target is whatever the
+        user gave (PR number, branch name, ...). Example: `slashCommand: "/pr-review"` and
+        the user said "review PR 42" -> prompt `/pr-review 42`. Still pass the `pluginName`;
+        do NOT pass an `inputs` object.
+
+        WEBHOOK-BACKED PLUGIN (usageExamples is non-empty): each example has an
+        `executePrompt` template and an `inputs` array. Each input's `source` means:
+        - `auto`     — filled from the chosen repository automatically. Do NOT pass it.
+        - `constant` — hard-coded in rules.json and injected automatically. Do NOT pass it.
+        - `caller`   — YOU must supply it via the `inputs` parameter on
+          RunClaudeCodeOnRepository whenever `mandatory` is true.
+        The input names also appear as `{{name}}` placeholders inside `executePrompt`;
+        substitute them with the same values you pass via `inputs`.
+        """)]
     public async Task<string> ListAvailablePlugins()
     {
         var catalog = await AvailablePluginsCatalog.LoadAsync();
@@ -136,24 +152,31 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
     }
 
     [Description(
-        "Clone a brand-new repository into this tenant's workspace so that subsequent " +
-        "RunClaudeCodeOnRepository calls can operate on it. Use this when the user asks " +
-        "to add / onboard / set up a repository and the URL is NOT in ListTenantRepositories. " +
-        "The platform is inferred from the URL host (`github.com` → github, " +
-        "`dev.azure.com` / `*.visualstudio.com` → azuredevops); only pass `platform` " +
-        "explicitly for self-hosted GHES or on-prem Azure DevOps. " +
-        "The tenant must have the matching credential in their Xians Secret Vault " +
-        "(`GITHUB-TOKEN` for github, `AZURE-DEVOPS-TOKEN` for azuredevops) — otherwise " +
-        "the clone fails with a clear error. " +
-        "Returns immediately after starting the clone; progress and the success/failure " +
-        "result are streamed back as separate chat messages, so do NOT echo or summarise " +
-        "the result yourself. " +
-        "If the user wants to onboard AND immediately run a prompt, prefer calling " +
-        "RunClaudeCodeOnRepository directly with the new URL — it will lazy-clone in the " +
-        "same workflow.")]
+        """
+        Clone a brand-new repository into this tenant's workspace so it appears in
+        ListTenantRepositories and later runs can operate on it.
+
+        WHEN TO USE:
+        - The user wants to add / onboard / set up a repository WITHOUT running anything
+          against it yet.
+        - The URL host is non-standard (self-hosted GHES, on-prem Azure DevOps), so the
+          platform cannot be inferred and must be passed explicitly.
+        If the user wants to onboard AND immediately run a prompt, skip this tool and call
+        RunClaudeCodeOnRepository directly — it lazy-clones new URLs in the same workflow.
+
+        The platform is inferred from the URL host (github.com -> github;
+        dev.azure.com / *.visualstudio.com -> azuredevops). Pass `platform` only when
+        inference would fail. The tenant must hold the matching credential in their Xians
+        Secret Vault (`GITHUB-TOKEN` for github, `AZURE-DEVOPS-TOKEN` for azuredevops);
+        otherwise the clone fails with a clear error.
+
+        Returns immediately after starting the clone. Progress and the success/failure
+        result are streamed to the user as separate chat messages by the workflow, so
+        acknowledge the start briefly and do NOT echo or summarise the result yourself.
+        """)]
     public async Task<string> OnboardRepository(
-        [Description("Repository HTTPS URL (github.com or dev.azure.com / *.visualstudio.com).")] string repositoryUrl,
-        [Description("Optional platform override ('github' or 'azuredevops'). Inferred from the URL host when omitted; only pass this for self-hosted GHES / on-prem ADO.")] string? platform = null)
+        [Description("Repository HTTPS URL. Standard hosts (github.com, dev.azure.com, *.visualstudio.com) need no platform; self-hosted hosts require an explicit `platform`.")] string repositoryUrl,
+        [Description("Optional platform override: 'github' or 'azuredevops'. Inferred from the URL host when omitted; pass only for self-hosted GHES / on-prem Azure DevOps.")] string? platform = null)
     {
         if (string.IsNullOrWhiteSpace(repositoryUrl))
             return "ERROR: repositoryUrl is required.";
@@ -217,41 +240,57 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
     }
 
     [Description(
-        "Run a Claude Code prompt against one of the tenant's repositories. " +
-        "If `repositoryUrl` is already in ListTenantRepositories the existing tenant " +
-        "workspace is reused. If it's a brand-new URL on a supported host " +
-        "(`github.com`, `dev.azure.com`, `*.visualstudio.com`) it is **lazy-cloned** as " +
-        "the first step of the same workflow — no separate OnboardRepository call needed. " +
-        "Use OnboardRepository instead when the user only wants to add a repo without " +
-        "running anything against it, or when the URL host is non-standard (self-hosted " +
-        "GHES / on-prem ADO) and the user must pick the platform explicitly. " +
-        "If the user's request matches a marketplace plugin (see ListAvailablePlugins), pass " +
-        "its `pluginName` in `pluginNames`. How to build `prompt` and `inputs` depends on the " +
-        "plugin's `usageExamples`: " +
-        "For a CHAT plugin (EMPTY `usageExamples`): set `prompt` to " +
-        "`{slashCommand} {target}` using the catalog's `slashCommand` field verbatim " +
-        "(e.g. `/pr-review 42` or `/pr-review feature/login`) and OMIT `inputs`. " +
-        "NEVER invent a slash command — if `slashCommand` is missing, ask / fail rather " +
-        "than guessing names like `/code-review`. " +
-        "For a webhook-backed plugin (non-empty `usageExamples`): craft `prompt` from the " +
-        "chosen example's `executePrompt` template (e.g. `/requirement-analysis 42`) AND " +
-        "supply every `caller`-source mandatory input from that example via `inputs` — the " +
-        "run is rejected if any mandatory input is missing. Inputs use the kebab-case names " +
-        "from rules.json (e.g. `pr-number`, `pr-title`) and match the `{{placeholders}}` you " +
-        "substituted in the prompt. Plugin names and inputs are validated against the catalog. " +
-        "The run always starts on the repository's default branch; plugins resolve any " +
-        "task-specific refs from the prompt (e.g. a PR's source/target branches from the " +
-        "PR number). " +
-        "Do NOT pass `repository-url`, `repository-name`, or `platform` — they are " +
-        "auto-filled from the chosen repository / rule. " +
-        "Returns immediately after starting the run; progress and the final result are " +
-        "streamed back to the user as separate chat messages by the workflow itself, " +
-        "so do NOT echo or summarise the result yourself.")]
+        """
+        Run a Claude Code prompt against one of the tenant's repositories, inside an
+        isolated sandboxed Docker container.
+
+        STATELESS EXECUTION: every call starts a brand-new container from a clean image.
+        No files, checkouts, Claude Code sessions, env vars, or artefacts survive from
+        previous runs — chat history is the only cross-turn state. The `prompt` (plus
+        `inputs`) MUST therefore be atomic and self-contained: state the full task, the
+        concrete target (PR number, branch, file path, ...), and any facts from earlier
+        runs that this run needs. Never send prompts like "continue" or "fix that";
+        restate the context explicitly.
+
+        REPOSITORY:
+        - A URL already in ListTenantRepositories is used as-is.
+        - A brand-new URL on github.com / dev.azure.com / *.visualstudio.com is
+          lazy-cloned as the first step of the same workflow — no separate
+          OnboardRepository call needed.
+        - For a non-standard host (self-hosted GHES, on-prem Azure DevOps), call
+          OnboardRepository with an explicit `platform` first.
+        Use OnboardRepository instead only when the user wants to add a repository
+        without running anything against it.
+
+        PLUGINS: if the request matches a marketplace plugin (check ListAvailablePlugins),
+        pass its `pluginName` via `pluginNames`, then build `prompt` and `inputs` by kind:
+        - CHAT plugin (EMPTY usageExamples): `prompt` = `{slashCommand} {target}` using the
+          catalog's `slashCommand` verbatim (e.g. `/pr-review 42`, `/pr-review feature/login`),
+          and OMIT `inputs`. NEVER invent a slash command; if `slashCommand` is missing,
+          report the plugin as misconfigured rather than guessing (e.g. `/code-review`).
+        - WEBHOOK-BACKED plugin (non-empty usageExamples): build `prompt` from the chosen
+          example's `executePrompt` template with every `{{placeholder}}` substituted, AND
+          pass every mandatory `caller`-source input via `inputs` using the kebab-case
+          names from the catalog (e.g. `pr-number`, `pr-title`). The run is rejected if
+          any mandatory input is missing. Plugin names and inputs are validated against
+          the catalog.
+
+        CONSTRAINTS:
+        - Never include `repository-url`, `repository-name`, or `platform` in `inputs` —
+          they are auto-filled from the chosen repository / rule.
+        - Runs always start on the repository's default branch; plugins resolve
+          task-specific refs from the prompt themselves (e.g. a PR's source/target
+          branches from the PR number).
+
+        Returns immediately after starting the run. Progress and the final result are
+        streamed to the user as separate chat messages by the workflow itself, so
+        acknowledge the start briefly and do NOT echo or summarise the output yourself.
+        """)]
     public async Task<string> RunClaudeCodeOnRepository(
-        [Description("The repository URL to operate on. May be one already in ListTenantRepositories OR a brand-new URL on github.com / dev.azure.com / *.visualstudio.com (it will be cloned in-flight). For self-hosted hosts, call OnboardRepository first with an explicit platform.")] string repositoryUrl,
-        [Description("The full Claude Code prompt to execute. For a chat plugin (empty usageExamples) this MUST be `{slashCommand} {target}` from ListAvailablePlugins — never invent a command. For a webhook-backed plugin use the chosen example's executePrompt template with placeholders substituted.")] string prompt,
-        [Description("Optional plugin specs (e.g. [\"pr-reviewer@xianix-plugins-official\"]). Each must come from ListAvailablePlugins. Omit or pass an empty array for a no-plugin run.")] string[]? pluginNames = null,
-        [Description("Mandatory inputs for a webhook-backed plugin's chosen usage example, keyed by the rules.json kebab-case input name (e.g. {\"pr-number\":\"42\",\"pr-title\":\"Fix bug\"}). Omit for chat plugins (empty usageExamples — the target goes in the prompt instead) and for no-plugin runs. Never include repository-url, repository-name, or platform — those are auto-filled.")] Dictionary<string, string>? inputs = null)
+        [Description("Repository URL to operate on: either verbatim from ListTenantRepositories, or a brand-new URL on github.com / dev.azure.com / *.visualstudio.com (lazy-cloned in-flight). For self-hosted hosts, call OnboardRepository with an explicit platform first.")] string repositoryUrl,
+        [Description("Atomic, self-contained Claude Code prompt — the container has no memory of previous runs, so include the full task, the concrete target, and any prior-run facts from chat that this run needs. Chat plugin: exactly `{slashCommand} {target}` from ListAvailablePlugins (never invent a command). Webhook-backed plugin: the chosen example's executePrompt with all {{placeholders}} substituted. No plugin: the user's instruction, made self-contained.")] string prompt,
+        [Description("Plugin specs verbatim from ListAvailablePlugins (e.g. [\"pr-reviewer@xianix-plugins-official\"]). Omit or pass an empty array for a no-plugin run.")] string[]? pluginNames = null,
+        [Description("Mandatory `caller` inputs for the chosen webhook-backed usage example, keyed by the kebab-case names from the catalog (e.g. {\"pr-number\":\"42\",\"pr-title\":\"Fix bug\"}). Values must match the placeholders substituted into `prompt`. Omit for chat plugins (the target goes in the prompt instead) and for no-plugin runs. Never include repository-url, repository-name, or platform — those are auto-filled.")] Dictionary<string, string>? inputs = null)
     {
         if (string.IsNullOrWhiteSpace(repositoryUrl))
             return "ERROR: repositoryUrl is required. Call ListTenantRepositories first.";
@@ -264,6 +303,33 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
 
         var repos = await TenantVolumeReader.ListAsync(tenantId);
         var isKnownRepo = repos.Any(r => string.Equals(r.Url, repositoryUrl, StringComparison.Ordinal));
+
+        // Accepting any well-formed URL on a standard host is what makes lazy-cloning work,
+        // but it also means a URL the model *constructed* is indistinguishable from a repo the
+        // user actually named — and a fabricated one clones as a 404, killing the prepare phase
+        // with a bare "repository not found". The observed failure mode keeps the real repo's
+        // name and invents the host and owner around it, so treat a name that already belongs
+        // to an onboarded repo elsewhere as the mistake it almost always is. A tenant that
+        // genuinely owns two same-named repos on different hosts still has OnboardRepository,
+        // which only rejects an exact-URL duplicate.
+        if (!isKnownRepo)
+        {
+            var slug = RepositoryNaming.DeriveSlug(repositoryUrl);
+            var sameName = repos
+                .Where(r => string.Equals(
+                    RepositoryNaming.DeriveSlug(r.Url), slug, StringComparison.OrdinalIgnoreCase))
+                .Select(r => $"`{r.Url}`")
+                .ToList();
+
+            if (sameName.Count > 0)
+            {
+                return $"ERROR: '{repositoryUrl}' is not onboarded, but this tenant already has a " +
+                       $"repository named '{slug}': {string.Join(", ", sameName)}. Never construct a " +
+                       "repository URL — pass one verbatim from ListTenantRepositories, or one the " +
+                       "user supplied. If you really mean a different repository that happens to " +
+                       "share a name, call OnboardRepository with that URL first.";
+            }
+        }
 
         // Infer the platform either way — known repos still need it for the credential
         // env merge below (in case the chosen plugins didn't declare the matching
@@ -417,17 +483,25 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
     }
 
     [Description(
-        "Permanently remove a repository from this tenant's workspace. " +
-        "Use this when the user asks to delete, remove, or offboard a repository, " +
-        "or when a previous OnboardRepository call failed and the user wants to clean up " +
-        "the partially-cloned volume before trying again. " +
-        "This deletes the entire Docker volume that stores the bare clone, all cached " +
-        "context files, and all Claude Code session state for that repository — " +
-        "the data cannot be recovered. " +
-        "Always confirm with the user before calling this tool. " +
-        "Returns immediately with a success or error message; no follow-up workflow messages are sent.")]
+        """
+        Permanently remove a repository from this tenant's workspace.
+
+        WHEN TO USE:
+        - The user asks to delete / remove / offboard a repository.
+        - A previous OnboardRepository failed and the user wants to clean up the
+          partially-cloned volume before retrying.
+
+        DESTRUCTIVE AND IRREVERSIBLE: deletes the entire Docker volume holding the bare
+        clone, all cached context files, and all Claude Code session state for that
+        repository. The data cannot be recovered. ALWAYS get explicit confirmation from
+        the user before calling — never offboard on your own initiative.
+
+        Returns immediately with a success or error message. Unlike the run/onboard
+        tools, no follow-up workflow messages are sent, so relay the result to the user
+        yourself.
+        """)]
     public async Task<string> OffboardRepository(
-        [Description("The repository URL to remove. Must be exactly as shown in ListTenantRepositories.")] string repositoryUrl)
+        [Description("The repository URL to remove, exactly as returned by ListTenantRepositories.")] string repositoryUrl)
     {
         if (string.IsNullOrWhiteSpace(repositoryUrl))
             return "ERROR: repositoryUrl is required. Call ListTenantRepositories to see which repositories are onboarded.";

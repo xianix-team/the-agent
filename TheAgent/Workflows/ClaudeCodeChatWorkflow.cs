@@ -44,7 +44,11 @@ public class ClaudeCodeChatWorkflow
                 (ContainerActivities a) => a.EnsureWorkspaceVolumeAsync(req.TenantId, req.RepositoryUrl),
                 ContainerWorkflowOptions.Standard);
 
-            await ExecutePipelineAsync(req, volumeName);
+            var runtimeVolumeName = await Workflow.ExecuteActivityAsync(
+                (ContainerActivities a) => a.EnsureRuntimeVolumeAsync(req.TenantId),
+                ContainerWorkflowOptions.Standard);
+
+            await ExecutePipelineAsync(req, volumeName, runtimeVolumeName);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -66,7 +70,8 @@ public class ClaudeCodeChatWorkflow
         }
     }
 
-    private static async Task ExecutePipelineAsync(ClaudeCodeChatRequest req, string volumeName)
+    private static async Task ExecutePipelineAsync(
+        ClaudeCodeChatRequest req, string volumeName, string runtimeVolumeName)
     {
         var input = new ContainerExecutionInput
         {
@@ -83,6 +88,7 @@ public class ClaudeCodeChatWorkflow
             MaxBudgetUsd      = req.MaxBudgetUsd,
             ResumeSessions    = req.ResumeSessions,
             VolumeName        = volumeName,
+            RuntimeVolumeName = runtimeVolumeName,
         };
 
         var containerId = await Workflow.ExecuteActivityAsync(

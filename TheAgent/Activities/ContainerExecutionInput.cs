@@ -79,6 +79,14 @@ public sealed record ContainerExecutionInput
     public string VolumeName { get; init; } = string.Empty;
 
     /// <summary>
+    /// Name of the shared per-tenant runtime volume mounted at <c>/workspace/runtimes</c>,
+    /// holding plugin-declared runtime installs (dotnet SDKs, alternate node versions,
+    /// package caches). Empty means no runtime volume is mounted — the executor then falls
+    /// back to a per-repo cache under <c>/workspace/repo/xianix-runtimes</c>.
+    /// </summary>
+    public string RuntimeVolumeName { get; init; } = string.Empty;
+
+    /// <summary>
     /// Phase selector forwarded as the <c>XIANIX-MODE</c> env var to the executor container.
     /// One of:
     /// <list type="bullet">

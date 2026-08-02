@@ -64,4 +64,18 @@ public static class RepositoryNaming
             _ => $"{segments[^2]}/{segments[^1]}",
         };
     }
+
+    /// <summary>
+    /// The repository segment alone — <c>app</c> for both <c>github.com/acme/app</c> and
+    /// <c>dev.azure.com/org/proj/_git/app</c>. Unlike <see cref="DeriveName"/> this is
+    /// comparable across hosts, because the owner segment differs by platform: Azure DevOps
+    /// contributes the project name where GitHub contributes the owner, so two URLs for the
+    /// same repository never share a <see cref="DeriveName"/> result.
+    /// </summary>
+    public static string DeriveSlug(string repositoryUrl)
+    {
+        var name = DeriveName(repositoryUrl);
+        var cut  = name.LastIndexOf('/');
+        return cut >= 0 && cut < name.Length - 1 ? name[(cut + 1)..] : name;
+    }
 }
