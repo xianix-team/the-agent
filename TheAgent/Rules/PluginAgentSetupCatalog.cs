@@ -377,6 +377,139 @@ internal static class PluginAgentSetupCatalog
     }
 
     /// <summary>
+    /// Human-readable execution / match options for Rules Optimizer chat
+    /// (labels, match-any combinations) before writing rules.json.
+    /// </summary>
+    public static IReadOnlyList<object> SummarizeExecutionOptions(
+        PluginAgentSetup setup,
+        IReadOnlyList<string> platforms)
+    {
+        var platformsToShow = platforms.Count > 0
+            ? platforms
+                .Select(NormalizePlatform)
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray()
+            : setup.Platforms.Keys.ToArray();
+
+        var options = new List<object>();
+        foreach (var platformKey in platformsToShow)
+        {
+            if (platformKey is null
+                || !setup.Platforms.TryGetValue(platformKey, out var platformSetup)
+                || platformSetup.Executions is null)
+            {
+                continue;
+            }
+
+            foreach (var execution in platformSetup.Executions)
+            {
+                if (execution.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var execName = execution.TryGetProperty("name", out var n)
+                    ? n.GetString() ?? ""
+                    : "";
+
+                var matches = new List<object>();
+                var matchRules = new List<string>();
+                if (execution.TryGetProperty("match-any", out var matchAny)
+                    && matchAny.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var m in matchAny.EnumerateArray())
+                    {
+                        if (m.ValueKind != JsonValueKind.Object)
+                            continue;
+
+                        var matchName = m.TryGetProperty("name", out var mn)
+                            ? mn.GetString() ?? ""
+                            : "";
+                        var rule = m.TryGetProperty("rule", out var mr)
+                            ? mr.GetString() ?? ""
+                            : "";
+                        matchRules.Add(rule);
+                        matches.Add(new
+                        {
+                            name = matchName,
+                            rule,
+                            summary = SummarizeMatchRule(rule),
+                        });
+                    }
+                }
+
+                options.Add(new
+                {
+                    platform = platformKey,
+                    executionName = execName,
+                    defaultLabel = ExtractPrimaryLabel(matchRules),
+                    matchAny = matches,
+                    suggestedTriggers = platformSetup.SuggestedTriggers,
+                });
+            }
+        }
+
+        return options;
+    }
+
+    private static string SummarizeMatchRule(string rule)
+    {
+        if (string.IsNullOrWhiteSpace(rule))
+            return "";
+
+        var label = ExtractLabelFromRule(rule);
+        if (rule.Contains("action==labeled", StringComparison.OrdinalIgnoreCase) && label is not null)
+            return $"Label `{label}` applied to an open PR";
+        if (rule.Contains("action==opened", StringComparison.OrdinalIgnoreCase) && label is not null)
+            return $"PR opened already carrying label `{label}`";
+        if (rule.Contains("action==synchronize", StringComparison.OrdinalIgnoreCase) && label is not null)
+            return $"New commits pushed to an open PR with label `{label}`";
+        if (rule.Contains("@xianix", StringComparison.OrdinalIgnoreCase)
+            && rule.Contains("comment", StringComparison.OrdinalIgnoreCase))
+            return "PR comment mentioning `@xianix`";
+        if (rule.Contains("git.pullrequest.created", StringComparison.OrdinalIgnoreCase))
+            return "Azure DevOps pull request created";
+        if (rule.Contains("updated the source branch", StringComparison.OrdinalIgnoreCase))
+            return "Azure DevOps source branch updated";
+        if (rule.Contains("changed the reviewer list", StringComparison.OrdinalIgnoreCase))
+            return "Agent added as Azure DevOps reviewer";
+        if (rule.Contains("git-pullrequest-comment-event", StringComparison.OrdinalIgnoreCase)
+            && rule.Contains("@xianix", StringComparison.OrdinalIgnoreCase))
+            return "Azure DevOps PR comment mentioning `@xianix`";
+
+        return rule;
+    }
+
+    private static string? ExtractPrimaryLabel(IReadOnlyList<string> rules)
+    {
+        foreach (var rule in rules)
+        {
+            var label = ExtractLabelFromRule(rule);
+            if (label is not null)
+                return label;
+        }
+
+        return null;
+    }
+
+    private static string? ExtractLabelFromRule(string rule)
+    {
+        // label.name=='…' or labels.*.name=='…'
+        var markers = new[] { "label.name=='", "labels.*.name=='" };
+        foreach (var marker in markers)
+        {
+            var idx = rule.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0)
+                continue;
+            var start = idx + marker.Length;
+            var end = rule.IndexOf('\'', start);
+            if (end > start)
+                return rule[start..end];
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Builds webhook/execution <c>with-envs</c> objects from vault key names
     /// (<c>GITHUB-TOKEN</c> → <c>{ name, value: secrets.GITHUB-TOKEN, mandatory: true }</c>).
     /// </summary>

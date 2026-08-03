@@ -599,6 +599,7 @@ public sealed class OnboardingSubagentTools(
                 IReadOnlyList<string> requiredEnvs = [];
                 IReadOnlyList<string> suggestedTriggers = [];
                 IReadOnlyList<string> suggestedGitHubWebhookEvents = [];
+                IReadOnlyList<object> executionOptions = [];
 
                 if (setup is not null)
                 {
@@ -613,6 +614,9 @@ public sealed class OnboardingSubagentTools(
                             suggestedTriggers = platformReq.SuggestedTriggers;
                             suggestedGitHubWebhookEvents = platformReq.SuggestedGitHubWebhookEvents;
                         }
+
+                        executionOptions = PluginAgentSetupCatalog.SummarizeExecutionOptions(
+                            setup, requestedPlatforms);
                     }
                     else
                     {
@@ -624,6 +628,8 @@ public sealed class OnboardingSubagentTools(
                             .SelectMany(pr => pr.SuggestedGitHubWebhookEvents)
                             .Distinct(StringComparer.OrdinalIgnoreCase)
                             .ToArray();
+                        executionOptions = PluginAgentSetupCatalog.SummarizeExecutionOptions(
+                            setup, []);
                     }
                 }
 
@@ -673,6 +679,7 @@ public sealed class OnboardingSubagentTools(
                         : null,
                     suggestedTriggers,
                     suggestedGitHubWebhookEvents,
+                    executionOptions,
                     requiresAuthorization = setup?.RequiresAuthorization ?? false,
                     installed = installedShortNames.Contains(p.Name),
                     hasReadme,
@@ -711,10 +718,13 @@ public sealed class OnboardingSubagentTools(
                    MarketplaceCatalog.MarketplaceGithubBlobUrl +
                    ". Installability requires each plugin's live README " +
                    "(plugins/<folder>/README.md on plugins-official) plus a local execution recipe. " +
+                   "When platform is known, each Ready plugin includes executionOptions " +
+                   "(execution names, defaultLabel, matchAny summaries). " +
+                   "Present those before asking permission to update rules.json. " +
                    "Present 'Installed from rules.json' and 'Available from official marketplace'. " +
                    "Within Available, split Ready to install (installable=true) vs Coming soon (installable=false). " +
                    "Never say 'validated recipe' to the user — say Coming soon. Only Ready-to-install plugins may be added. " +
-                   "Tell users how to invoke plugins via suggestedTriggers (platform triggers), not slash commands.",
+                   "Tell users how to invoke plugins via suggestedTriggers / executionOptions (platform triggers), not slash commands.",
         });
     }
 

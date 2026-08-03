@@ -82,6 +82,20 @@ public class PluginAgentSetupCatalogTests : IDisposable
     }
 
     [Fact]
+    public void SummarizeExecutionOptions_PrReviewerGithub_IncludesLabelAndMatches()
+    {
+        Assert.True(PluginAgentSetupCatalog.TryGetSetupCached("pr-reviewer", out var setup));
+        var options = PluginAgentSetupCatalog.SummarizeExecutionOptions(setup, ["github"]);
+
+        Assert.NotEmpty(options);
+        var json = JsonSerializer.Serialize(options);
+        Assert.Contains("github-pull-request-review", json);
+        Assert.Contains("ai-dlc/pr/pr-review", json);
+        Assert.Contains("Label", json);
+        Assert.Contains("@xianix", json);
+    }
+
+    [Fact]
     public void MarketplacePluginFolder_UsesSourcePath()
     {
         var plugin = new MarketplacePlugin(

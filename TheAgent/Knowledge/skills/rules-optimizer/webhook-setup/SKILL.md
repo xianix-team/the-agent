@@ -11,9 +11,11 @@ description: After rules are saved, tell the user how to trigger installed plugi
 
 1. If you just confirmed install, briefly restate success (one line). Then **always** tell the user how to trigger each newly installed plugin **before** the webhook question.
 
-   Call `ListAvailablePlugins` with the configured platform if `suggestedTriggers` are not already in context. Use that platform's `suggestedTriggers` only — never invent labels/tags.
+   Prefer the label/trigger the user already chose in chat if they customized it. Otherwise call `ListAvailablePlugins` with the configured platform if `suggestedTriggers` are not already in context. Use that platform's `suggestedTriggers` only — never invent labels/tags.
 
-   Example shape (adapt to real `suggestedTriggers`):
+   Do **not** narrate edits ("Updating the label from …"). Just state the final how-to-trigger.
+
+   Example shape (adapt to real triggers / custom label):
 
 ```
 pr-reviewer is installed and saved to rules.json.
@@ -23,7 +25,6 @@ How to trigger on GitHub:
 
 Create the Xians webhook for this activation now?
 ```
-
    For Azure DevOps, use ADO wording from `suggestedTriggers` (PR created / source branch updated / agent as reviewer / `@xianix` comment) — **not** GitHub label names.
 
 2. Ask once (include the trigger blurb in the **same** message as the ask):
