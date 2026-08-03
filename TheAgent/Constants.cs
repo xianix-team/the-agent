@@ -12,5 +12,5 @@ public static class Constants
     /// When <c>UserMessageContext.Message.Scope</c> equals this value, the supervisor
     /// loads the onboarding prompt and onboarding tools instead of the general chat flow.
     /// </summary>
-    public const string ProjectOnboardingScope = "Project Rules Optimizer";
+    public const string ProjectOnboardingScope = "project-onboarding";
 }

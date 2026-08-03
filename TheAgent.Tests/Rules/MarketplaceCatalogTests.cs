@@ -41,15 +41,14 @@ public class MarketplaceCatalogTests
     }
 
     [Fact]
-    public void LoadBundled_ReturnsPluginsFromEmbeddedSnapshot()
+    public void Parse_FixtureMarketplace_ReturnsPlugins()
     {
-        // Bundled snapshot is for tests/offline tooling only — LoadAsync never uses it.
-        var bundled = MarketplaceCatalog.LoadBundled();
+        var fixture = PluginCatalogFixtures.LoadMarketplaceFixture();
 
-        Assert.Equal("bundled-fallback", bundled.Source);
-        Assert.NotEmpty(bundled.Plugins);
-        Assert.Contains(bundled.Plugins, p => p.Name == "pr-reviewer");
-        Assert.Contains(bundled.Plugins, p => p.Name == "req-analyst");
+        Assert.Equal("fixture", fixture.Source);
+        Assert.NotEmpty(fixture.Plugins);
+        Assert.Contains(fixture.Plugins, p => p.Name == "pr-reviewer");
+        Assert.Contains(fixture.Plugins, p => p.Name == "req-analyst");
     }
 
     [Fact]

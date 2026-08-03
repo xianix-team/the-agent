@@ -2,14 +2,14 @@ namespace Xianix.Rules;
 
 /// <summary>
 /// Compatibility façade over <see cref="PluginAgentSetupCatalog"/> for setup secrets/triggers.
-/// Prefer <see cref="PluginAgentSetupCatalog"/> directly.
+/// Prefer live <see cref="PluginAgentSetupCatalog"/> APIs in production.
 /// </summary>
 internal static class PluginSetupRequirementsCatalog
 {
     public static bool TryGet(string pluginShortName, out PluginSetupRequirement requirement)
     {
         requirement = null!;
-        if (!PluginAgentSetupCatalog.TryGetSetupCachedOrEmbedded(pluginShortName, out var setup))
+        if (!PluginAgentSetupCatalog.TryGetSetupCached(pluginShortName, out var setup))
             return false;
 
         requirement = ToRequirement(setup);
@@ -18,7 +18,7 @@ internal static class PluginSetupRequirementsCatalog
 
     public static PluginPlatformRequirement? GetPlatform(string pluginShortName, string platform)
     {
-        if (!PluginAgentSetupCatalog.TryGetSetupCachedOrEmbedded(pluginShortName, out var setup))
+        if (!PluginAgentSetupCatalog.TryGetSetupCached(pluginShortName, out var setup))
             return null;
 
         var plat = PluginAgentSetupCatalog.GetPlatform(setup, platform);
@@ -29,7 +29,7 @@ internal static class PluginSetupRequirementsCatalog
         string pluginShortName,
         IReadOnlyList<string> platforms)
     {
-        if (!PluginAgentSetupCatalog.TryGetSetupCachedOrEmbedded(pluginShortName, out var setup))
+        if (!PluginAgentSetupCatalog.TryGetSetupCached(pluginShortName, out var setup))
             return [];
 
         return PluginAgentSetupCatalog.ResolveRequiredEnvs(setup, platforms);

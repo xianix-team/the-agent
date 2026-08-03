@@ -5,8 +5,20 @@ namespace TheAgent.Tests.Rules;
 /// <summary>
 /// Compatibility façade tests — prefer <see cref="PluginAgentSetupCatalogTests"/>.
 /// </summary>
-public class PluginExecutionRecipeCatalogTests
+[Collection(nameof(PluginAgentSetupCatalogCollection))]
+public class PluginExecutionRecipeCatalogTests : IDisposable
 {
+    public PluginExecutionRecipeCatalogTests()
+    {
+        PluginCatalogFixtures.SeedAgentSetupTestOverrides();
+    }
+
+    public void Dispose()
+    {
+        PluginAgentSetupCatalog.TestOverrides = null;
+        PluginAgentSetupCatalog.ClearCache();
+    }
+
     [Fact]
     public void IsInstallable_AllReadyPlugins_AreTrue()
     {
@@ -60,8 +72,20 @@ public class PluginExecutionRecipeCatalogTests
     }
 }
 
-public class PluginSetupRequirementsCatalogTests
+[Collection(nameof(PluginAgentSetupCatalogCollection))]
+public class PluginSetupRequirementsCatalogTests : IDisposable
 {
+    public PluginSetupRequirementsCatalogTests()
+    {
+        PluginCatalogFixtures.SeedAgentSetupTestOverrides();
+    }
+
+    public void Dispose()
+    {
+        PluginAgentSetupCatalog.TestOverrides = null;
+        PluginAgentSetupCatalog.ClearCache();
+    }
+
     [Fact]
     public void TryGet_ReturnsPlatformTriggersAndEnvs()
     {

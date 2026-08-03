@@ -9,13 +9,25 @@ using TheAgent;
 namespace Xianix.Rules;
 
 /// <summary>
-/// Loads per-plugin machine-readable setup from plugins-official
-/// (<c>plugins/&lt;name&gt;/.xianix/agent-setup.json</c>). Live fetch is the source of truth;
-/// embedded <c>Knowledge/agent-setup/&lt;name&gt;/agent-setup.json</c> is offline fallback.
-/// Installable = valid document with at least one platform that has executions.
+/// Rules Optimizer plugin readiness + execution recipes.
+/// <list type="bullet">
+/// <item><b>Ready to install</b> — live plugin README exists under plugins-official
+/// (<c>plugins/&lt;folder&gt;/README.md</c>), not <c>.xianix/agent-setup.json</c>.</item>
+/// <item><b>Executions / envs</b> — local recipe JSON
+/// (<c>PluginRecipes/agent-setup/&lt;name&gt;/agent-setup.json</c>, copied from test fixtures).</item>
+/// </list>
 /// </summary>
 internal static class PluginAgentSetupCatalog
 {
+    /// <summary>User-facing GitHub blob URL for the plugin README.</summary>
+    public const string DefaultReadmeGithubBlobUrlTemplate =
+        "https://github.com/xianix-team/plugins-official/blob/main/plugins/{0}/README.md";
+
+    /// <summary>Raw URL used for HTTP presence checks (blob pages are HTML).</summary>
+    public const string DefaultReadmeRawUrlTemplate =
+        "https://raw.githubusercontent.com/xianix-team/plugins-official/main/plugins/{0}/README.md";
+
+    [Obsolete("Installability uses plugin README.md, not agent-setup.json.")]
     public const string DefaultAgentSetupUrlTemplate =
         "https://raw.githubusercontent.com/xianix-team/plugins-official/main/plugins/{0}/.xianix/agent-setup.json";
 
@@ -24,7 +36,10 @@ internal static class PluginAgentSetupCatalog
         Timeout = TimeSpan.FromSeconds(10),
     };
 
-    private static readonly ConcurrentDictionary<string, CacheEntry> Cache =
+    private static readonly ConcurrentDictionary<string, ReadmeCacheEntry> ReadmeCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private static readonly ConcurrentDictionary<string, RecipeCacheEntry> RecipeCache =
         new(StringComparer.OrdinalIgnoreCase);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -37,32 +52,125 @@ internal static class PluginAgentSetupCatalog
     /// <summary>Test / offline override: when set, skips HTTP and returns this map.</summary>
     internal static ConcurrentDictionary<string, PluginAgentSetup>? TestOverrides { get; set; }
 
+    /// <summary>Optional test override for README presence (keyed by plugin folder).</summary>
+    internal static ConcurrentDictionary<string, bool>? TestReadmeOverrides { get; set; }
+
     public static string MarketplaceName => MarketplaceCatalog.DefaultMarketplaceName;
     public static string MarketplaceRepo => MarketplaceCatalog.DefaultMarketplaceRepo;
 
+    public static string BuildReadmeGithubBlobUrl(string pluginFolder) =>
+        string.Format(DefaultReadmeGithubBlobUrlTemplate, pluginFolder.Trim().Trim('/'));
+
+    public static string BuildReadmeRawUrl(string pluginFolder) =>
+        string.Format(DefaultReadmeRawUrlTemplate, pluginFolder.Trim().Trim('/'));
+
+    [Obsolete("Use BuildReadmeGithubBlobUrl / BuildReadmeRawUrl.")]
     public static string BuildUrl(string pluginShortName) =>
         string.Format(DefaultAgentSetupUrlTemplate, pluginShortName.Trim());
-
-    public static async Task<bool> IsInstallableAsync(
-        string pluginShortName,
-        ILogger? logger = null,
-        CancellationToken cancellationToken = default)
-    {
-        var setup = await TryGetSetupAsync(pluginShortName, logger, cancellationToken)
-            .ConfigureAwait(false);
-        return IsInstallableSetup(setup);
-    }
 
     public static bool IsInstallableSetup(PluginAgentSetup? setup) =>
         setup is not null
         && setup.Platforms.Count > 0
         && setup.Platforms.Values.Any(p => p.Executions is { Count: > 0 });
 
+    /// <summary>
+    /// Ready when the live README exists and a local execution recipe is available.
+    /// </summary>
+    public static async Task<bool> IsInstallableAsync(
+        string pluginShortName,
+        ILogger? logger = null,
+        CancellationToken cancellationToken = default,
+        string? pluginFolder = null)
+    {
+        var name = pluginShortName?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(name))
+            return false;
+
+        var folder = string.IsNullOrWhiteSpace(pluginFolder) ? name : pluginFolder.Trim();
+        var hasReadme = await HasLiveReadmeAsync(folder, logger, cancellationToken)
+            .ConfigureAwait(false);
+        if (!hasReadme)
+            return false;
+
+        var setup = await TryGetSetupAsync(name, logger, cancellationToken)
+            .ConfigureAwait(false);
+        return IsInstallableSetup(setup);
+    }
+
+    public static async Task<bool> HasLiveReadmeAsync(
+        string pluginFolder,
+        ILogger? logger = null,
+        CancellationToken cancellationToken = default,
+        bool bypassCache = false)
+    {
+        logger ??= NullLogger.Instance;
+        if (string.IsNullOrWhiteSpace(pluginFolder))
+            return false;
+
+        var folder = pluginFolder.Trim().Trim('/');
+
+        if (TestReadmeOverrides is not null)
+            return TestReadmeOverrides.TryGetValue(folder, out var forced) && forced;
+
+        // Unit tests seed recipes via TestOverrides; skip live README HTTP there.
+        if (TestOverrides is not null)
+            return true;
+
+        var ttlSeconds = EnvConfig.MarketplaceJsonCacheTtlSeconds;
+        if (ttlSeconds <= 0)
+            ttlSeconds = 3600;
+
+        if (!bypassCache
+            && ReadmeCache.TryGetValue(folder, out var cached)
+            && cached.ExpiresAtUtc > DateTime.UtcNow)
+        {
+            return cached.Present;
+        }
+
+        var present = false;
+        try
+        {
+            var url = BuildReadmeRawUrl(folder);
+            using var response = await Http.GetAsync(url, cancellationToken).ConfigureAwait(false);
+            if (response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadAsStringAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                present = !string.IsNullOrWhiteSpace(body);
+            }
+            else
+            {
+                logger.LogDebug(
+                    "Plugin README for {Folder} from {Url} returned HTTP {Status}.",
+                    folder,
+                    url,
+                    (int)response.StatusCode);
+            }
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            logger.LogDebug(ex, "Live plugin README fetch failed for {Folder}.", folder);
+        }
+
+        var missTtl = TimeSpan.FromSeconds(Math.Min(ttlSeconds, 300));
+        var hitTtl = TimeSpan.FromSeconds(ttlSeconds);
+        ReadmeCache[folder] = new ReadmeCacheEntry(
+            present,
+            DateTime.UtcNow.Add(present ? hitTtl : missTtl));
+
+        return present;
+    }
+
+    /// <summary>
+    /// Loads the local execution recipe for a plugin (not remote agent-setup.json).
+    /// </summary>
     public static async Task<PluginAgentSetup?> TryGetSetupAsync(
         string pluginShortName,
         ILogger? logger = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool bypassCache = false)
     {
+        await Task.CompletedTask.ConfigureAwait(false);
         logger ??= NullLogger.Instance;
         if (string.IsNullOrWhiteSpace(pluginShortName))
             return null;
@@ -76,77 +184,60 @@ internal static class PluginAgentSetupCatalog
         if (ttlSeconds <= 0)
             ttlSeconds = 3600;
 
-        if (Cache.TryGetValue(name, out var cached) && cached.ExpiresAtUtc > DateTime.UtcNow)
+        if (!bypassCache
+            && RecipeCache.TryGetValue(name, out var cached)
+            && cached.ExpiresAtUtc > DateTime.UtcNow)
+        {
             return cached.Setup;
-
-        PluginAgentSetup? setup = null;
-        var source = "miss";
-
-        try
-        {
-            var url = BuildUrl(name);
-            using var response = await Http.GetAsync(url, cancellationToken).ConfigureAwait(false);
-            if (response.IsSuccessStatusCode)
-            {
-                var body = await response.Content.ReadAsStringAsync(cancellationToken)
-                    .ConfigureAwait(false);
-                setup = Parse(body);
-                if (setup is not null)
-                    source = "live";
-            }
-            else
-            {
-                logger.LogDebug(
-                    "agent-setup.json for {Plugin} from {Url} returned HTTP {Status}.",
-                    name,
-                    url,
-                    (int)response.StatusCode);
-            }
-        }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
-        {
-            logger.LogDebug(ex, "Live agent-setup fetch failed for {Plugin}.", name);
         }
 
-        if (setup is null)
-        {
-            setup = TryReadEmbedded(name);
-            if (setup is not null)
-                source = "embedded";
-        }
-
-        // Cache misses (null) briefly so we do not hammer GitHub for Coming-soon plugins.
-        var missTtl = TimeSpan.FromSeconds(Math.Min(ttlSeconds, 300));
-        var hitTtl = TimeSpan.FromSeconds(ttlSeconds);
-        Cache[name] = new CacheEntry(
+        var setup = TryLoadLocalRecipe(name, logger);
+        RecipeCache[name] = new RecipeCacheEntry(
             setup,
-            DateTime.UtcNow.Add(setup is null ? missTtl : hitTtl),
-            source);
+            DateTime.UtcNow.AddSeconds(ttlSeconds),
+            setup is null ? "miss" : "local");
 
         return setup;
     }
 
     /// <summary>
-    /// Synchronous installability check using cache / embedded only (no network).
-    /// Prefer <see cref="IsInstallableAsync"/> for live truth.
+    /// Synchronous check using caches / test overrides only (no network).
+    /// Prefer <see cref="IsInstallableAsync"/> for live README truth.
     /// </summary>
-    public static bool IsInstallableCachedOrEmbedded(string pluginShortName)
+    public static bool IsInstallableCached(string pluginShortName)
     {
         if (string.IsNullOrWhiteSpace(pluginShortName))
             return false;
 
         var name = pluginShortName.Trim();
         if (TestOverrides is not null)
+        {
             return IsInstallableSetup(
                 TestOverrides.TryGetValue(name, out var seeded) ? seeded : null);
+        }
 
-        if (Cache.TryGetValue(name, out var cached) && cached.ExpiresAtUtc > DateTime.UtcNow)
-            return IsInstallableSetup(cached.Setup);
+        var readmeOk = ReadmeCache.TryGetValue(name, out var readme)
+            && readme.ExpiresAtUtc > DateTime.UtcNow
+            && readme.Present;
 
-        return IsInstallableSetup(TryReadEmbedded(name));
+        if (!readmeOk)
+            return false;
+
+        if (RecipeCache.TryGetValue(name, out var recipe)
+            && recipe.ExpiresAtUtc > DateTime.UtcNow)
+        {
+            return IsInstallableSetup(recipe.Setup);
+        }
+
+        return IsInstallableSetup(TryLoadLocalRecipe(name, NullLogger.Instance));
     }
 
-    public static bool TryGetSetupCachedOrEmbedded(string pluginShortName, out PluginAgentSetup setup)
+    /// <inheritdoc cref="IsInstallableCached"/>
+    [Obsolete("Use IsInstallableCached or IsInstallableAsync.")]
+    public static bool IsInstallableCachedOrEmbedded(string pluginShortName) =>
+        IsInstallableCached(pluginShortName);
+
+    public static bool TryGetSetupCached(string pluginShortName, out PluginAgentSetup setup)
     {
         setup = null!;
         if (string.IsNullOrWhiteSpace(pluginShortName))
@@ -156,7 +247,7 @@ internal static class PluginAgentSetupCatalog
         if (TestOverrides is not null)
             return TestOverrides.TryGetValue(name, out setup!);
 
-        if (Cache.TryGetValue(name, out var cached)
+        if (RecipeCache.TryGetValue(name, out var cached)
             && cached.ExpiresAtUtc > DateTime.UtcNow
             && cached.Setup is not null)
         {
@@ -164,9 +255,18 @@ internal static class PluginAgentSetupCatalog
             return true;
         }
 
-        setup = TryReadEmbedded(name)!;
-        return setup is not null;
+        var loaded = TryLoadLocalRecipe(name, NullLogger.Instance);
+        if (loaded is null)
+            return false;
+
+        setup = loaded;
+        return true;
     }
+
+    /// <inheritdoc cref="TryGetSetupCached"/>
+    [Obsolete("Use TryGetSetupCached or TryGetSetupAsync.")]
+    public static bool TryGetSetupCachedOrEmbedded(string pluginShortName, out PluginAgentSetup setup) =>
+        TryGetSetupCached(pluginShortName, out setup);
 
     public static IReadOnlyList<JsonElement> MaterializeExecutions(
         PluginAgentSetup setup,
@@ -208,11 +308,18 @@ internal static class PluginAgentSetupCatalog
         string platform,
         string repositoryUrl,
         ILogger? logger = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? pluginFolder = null)
     {
+        if (!await IsInstallableAsync(pluginShortName, logger, cancellationToken, pluginFolder)
+                .ConfigureAwait(false))
+        {
+            return [];
+        }
+
         var setup = await TryGetSetupAsync(pluginShortName, logger, cancellationToken)
             .ConfigureAwait(false);
-        if (setup is null || !IsInstallableSetup(setup))
+        if (setup is null)
             return [];
 
         return MaterializeExecutions(setup, platform, repositoryUrl);
@@ -289,7 +396,7 @@ internal static class PluginAgentSetupCatalog
             })
             .ToArray();
 
-    /// <summary>Parses agent-setup JSON. Exposed for tests and generator validation.</summary>
+    /// <summary>Parses agent-setup / recipe JSON. Exposed for tests and generator validation.</summary>
     internal static PluginAgentSetup? Parse(string json)
     {
         if (string.IsNullOrWhiteSpace(json))
@@ -297,18 +404,7 @@ internal static class PluginAgentSetupCatalog
 
         try
         {
-            var setup = JsonSerializer.Deserialize<PluginAgentSetup>(json, JsonOptions);
-            if (setup is null)
-                return null;
-
-            // Ensure plugin name is set when omitted in older fixtures.
-            if (string.IsNullOrWhiteSpace(setup.Plugin)
-                && json.Contains("\"plugin\"", StringComparison.OrdinalIgnoreCase) == false)
-            {
-                // leave empty; callers may set
-            }
-
-            return setup;
+            return JsonSerializer.Deserialize<PluginAgentSetup>(json, JsonOptions);
         }
         catch (JsonException)
         {
@@ -316,69 +412,63 @@ internal static class PluginAgentSetupCatalog
         }
     }
 
-    /// <summary>Clears the in-memory cache (tests).</summary>
-    internal static void ClearCache() => Cache.Clear();
-
-    /// <summary>Lists plugin short names that have an embedded agent-setup resource.</summary>
-    internal static IReadOnlyCollection<string> EmbeddedPluginNames()
+    /// <summary>Clears the in-memory caches (tests).</summary>
+    internal static void ClearCache()
     {
-        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var asm = typeof(PluginAgentSetupCatalog).Assembly;
-        // EmbeddedResource turns folder hyphens into underscores:
-        // Knowledge/agent-setup/pr-reviewer/agent-setup.json
-        // → …Knowledge.agent_setup.pr_reviewer.agent-setup.json
-        const string marker = ".Knowledge.agent_setup.";
-        const string suffix = ".agent-setup.json";
-        foreach (var resource in asm.GetManifestResourceNames())
-        {
-            var idx = resource.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-            if (idx < 0 || !resource.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            var start = idx + marker.Length;
-            var end = resource.Length - suffix.Length;
-            if (end <= start)
-                continue;
-
-            // pr_reviewer → pr-reviewer (marketplace short names use hyphens)
-            names.Add(resource[start..end].Replace('_', '-'));
-        }
-
-        return names;
+        ReadmeCache.Clear();
+        RecipeCache.Clear();
     }
 
-    private static PluginAgentSetup? TryReadEmbedded(string pluginShortName)
+    private static PluginAgentSetup? TryLoadLocalRecipe(string pluginShortName, ILogger logger)
     {
-        var asm = typeof(PluginAgentSetupCatalog).Assembly;
-        var folderKey = pluginShortName.Trim().Replace('-', '_');
-        var needle = $".Knowledge.agent_setup.{folderKey}.agent-setup.json";
-        foreach (var name in asm.GetManifestResourceNames())
+        foreach (var root in LocalRecipeRoots())
         {
-            if (!name.EndsWith(needle, StringComparison.OrdinalIgnoreCase))
+            var path = Path.Combine(root, pluginShortName, "agent-setup.json");
+            if (!File.Exists(path))
                 continue;
 
-            using var stream = asm.GetManifestResourceStream(name);
-            if (stream is null)
-                continue;
-            using var reader = new StreamReader(stream);
-            var setup = Parse(reader.ReadToEnd());
-            if (setup is not null && string.IsNullOrWhiteSpace(setup.Plugin))
+            try
             {
-                return new PluginAgentSetup
-                {
-                    SchemaVersion = setup.SchemaVersion,
-                    Plugin = pluginShortName.Trim(),
-                    SlashCommand = setup.SlashCommand,
-                    RequiresAuthorization = setup.RequiresAuthorization,
-                    Platforms = setup.Platforms,
-                    Chat = setup.Chat,
-                };
-            }
+                var setup = Parse(File.ReadAllText(path));
+                if (setup is null)
+                    continue;
 
-            return setup;
+                if (string.IsNullOrWhiteSpace(setup.Plugin))
+                {
+                    setup = new PluginAgentSetup
+                    {
+                        SchemaVersion = setup.SchemaVersion,
+                        Plugin = pluginShortName,
+                        SlashCommand = setup.SlashCommand,
+                        RequiresAuthorization = setup.RequiresAuthorization,
+                        Platforms = setup.Platforms,
+                        Chat = setup.Chat,
+                    };
+                }
+
+                return setup;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                logger.LogDebug(ex, "Failed reading local recipe at {Path}.", path);
+            }
         }
 
         return null;
+    }
+
+    private static IEnumerable<string> LocalRecipeRoots()
+    {
+        // Production: copied beside the agent binary from test fixtures.
+        yield return Path.Combine(AppContext.BaseDirectory, "PluginRecipes", "agent-setup");
+
+        // Unit tests / local runs from repo: TheAgent.Tests/Fixtures/agent-setup
+        yield return Path.Combine(AppContext.BaseDirectory, "Fixtures", "agent-setup");
+
+        var cwd = Directory.GetCurrentDirectory();
+        yield return Path.Combine(cwd, "PluginRecipes", "agent-setup");
+        yield return Path.Combine(cwd, "TheAgent.Tests", "Fixtures", "agent-setup");
+        yield return Path.Combine(cwd, "Fixtures", "agent-setup");
     }
 
     private static string? NormalizePlatform(string platform) => platform.Trim().ToLowerInvariant() switch
@@ -388,7 +478,9 @@ internal static class PluginAgentSetupCatalog
         _ => platform.Trim().ToLowerInvariant(),
     };
 
-    private sealed record CacheEntry(PluginAgentSetup? Setup, DateTime ExpiresAtUtc, string Source);
+    private sealed record ReadmeCacheEntry(bool Present, DateTime ExpiresAtUtc);
+
+    private sealed record RecipeCacheEntry(PluginAgentSetup? Setup, DateTime ExpiresAtUtc, string Source);
 }
 
 internal sealed class PluginAgentSetup

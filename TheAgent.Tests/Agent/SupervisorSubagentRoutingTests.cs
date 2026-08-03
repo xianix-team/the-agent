@@ -91,7 +91,7 @@ public class SupervisorSubagentRoutingTests
     public void RulesOptimizerRedirect_ContainsScopedStudioLink()
     {
         Assert.Contains(
-            "[Open Rules Optimizer](?topic=Project Rules Optimizer)",
+            "[Open Rules Optimizer](?topic=project-onboarding)",
             SupervisorSubagent.RulesOptimizerRedirect,
             StringComparison.Ordinal);
     }

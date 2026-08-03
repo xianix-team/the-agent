@@ -1,6 +1,6 @@
 ---
 name: plugin-marketplace
-description: List installable plugins from the official marketplace and let the user choose. Do this BEFORE asking for the repo URL. No triggers here.
+description: List installable plugins from the official marketplace and let the user choose — or accept a plugin already named in chat. Do this BEFORE asking for the repo URL. No triggers here.
 ---
 
 # Marketplace discovery
@@ -9,11 +9,25 @@ description: List installable plugins from the official marketplace and let the 
 
 Source: https://github.com/xianix-team/plugins-official/blob/main/.claude-plugin/marketplace.json
 
-Installability: each plugin’s `plugins/<name>/.xianix/agent-setup.json` (fetched live). Missing/invalid setup → Coming soon.
+Installability: live plugin README on plugins-official (`plugins/<folder>/README.md`, from marketplace `source`) **plus** a local execution recipe. Missing README or recipe → Coming soon. Do **not** look for `.xianix/agent-setup.json`.
 
 Do **not** invent plugins or reuse a remembered list. If `ok: false`, say marketplace unreachable and retry.
 
 1. Call `ListAvailablePlugins` with **no** platform filter (repo URL / platform not known yet).
+
+## Plugin already chosen in chat
+
+If the user (or greeting) already named a Ready-to-install short name (e.g. `pr-reviewer`):
+
+- Confirm it is in `readyToInstall` / `installable: true`.
+- Do **not** ask them to pick again. Do **not** paste the full marketplace list unless they ask.
+- One short ack: `pr-reviewer is ready to install.`
+- Immediately load `plugin-config` and ask for the repository URL.
+
+If that name is Coming soon / missing: say so and show Ready-to-install options so they can pick another.
+
+## Plugin not chosen yet
+
 2. Show briefly:
    - **Ready to install** (`installable: true`) — name + one-line description
    - **Coming soon** (`installable: false`) — name only
@@ -21,8 +35,8 @@ Do **not** invent plugins or reuse a remembered list. If `ok: false`, say market
 
 Do **not** ask for the repo URL or platform here. Do **not** show labels, tags, or triggers yet — those depend on the URL-inferred platform.
 
-Never tell the user you are "loading a skill" or switching phases — after they choose, silently load `plugin-config` and ask the repo URL.
+Never tell the user you are "loading a skill" or switching phases.
 
 ## Next
 
-After choice → load `plugin-config` (silent).
+After choice (or confirmed named plugin) → load `plugin-config` (silent).

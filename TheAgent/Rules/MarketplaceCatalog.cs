@@ -148,6 +148,10 @@ internal static class MarketplaceCatalog
                     }
                 }
 
+                var pluginSource = p.TryGetProperty("source", out var src)
+                    ? src.GetString()?.Trim()
+                    : null;
+
                 plugins.Add(new MarketplacePlugin(
                     Name: shortName!,
                     Version: version,
@@ -155,7 +159,8 @@ internal static class MarketplaceCatalog
                     Category: category,
                     Keywords: keywords,
                     MarketplaceName: marketplaceName,
-                    MarketplaceRepo: DefaultMarketplaceRepo));
+                    MarketplaceRepo: DefaultMarketplaceRepo,
+                    Source: pluginSource));
             }
         }
 
@@ -169,61 +174,8 @@ internal static class MarketplaceCatalog
                 .ToList());
     }
 
-    /// <summary>
-    /// Loads the embedded Knowledge/marketplace.json snapshot.
-    /// For tests and offline tooling only — <see cref="LoadAsync"/> never falls back here.
-    /// </summary>
-    internal static MarketplaceCatalogResult LoadBundled()
-    {
-        var json = ReadEmbeddedMarketplaceJson();
-        if (string.IsNullOrWhiteSpace(json))
-        {
-            return new MarketplaceCatalogResult(
-                Source: "bundled-fallback",
-                FetchedAtUtc: DateTime.UtcNow,
-                MarketplaceName: DefaultMarketplaceName,
-                MarketplaceRepo: DefaultMarketplaceRepo,
-                Plugins: []);
-        }
-
-        try
-        {
-            return Parse(json, source: "bundled-fallback");
-        }
-        catch (JsonException)
-        {
-            return new MarketplaceCatalogResult(
-                Source: "bundled-fallback",
-                FetchedAtUtc: DateTime.UtcNow,
-                MarketplaceName: DefaultMarketplaceName,
-                MarketplaceRepo: DefaultMarketplaceRepo,
-                Plugins: []);
-        }
-    }
-
     /// <summary>Test helper — clears the in-memory cache.</summary>
     internal static void ClearCache() => Cache.Clear();
-
-    private static string? ReadEmbeddedMarketplaceJson()
-    {
-        var asm = typeof(MarketplaceCatalog).Assembly;
-        foreach (var name in asm.GetManifestResourceNames())
-        {
-            if (!name.EndsWith("marketplace.json", StringComparison.OrdinalIgnoreCase))
-                continue;
-            // Prefer Knowledge/marketplace.json, not accidental other marketplace files.
-            if (!name.Contains("Knowledge", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            using var stream = asm.GetManifestResourceStream(name);
-            if (stream is null)
-                continue;
-            using var reader = new StreamReader(stream);
-            return reader.ReadToEnd();
-        }
-
-        return null;
-    }
 
     private sealed record CacheEntry(MarketplaceCatalogResult Result, DateTime ExpiresAtUtc);
 }
@@ -243,9 +195,37 @@ internal sealed record MarketplacePlugin(
     string Category,
     IReadOnlyList<string> Keywords,
     string MarketplaceName,
-    string MarketplaceRepo)
+    string MarketplaceRepo,
+    string? Source = null)
 {
     public string PluginRef => $"{Name}@{MarketplaceName}";
+
+    /// <summary>
+    /// Folder under <c>plugins/</c> for README / docs (from marketplace <c>source</c>).
+    /// E.g. <c>./plugins/ux-mob-process-plugin</c> → <c>ux-mob-process-plugin</c>.
+    /// </summary>
+    public string PluginFolder
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(Source))
+                return Name;
+
+            var trimmed = Source.Trim().Replace('\\', '/').Trim('.');
+            while (trimmed.StartsWith('/'))
+                trimmed = trimmed[1..];
+
+            const string prefix = "plugins/";
+            if (trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                var folder = trimmed[prefix.Length..].Trim('/');
+                if (!string.IsNullOrWhiteSpace(folder))
+                    return folder;
+            }
+
+            return Name;
+        }
+    }
 
     public IReadOnlyList<string> InferPlatforms()
     {

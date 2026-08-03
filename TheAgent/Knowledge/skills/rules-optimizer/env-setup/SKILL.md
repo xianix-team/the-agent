@@ -5,7 +5,7 @@ description: Check required vault secrets for the chosen plugins + platform. Nev
 
 # Environment variables
 
-**Knowledge in scope:** `requiredEnvs` from each plugin’s `.xianix/agent-setup.json` (via `ListAvailablePlugins` for chosen plugins + platform).
+**Knowledge in scope:** `requiredEnvs` from each plugin’s local execution recipe (via `ListAvailablePlugins` for chosen plugins + platform).
 
 Do this yourself — never ask whether secrets are needed.
 

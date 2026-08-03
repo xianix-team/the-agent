@@ -522,7 +522,7 @@ public sealed class OnboardingSubagentTools(
         "List plugins from the official live marketplace only: " +
         "https://github.com/xianix-team/plugins-official/blob/main/.claude-plugin/marketplace.json " +
         "(no embedded snapshot or other catalogs). Annotated with installed " +
-        "(activation rules.json use-plugins) and installable (per-plugin agent-setup.json). " +
+        "(activation rules.json use-plugins) and installable (live plugin README.md under plugins/<folder>/). " +
         "Call after the user provides a repository URL (platform is inferred from the URL). Always fetch at tool runtime.")]
     public async Task<string> ListAvailablePlugins(
         [Description("Optional filter: github, azuredevops, or both. Prefer the platform inferred from the repo URL. Omit to return all plugins.")] string? platform = null)
@@ -576,12 +576,18 @@ public sealed class OnboardingSubagentTools(
         var setupTasks = marketplace.Plugins
             .Select(async p =>
             {
-                var setup = await PluginAgentSetupCatalog
-                    .TryGetSetupAsync(p.Name, _logger)
+                var folder = p.PluginFolder;
+                var hasReadme = await PluginAgentSetupCatalog
+                    .HasLiveReadmeAsync(folder, _logger, bypassCache: true)
                     .ConfigureAwait(false);
-                var installable = PluginAgentSetupCatalog.IsInstallableSetup(setup);
+                var setup = await PluginAgentSetupCatalog
+                    .TryGetSetupAsync(p.Name, _logger, bypassCache: true)
+                    .ConfigureAwait(false);
+                var hasRecipe = PluginAgentSetupCatalog.IsInstallableSetup(setup);
+                var installable = hasReadme && hasRecipe;
+                var readmeUrl = PluginAgentSetupCatalog.BuildReadmeGithubBlobUrl(folder);
 
-                var supportedPlatforms = installable && setup is not null
+                var supportedPlatforms = hasRecipe && setup is not null
                     ? setup.Platforms.Keys
                         .Select(NormalizePlatform)
                         .Where(x => !string.IsNullOrWhiteSpace(x))
@@ -621,10 +627,33 @@ public sealed class OnboardingSubagentTools(
                     }
                 }
 
+                string? notInstallableReason = null;
+                if (!installable)
+                {
+                    if (!hasReadme)
+                    {
+                        notInstallableReason =
+                            "Coming soon — listed in the marketplace, but the plugin README is not available yet " +
+                            $"({readmeUrl}).";
+                    }
+                    else if (!hasRecipe)
+                    {
+                        notInstallableReason =
+                            "Coming soon — plugin README exists, but Rules Optimizer has no local execution recipe yet.";
+                    }
+                    else
+                    {
+                        notInstallableReason =
+                            "Coming soon — listed in the official marketplace, but Rules Optimizer cannot configure it yet.";
+                    }
+                }
+
                 return new
                 {
                     name = p.Name,
                     pluginName = p.PluginRef,
+                    pluginFolder = folder,
+                    readmeUrl,
                     version = p.Version,
                     description = p.Description,
                     category = p.Category,
@@ -646,10 +675,9 @@ public sealed class OnboardingSubagentTools(
                     suggestedGitHubWebhookEvents,
                     requiresAuthorization = setup?.RequiresAuthorization ?? false,
                     installed = installedShortNames.Contains(p.Name),
+                    hasReadme,
                     installable,
-                    notInstallableReason = installable
-                        ? null
-                        : "Coming soon — listed in the official marketplace, but Rules Optimizer cannot configure it yet. Choose a Ready-to-install plugin instead.",
+                    notInstallableReason,
                 };
             });
 
@@ -672,7 +700,7 @@ public sealed class OnboardingSubagentTools(
             marketplace = marketplace.MarketplaceName,
             marketplaceRepo = marketplace.MarketplaceRepo,
             marketplaceUrl = MarketplaceCatalog.MarketplaceGithubBlobUrl,
-            agentSetupUrlTemplate = PluginAgentSetupCatalog.DefaultAgentSetupUrlTemplate,
+            readmeUrlTemplate = PluginAgentSetupCatalog.DefaultReadmeGithubBlobUrlTemplate,
             recipesAvailable = readyToInstall.Select(p => p.name).OrderBy(n => n).ToArray(),
             installedFromRulesJson = installedList,
             readyToInstall,
@@ -681,7 +709,8 @@ public sealed class OnboardingSubagentTools(
             plugins = availableList,
             hint = "Available plugins come only from " +
                    MarketplaceCatalog.MarketplaceGithubBlobUrl +
-                   ". Installability comes from each plugin's .xianix/agent-setup.json. " +
+                   ". Installability requires each plugin's live README " +
+                   "(plugins/<folder>/README.md on plugins-official) plus a local execution recipe. " +
                    "Present 'Installed from rules.json' and 'Available from official marketplace'. " +
                    "Within Available, split Ready to install (installable=true) vs Coming soon (installable=false). " +
                    "Never say 'validated recipe' to the user — say Coming soon. Only Ready-to-install plugins may be added. " +
@@ -737,14 +766,24 @@ public sealed class OnboardingSubagentTools(
         var chatPlugins = new List<object>();
         var envNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        var marketplace = await MarketplaceCatalog.LoadAsync(_logger).ConfigureAwait(false);
+        var folderByName = marketplace.Plugins
+            .ToDictionary(p => p.Name, p => p.PluginFolder, StringComparer.OrdinalIgnoreCase);
+
         foreach (var name in names)
         {
+            var folder = folderByName.TryGetValue(name, out var f) ? f : name;
             var setup = await PluginAgentSetupCatalog
-                .TryGetSetupAsync(name, _logger)
+                .TryGetSetupAsync(name, _logger, bypassCache: true)
                 .ConfigureAwait(false);
-            if (!PluginAgentSetupCatalog.IsInstallableSetup(setup))
+            var hasReadme = await PluginAgentSetupCatalog
+                .HasLiveReadmeAsync(folder, _logger, bypassCache: true)
+                .ConfigureAwait(false);
+            if (!hasReadme || !PluginAgentSetupCatalog.IsInstallableSetup(setup))
             {
-                errors.Add($"'{name}' is not installable (missing or invalid agent-setup.json).");
+                errors.Add(
+                    $"'{name}' is not installable (missing live plugin README or local execution recipe). " +
+                    $"Expected README: {PluginAgentSetupCatalog.BuildReadmeGithubBlobUrl(folder)}");
                 continue;
             }
 
@@ -1011,8 +1050,8 @@ public sealed class OnboardingSubagentTools(
             content = verified.Content,
             message = "Plugins installed and re-read from activation Knowledge. claimAllowed=true — you may tell the user these installedShortNames are saved.",
             hint = "This tool already verified Knowledge. When ok=true and claimAllowed=true, report installedShortNames, " +
-                   "then immediately CreateWebhookConnection (+ RegisterGitHubRepositoryWebhook for GitHub). " +
-                   "Do not ask the user whether to set up the webhook. " +
+                   "then ask the user for permission to create the Xians webhook (CreateWebhookConnection only after they agree). " +
+                   "For GitHub, RegisterGitHubRepositoryWebhook after the webhook URL exists. " +
                    "Call VerifyInstalledPlugins only if the user asks to double-check later.",
         });
     }

@@ -33,6 +33,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Local execution recipes (not live SoT). Copied next to the agent binary. -->
+    <Content Include="..\TheAgent.Tests\Fixtures\agent-setup\**\*">
+      <Link>PluginRecipes\agent-setup\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="TheAgent.Tests" />
   </ItemGroup>
 

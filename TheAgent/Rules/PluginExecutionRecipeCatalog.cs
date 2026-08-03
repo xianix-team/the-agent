@@ -3,23 +3,31 @@ using System.Text.Json;
 namespace Xianix.Rules;
 
 /// <summary>
-/// Compatibility façade over <see cref="PluginAgentSetupCatalog"/> (embedded agent-setup).
-/// Prefer the async live-fetch APIs on <see cref="PluginAgentSetupCatalog"/> at call sites.
+/// Compatibility façade over <see cref="PluginAgentSetupCatalog"/> for tests / cache.
+/// Production Rules Optimizer gates Ready on live README + local recipes.
 /// </summary>
 internal static class PluginExecutionRecipeCatalog
 {
-    public static IReadOnlyCollection<string> InstallablePluginNames =>
-        PluginAgentSetupCatalog.EmbeddedPluginNames()
-            .Where(n => PluginAgentSetupCatalog.IsInstallableCachedOrEmbedded(n))
-            .ToArray();
+    public static IReadOnlyCollection<string> InstallablePluginNames
+    {
+        get
+        {
+            if (PluginAgentSetupCatalog.TestOverrides is null)
+                return [];
+
+            return PluginAgentSetupCatalog.TestOverrides.Keys
+                .Where(PluginAgentSetupCatalog.IsInstallableCached)
+                .ToArray();
+        }
+    }
 
     public static bool IsInstallable(string pluginShortName) =>
-        PluginAgentSetupCatalog.IsInstallableCachedOrEmbedded(pluginShortName);
+        PluginAgentSetupCatalog.IsInstallableCached(pluginShortName);
 
     public static bool TryGetRecipe(string pluginShortName, out PluginRecipe recipe)
     {
         recipe = null!;
-        if (!PluginAgentSetupCatalog.TryGetSetupCachedOrEmbedded(pluginShortName, out var setup))
+        if (!PluginAgentSetupCatalog.TryGetSetupCached(pluginShortName, out var setup))
             return false;
 
         recipe = ToRecipe(setup);
@@ -34,7 +42,7 @@ internal static class PluginExecutionRecipeCatalog
         string platform,
         string repositoryUrl)
     {
-        if (!PluginAgentSetupCatalog.TryGetSetupCachedOrEmbedded(pluginShortName, out var setup))
+        if (!PluginAgentSetupCatalog.TryGetSetupCached(pluginShortName, out var setup))
             return [];
 
         return PluginAgentSetupCatalog.MaterializeExecutions(setup, platform, repositoryUrl);
@@ -42,7 +50,7 @@ internal static class PluginExecutionRecipeCatalog
 
     public static PluginEntry BuildPluginEntry(string pluginShortName, string? slashCommandOverride = null)
     {
-        if (PluginAgentSetupCatalog.TryGetSetupCachedOrEmbedded(pluginShortName, out var setup))
+        if (PluginAgentSetupCatalog.TryGetSetupCached(pluginShortName, out var setup))
             return PluginAgentSetupCatalog.BuildPluginEntry(setup, slashCommandOverride);
 
         return new PluginEntry

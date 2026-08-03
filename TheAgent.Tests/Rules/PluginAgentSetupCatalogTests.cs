@@ -4,10 +4,23 @@ using Xianix.Rules;
 
 namespace TheAgent.Tests.Rules;
 
-public class PluginAgentSetupCatalogTests
+[Collection(nameof(PluginAgentSetupCatalogCollection))]
+public class PluginAgentSetupCatalogTests : IDisposable
 {
+    public PluginAgentSetupCatalogTests()
+    {
+        PluginCatalogFixtures.SeedAgentSetupTestOverrides();
+    }
+
+    public void Dispose()
+    {
+        PluginAgentSetupCatalog.TestOverrides = null;
+        PluginAgentSetupCatalog.TestReadmeOverrides = null;
+        PluginAgentSetupCatalog.ClearCache();
+    }
+
     [Fact]
-    public void EmbeddedPluginNames_IncludesReadyPlugins()
+    public void FixturePluginNames_IncludesReadyPlugins()
     {
         string[] expected =
         [
@@ -29,7 +42,7 @@ public class PluginAgentSetupCatalogTests
             "web-app-tester",
         ];
 
-        var names = PluginAgentSetupCatalog.EmbeddedPluginNames();
+        var names = PluginCatalogFixtures.AgentSetupPluginNames();
         foreach (var name in expected)
             Assert.Contains(name, names);
 
@@ -37,10 +50,51 @@ public class PluginAgentSetupCatalogTests
     }
 
     [Fact]
-    public void IsInstallableCachedOrEmbedded_TrueForPrReviewer_FalseForUnknown()
+    public void IsInstallableCached_TrueForPrReviewer_FalseForUnknown()
     {
-        Assert.True(PluginAgentSetupCatalog.IsInstallableCachedOrEmbedded("pr-reviewer"));
-        Assert.False(PluginAgentSetupCatalog.IsInstallableCachedOrEmbedded("unknown-plugin"));
+        Assert.True(PluginAgentSetupCatalog.IsInstallableCached("pr-reviewer"));
+        Assert.False(PluginAgentSetupCatalog.IsInstallableCached("unknown-plugin"));
+    }
+
+    [Fact]
+    public void WithoutTestOverrides_InstallableCachedNeedsReadmeCache()
+    {
+        PluginAgentSetupCatalog.TestOverrides = null;
+        PluginAgentSetupCatalog.TestReadmeOverrides = null;
+        PluginAgentSetupCatalog.ClearCache();
+
+        // Local fixtures may still load as recipes, but Ready requires a README cache hit.
+        Assert.False(PluginAgentSetupCatalog.IsInstallableCached("pr-reviewer"));
+        Assert.True(PluginAgentSetupCatalog.TryGetSetupCached("pr-reviewer", out _));
+
+        PluginCatalogFixtures.SeedAgentSetupTestOverrides();
+    }
+
+    [Fact]
+    public void BuildReadmeUrls_UsePluginsOfficialReadmePath()
+    {
+        Assert.Equal(
+            "https://github.com/xianix-team/plugins-official/blob/main/plugins/pr-reviewer/README.md",
+            PluginAgentSetupCatalog.BuildReadmeGithubBlobUrl("pr-reviewer"));
+        Assert.Equal(
+            "https://raw.githubusercontent.com/xianix-team/plugins-official/main/plugins/ux-mob-process-plugin/README.md",
+            PluginAgentSetupCatalog.BuildReadmeRawUrl("ux-mob-process-plugin"));
+    }
+
+    [Fact]
+    public void MarketplacePluginFolder_UsesSourcePath()
+    {
+        var plugin = new MarketplacePlugin(
+            "ux-mob-process",
+            "1.0.0",
+            "desc",
+            "ux-design",
+            [],
+            "xianix-plugins-official",
+            "xianix-team/plugins-official",
+            "./plugins/ux-mob-process-plugin");
+
+        Assert.Equal("ux-mob-process-plugin", plugin.PluginFolder);
     }
 
     [Fact]
@@ -53,7 +107,7 @@ public class PluginAgentSetupCatalogTests
     [Fact]
     public void MaterializeExecutions_SubstitutesRepoUrl()
     {
-        Assert.True(PluginAgentSetupCatalog.TryGetSetupCachedOrEmbedded("test-strategist", out var setup));
+        Assert.True(PluginAgentSetupCatalog.TryGetSetupCached("test-strategist", out var setup));
         var executions = PluginAgentSetupCatalog.MaterializeExecutions(
             setup,
             "github",
@@ -68,7 +122,7 @@ public class PluginAgentSetupCatalogTests
     [Fact]
     public void MaterializeExecutions_DependencyOptimizer_IncludesScheduleBlock()
     {
-        Assert.True(PluginAgentSetupCatalog.TryGetSetupCachedOrEmbedded("dependency-optimizer", out var setup));
+        Assert.True(PluginAgentSetupCatalog.TryGetSetupCached("dependency-optimizer", out var setup));
         var executions = PluginAgentSetupCatalog.MaterializeExecutions(
             setup,
             "azuredevops",
@@ -83,7 +137,7 @@ public class PluginAgentSetupCatalogTests
     [Fact]
     public void ResolveRequiredEnvs_FiltersByPlatform()
     {
-        Assert.True(PluginAgentSetupCatalog.TryGetSetupCachedOrEmbedded("doc-writer", out var setup));
+        Assert.True(PluginAgentSetupCatalog.TryGetSetupCached("doc-writer", out var setup));
         var envs = PluginAgentSetupCatalog.ResolveRequiredEnvs(setup, ["github"]);
 
         Assert.Contains("GITHUB-TOKEN", envs);
@@ -94,9 +148,9 @@ public class PluginAgentSetupCatalogTests
     [Fact]
     public void PentestAndInfra_RequireAuthorization()
     {
-        Assert.True(PluginAgentSetupCatalog.TryGetSetupCachedOrEmbedded("pentest-agent", out var pentest));
+        Assert.True(PluginAgentSetupCatalog.TryGetSetupCached("pentest-agent", out var pentest));
         Assert.True(pentest.RequiresAuthorization);
-        Assert.True(PluginAgentSetupCatalog.TryGetSetupCachedOrEmbedded("infra-scanner", out var infra));
+        Assert.True(PluginAgentSetupCatalog.TryGetSetupCached("infra-scanner", out var infra));
         Assert.True(infra.RequiresAuthorization);
     }
 
@@ -116,7 +170,7 @@ public class PluginAgentSetupCatalogTests
     [Fact]
     public void BuildPluginEntry_UsesSlashCommand()
     {
-        Assert.True(PluginAgentSetupCatalog.TryGetSetupCachedOrEmbedded("req-analyst", out var setup));
+        Assert.True(PluginAgentSetupCatalog.TryGetSetupCached("req-analyst", out var setup));
         var entry = PluginAgentSetupCatalog.BuildPluginEntry(setup);
         Assert.Equal("req-analyst@xianix-plugins-official", entry.PluginName);
         Assert.Equal("/requirement-analysis", entry.SlashCommand);
@@ -125,22 +179,15 @@ public class PluginAgentSetupCatalogTests
     [Fact]
     public async Task TryGetSetupAsync_TestOverride_MissingIsNull()
     {
-        var previous = PluginAgentSetupCatalog.TestOverrides;
-        try
-        {
-            PluginAgentSetupCatalog.ClearCache();
-            PluginAgentSetupCatalog.TestOverrides = new ConcurrentDictionary<string, PluginAgentSetup>(
-                StringComparer.OrdinalIgnoreCase);
+        PluginAgentSetupCatalog.ClearCache();
+        PluginAgentSetupCatalog.TestOverrides = new ConcurrentDictionary<string, PluginAgentSetup>(
+            StringComparer.OrdinalIgnoreCase);
 
-            var missing = await PluginAgentSetupCatalog.TryGetSetupAsync("pr-reviewer");
-            Assert.Null(missing);
-            Assert.False(await PluginAgentSetupCatalog.IsInstallableAsync("pr-reviewer"));
-        }
-        finally
-        {
-            PluginAgentSetupCatalog.TestOverrides = previous;
-            PluginAgentSetupCatalog.ClearCache();
-        }
+        var missing = await PluginAgentSetupCatalog.TryGetSetupAsync("pr-reviewer");
+        Assert.Null(missing);
+        Assert.False(await PluginAgentSetupCatalog.IsInstallableAsync("pr-reviewer"));
+
+        PluginCatalogFixtures.SeedAgentSetupTestOverrides();
     }
 
     [Fact]
