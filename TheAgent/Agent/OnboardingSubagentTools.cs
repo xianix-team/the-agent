@@ -282,6 +282,55 @@ public sealed class OnboardingSubagentTools(
         var repoRef = OnboardingPlatformClient.ParseGitHubOwnerRepo(repositoryUrl);
         var repoLabel = repoRef is { } r ? $"{r.Owner}/{r.Repo}" : repositoryUrl;
 
+        // Bind to workflow activation only — ignore any LLM attempt to retarget.
+        var (resolvedAgent, resolvedActivation) = await OnboardingMessageContext
+            .ResolveAsync(context, _platform, agentNameOverride: null, activationNameOverride: null)
+            .ConfigureAwait(false);
+
+        if (string.IsNullOrWhiteSpace(resolvedAgent) || string.IsNullOrWhiteSpace(resolvedActivation))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                ok = false,
+                registrationStatus = "failed",
+                connectionStatus = "not_established",
+                connectionCheck = "github_ping",
+                connectivityStatus = "not_connected",
+                error = "Could not resolve agent/activation for GitHub webhook registration.",
+            });
+        }
+
+        var allowedPayloadUrl = await _platform
+            .ResolveAllowedWebhookPayloadUrlAsync(
+                context.Message.TenantId,
+                resolvedAgent!,
+                resolvedActivation!,
+                webhookUrl)
+            .ConfigureAwait(false);
+
+        if (string.IsNullOrWhiteSpace(allowedPayloadUrl)
+            || !OnboardingPlatformClient.IsXiansBuiltinWebhookUrl(allowedPayloadUrl))
+        {
+            _logger.LogWarning(
+                "Rules Optimizer refused GitHub webhook registration for tenant {TenantId} repo {Repo}: " +
+                "tool webhookUrl did not match a known Xians builtin webhook for {Agent}/{Activation}",
+                context.Message.TenantId,
+                repoLabel,
+                resolvedAgent,
+                resolvedActivation);
+
+            return JsonSerializer.Serialize(new
+            {
+                ok = false,
+                registrationStatus = "failed",
+                connectionStatus = "not_established",
+                connectionCheck = "github_ping",
+                connectivityStatus = "not_connected",
+                error = "webhookUrl must match a Xians builtin webhook for this activation " +
+                        "(from CreateWebhookConnection). Arbitrary URLs are rejected.",
+            });
+        }
+
         try
         {
             var vault = XiansContext.CurrentAgent.Secrets.TenantScope();
@@ -317,11 +366,26 @@ public sealed class OnboardingSubagentTools(
                 eventList = ["issues", "pull_request", "issue_comment", "push"];
             }
 
+            // Prefer a tenant vault secret so receive-path HMAC verification can share it;
+            // otherwise RegisterGitHubWebhookAsync generates a one-time secret for GitHub signing.
+            string? webhookSecret = null;
+            try
+            {
+                var secretFetch = await vault.FetchByKeyAsync("GITHUB-WEBHOOK-SECRET").ConfigureAwait(false);
+                if (secretFetch is not null && !string.IsNullOrWhiteSpace(secretFetch.Value))
+                    webhookSecret = secretFetch.Value;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Optional GITHUB-WEBHOOK-SECRET lookup failed; generating ephemeral hook secret.");
+            }
+
             var result = await _platform.RegisterGitHubWebhookAsync(
                     repositoryUrl,
-                    webhookUrl,
+                    allowedPayloadUrl,
                     fetched.Value,
-                    eventList)
+                    eventList,
+                    webhookSecret: webhookSecret)
                 .ConfigureAwait(false);
 
             if (!result.Success || string.IsNullOrWhiteSpace(result.HookId))
@@ -525,7 +589,8 @@ public sealed class OnboardingSubagentTools(
         "(activation rules.json use-plugins) and installable (live plugin README.md under plugins/<folder>/). " +
         "Call after the user provides a repository URL (platform is inferred from the URL). Always fetch at tool runtime.")]
     public async Task<string> ListAvailablePlugins(
-        [Description("Optional filter: github, azuredevops, or both. Prefer the platform inferred from the repo URL. Omit to return all plugins.")] string? platform = null)
+        [Description("Optional filter: github, azuredevops, or both. Prefer the platform inferred from the repo URL. Omit to return all plugins.")] string? platform = null,
+        [Description("When true, bypass README/recipe caches and refetch. Default false uses cache.")] bool refresh = false)
     {
         var requestedPlatforms = string.IsNullOrWhiteSpace(platform)
             ? Array.Empty<string>()
@@ -578,10 +643,10 @@ public sealed class OnboardingSubagentTools(
             {
                 var folder = p.PluginFolder;
                 var hasReadme = await PluginAgentSetupCatalog
-                    .HasLiveReadmeAsync(folder, _logger, bypassCache: true)
+                    .HasLiveReadmeAsync(folder, _logger, bypassCache: refresh)
                     .ConfigureAwait(false);
                 var setup = await PluginAgentSetupCatalog
-                    .TryGetSetupAsync(p.Name, _logger, bypassCache: true)
+                    .TryGetSetupAsync(p.Name, _logger, bypassCache: refresh)
                     .ConfigureAwait(false);
                 var hasRecipe = PluginAgentSetupCatalog.IsInstallableSetup(setup);
                 var installable = hasReadme && hasRecipe;
@@ -829,9 +894,19 @@ public sealed class OnboardingSubagentTools(
                 chatPlugins.Add(pluginObj);
         }
 
-        if (errors.Count > 0 && executions.Count == 0)
+        if (errors.Count > 0)
         {
-            return JsonSerializer.Serialize(new { ok = false, errors });
+            return JsonSerializer.Serialize(new
+            {
+                ok = false,
+                platform = normalizedPlatform,
+                repositoryUrl = repositoryUrl.Trim(),
+                plugins = names,
+                errors,
+                hint = "One or more plugins could not be materialized. Fix the errors (or drop failing names) and retry. " +
+                       "A partial document is NOT returned — do not SaveRules until ok=true.",
+                notPersisted = true,
+            });
         }
 
         var withEnvs = PluginAgentSetupCatalog.BuildWithEnvsTemplate(envNames);
@@ -861,7 +936,6 @@ public sealed class OnboardingSubagentTools(
             platform = normalizedPlatform,
             repositoryUrl = repositoryUrl.Trim(),
             plugins = names,
-            errors = errors.Count > 0 ? errors : null,
             hint = "NOT persisted. Prefer InstallPlugins to materialize + validate + save atomically. " +
                    "If drafting manually: merge these kebab-case fragments into GetCurrentRules, " +
                    "then ValidateRulesJson(requiredPlugins=...) + SaveRules(requiredPlugins=...).",
@@ -876,27 +950,54 @@ public sealed class OnboardingSubagentTools(
 
     [Description(
         "Atomically install one or more plugins into activation-scoped rules.json. " +
-        "Rematerializes the FULL set (already-installed plugins PLUS the ones you pass), " +
+        "By default rematerializes the FULL set (already-installed plugins PLUS the ones you pass), " +
         "merges, validates, saves, then re-reads Knowledge until every plugin is present. " +
+        "Set replaceExistingSet=true to treat pluginNames as the complete desired set (uninstalls " +
+        "plugins omitted from the list). Pass an empty pluginNames with replaceExistingSet=true to " +
+        "clear all plugins to a fresh activation skeleton. " +
         "When this returns ok=true and claimAllowed=true, the install is already verified — " +
         "tell the user the installedShortNames from THIS result (do not require a second verify tool). " +
         "ONLY call after the user confirmed which plugins to install (and repo URL/secrets are known; platform is inferred from the URL).")]
     public async Task<string> InstallPlugins(
-        [Description("Comma-separated plugin short names to install, e.g. pr-reviewer,perf-optimizer. Already-installed plugins are kept and rematerialized with these.")]
+        [Description("Comma-separated plugin short names to install, e.g. pr-reviewer,perf-optimizer. Already-installed plugins are kept unless replaceExistingSet=true.")]
         string pluginNames,
-        [Description("Repository clone URL baked into executions; also used to infer platform when platform is omitted")] string repositoryUrl,
+        [Description("Repository clone URL baked into executions; also used to infer platform when platform is omitted. Optional when replaceExistingSet=true and pluginNames is empty.")] string? repositoryUrl = null,
         [Description("Optional platform override: github or azuredevops. Omit to infer from repositoryUrl.")] string? platform = null,
         [Description("Optional override when agent context is missing.")] string? agentName = null,
-        [Description("Optional override when activation context is missing.")] string? activationName = null)
+        [Description("Optional override when activation context is missing.")] string? activationName = null,
+        [Description(
+            "When true, pluginNames is the complete desired set — omitted installed plugins are removed. " +
+            "Use for uninstall / replace flows. Default false keeps already-installed plugins.")]
+        bool replaceExistingSet = false)
     {
         var requested = RulesInstallValidation.ParsePluginNameList(pluginNames);
-        if (requested.Length == 0)
+        if (requested.Length == 0 && !replaceExistingSet)
         {
             return JsonSerializer.Serialize(new
             {
                 ok = false,
                 error = "Provide at least one plugin short name to install.",
             });
+        }
+
+        if (requested.Length == 0 && replaceExistingSet)
+        {
+            // Uninstall-all: persist the empty activation skeleton (no rematerialize / repo needed).
+            var clearJson = await SaveRules(
+                    InstalledPluginsCatalog.FreshActivationRulesJson,
+                    agentName,
+                    activationName,
+                    requiredPlugins: null,
+                    replaceExisting: true)
+                .ConfigureAwait(false);
+
+            using (var clearDoc = JsonDocument.Parse(clearJson))
+            {
+                if (clearDoc.RootElement.TryGetProperty("ok", out var clearOk) && clearOk.GetBoolean())
+                    VerifiedInstalledShortNames = [];
+            }
+
+            return clearJson;
         }
 
         if (string.IsNullOrWhiteSpace(repositoryUrl))
@@ -943,10 +1044,11 @@ public sealed class OnboardingSubagentTools(
             .Where(n => !string.IsNullOrWhiteSpace(n))
             .ToArray();
 
-        // Rematerialize the full desired set so adding plugin N cannot leave N unverified
-        // while the model claims the whole list from chat memory.
-        var fullSet = alreadyInstalled
-            .Concat(requested)
+        // Default: rematerialize full desired set so adding plugin N cannot leave N unverified.
+        // replaceExistingSet: treat requested as the complete set (supports uninstall).
+        var fullSet = (replaceExistingSet
+                ? requested
+                : alreadyInstalled.Concat(requested))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -981,7 +1083,8 @@ public sealed class OnboardingSubagentTools(
                 incomingRulesJson,
                 resolvedAgent,
                 resolvedActivation,
-                requiredPlugins: fullSetCsv)
+                requiredPlugins: fullSetCsv,
+                replaceExisting: replaceExistingSet)
             .ConfigureAwait(false);
 
         using var saveDoc = JsonDocument.Parse(saveJson);
@@ -994,16 +1097,18 @@ public sealed class OnboardingSubagentTools(
                 save = saveJson,
                 requiredPlugins = fullSet,
                 newlyRequested = requested,
+                replaceExistingSet,
             });
         }
 
         // Re-read with retries — never trust the in-memory draft alone.
+        // Fewer attempts when Save already returned a knowledge id (cached for the re-read hop).
         var verified = await ReadActivationRulesUntilPluginsPresentAsync(
                 resolvedAgent!,
                 resolvedActivation!,
                 fullSet,
-                maxAttempts: 6,
-                delayMs: 250)
+                maxAttempts: 3,
+                delayMs: 200)
             .ConfigureAwait(false);
 
         if (!verified.Ok)
@@ -1035,11 +1140,33 @@ public sealed class OnboardingSubagentTools(
             .Select(p => InstalledPluginsCatalog.ShortName(p.PluginName))
             .ToArray();
 
+        if (replaceExistingSet)
+        {
+            var extras = installedShort
+                .Except(fullSet, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (extras.Length > 0)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    ok = false,
+                    claimAllowed = false,
+                    error = "Replace mode save left unexpected plugins in Knowledge: " +
+                            string.Join(", ", extras) +
+                            ". Do NOT claim uninstall succeeded.",
+                    unexpectedPlugins = extras,
+                    requiredPlugins = fullSet,
+                    installedShortNames = installedShort,
+                });
+            }
+        }
+
         _logger.LogInformation(
-            "InstallPlugins verified full set [{Plugins}] in activation Rules for {Agent}/{Activation}",
+            "InstallPlugins verified full set [{Plugins}] in activation Rules for {Agent}/{Activation} (replace={Replace})",
             string.Join(", ", fullSet),
             resolvedAgent,
-            resolvedActivation);
+            resolvedActivation,
+            replaceExistingSet);
 
         VerifiedInstalledShortNames = installedShort;
 
@@ -1051,6 +1178,7 @@ public sealed class OnboardingSubagentTools(
             persisted = true,
             verifiedFromKnowledge = true,
             scope = "activation",
+            replaceExistingSet,
             requiredPlugins = fullSet,
             newlyRequested = requested,
             installedPlugins = installed.Select(p => p.PluginName).ToArray(),
@@ -1194,14 +1322,21 @@ public sealed class OnboardingSubagentTools(
             "Optional comma-separated plugin short names that MUST be present in use-plugins " +
             "(e.g. pr-reviewer,perf-optimizer). Use when validating an install.")]
         string? requiredPlugins = null)
+        => Task.FromResult(ValidateRulesJsonCore(rulesJson, requiredPlugins));
+
+    /// <summary>
+    /// Pure rules.json validation used by <see cref="ValidateRulesJson"/> and unit tests
+    /// (no <see cref="OnboardingSubagentTools"/> instance / XIANS-SERVER-URL required).
+    /// </summary>
+    internal static string ValidateRulesJsonCore(string rulesJson, string? requiredPlugins = null)
     {
         if (string.IsNullOrWhiteSpace(rulesJson))
         {
-            return Task.FromResult(JsonSerializer.Serialize(new
+            return JsonSerializer.Serialize(new
             {
                 ok = false,
                 errors = new[] { "rulesJson is empty." },
-            }));
+            });
         }
 
         try
@@ -1214,11 +1349,11 @@ public sealed class OnboardingSubagentTools(
 
             if (doc.RootElement.ValueKind != JsonValueKind.Array)
             {
-                return Task.FromResult(JsonSerializer.Serialize(new
+                return JsonSerializer.Serialize(new
                 {
                     ok = false,
                     errors = new[] { "Document must be a JSON array of rule-set objects." },
-                }));
+                });
             }
 
             var errors = new List<string>();
@@ -1416,12 +1551,10 @@ public sealed class OnboardingSubagentTools(
             }
 
             if (errors.Count > 0)
-            {
-                return Task.FromResult(JsonSerializer.Serialize(new { ok = false, errors }));
-            }
+                return JsonSerializer.Serialize(new { ok = false, errors });
 
             var installed = InstalledPluginsCatalog.FromContent(rulesJson);
-            return Task.FromResult(JsonSerializer.Serialize(new
+            return JsonSerializer.Serialize(new
             {
                 ok = true,
                 ruleSetCount = webhookNames.Count + chatNames.Count,
@@ -1433,15 +1566,15 @@ public sealed class OnboardingSubagentTools(
                 installedPluginCount = installed.Count,
                 installedPlugins = installed.Select(p => p.PluginName).ToArray(),
                 installedShortNames = installed.Select(p => InstalledPluginsCatalog.ShortName(p.PluginName)).ToArray(),
-            }));
+            });
         }
         catch (JsonException ex)
         {
-            return Task.FromResult(JsonSerializer.Serialize(new
+            return JsonSerializer.Serialize(new
             {
                 ok = false,
                 errors = new[] { $"JSON parse error: {ex.Message}" },
-            }));
+            });
         }
     }
 
@@ -1451,8 +1584,8 @@ public sealed class OnboardingSubagentTools(
         "the system seed stays untouched. ALWAYS call GetCurrentRules first when any rules were " +
         "already saved, and pass the COMPLETE JSON (all previously configured plugins PLUS any " +
         "new ones) — never a single-plugin document that would drop earlier work. The tool also " +
-        "merges by execution / use-plugins name as a safety net. ONLY call after ValidateRulesJson " +
-        "succeeded and the user explicitly confirmed — or prefer InstallPlugins for installs.")]
+        "merges by execution / use-plugins name as a safety net unless replaceExisting=true. " +
+        "ONLY call after ValidateRulesJson succeeded and the user explicitly confirmed — or prefer InstallPlugins for installs.")]
     public async Task<string> SaveRules(
         [Description("Complete validated rules.json text (JSON array) including ALL configured plugins.")] string rulesJson,
         [Description("Optional override when agent context is missing.")] string? agentName = null,
@@ -1460,7 +1593,11 @@ public sealed class OnboardingSubagentTools(
         [Description(
             "Optional comma-separated plugin short names that MUST be present after merge/save " +
             "(e.g. pr-reviewer,perf-optimizer). Required for install flows.")]
-        string? requiredPlugins = null)
+        string? requiredPlugins = null,
+        [Description(
+            "When true, overwrite activation Rules with rulesJson as-is (no merge) and do not " +
+            "union previously-installed plugins into requiredPlugins. Use for uninstall / replace.")]
+        bool replaceExisting = false)
     {
         var validation = await ValidateRulesJson(rulesJson, requiredPlugins).ConfigureAwait(false);
         using var validationDoc = JsonDocument.Parse(validation);
@@ -1494,12 +1631,8 @@ public sealed class OnboardingSubagentTools(
 
         try
         {
-            // Merge-on-save: always JSON-merge into the existing activation document when it is a
-            // non-empty array. Do NOT skip merge just because Integrator EnvEntry parse fails —
-            // that used to overwrite with only the incoming (often single-plugin) draft and drop
-            // previously installed plugins. MergeNamedArray skips bare-string with-envs so a
-            // corrupt existing doc can still keep its use-plugins/executions while accepting
-            // valid incoming with-envs objects.
+            // Merge-on-save by default so adding a plugin cannot wipe earlier ones.
+            // replaceExisting=true: persist the incoming document as the complete desired set.
             var existing = await _platform
                 .GetActivationScopedRulesContentAsync(
                     context.Message.TenantId, resolvedAgent, resolvedActivation)
@@ -1510,15 +1643,15 @@ public sealed class OnboardingSubagentTools(
                 .Where(n => !string.IsNullOrWhiteSpace(n))
                 .ToArray();
 
-            // requiredPlugins = callers' list UNION already-installed plugins so adding a plugin
-            // cannot silently drop earlier ones.
-            var required = RulesInstallValidation.ParsePluginNameList(requiredPlugins)
-                .Concat(previouslyInstalled)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
+            var required = replaceExisting
+                ? RulesInstallValidation.ParsePluginNameList(requiredPlugins)
+                : RulesInstallValidation.ParsePluginNameList(requiredPlugins)
+                    .Concat(previouslyInstalled)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
             var requiredCsv = required.Length > 0 ? string.Join(",", required) : null;
 
-            var toSave = string.IsNullOrWhiteSpace(existing)
+            var toSave = replaceExisting || string.IsNullOrWhiteSpace(existing)
                 ? rulesJson
                 : OnboardingPlatformClient.MergeRulesJson(existing, rulesJson);
 
@@ -1555,7 +1688,12 @@ public sealed class OnboardingSubagentTools(
                 });
             }
 
+            _platform.RememberRulesKnowledgeId(
+                context.Message.TenantId, resolvedAgent, resolvedActivation, saveResult.KnowledgeId);
+
             // Strict post-save verify: re-read Knowledge and ensure required plugins persisted.
+            // Prefer a short verify when the save already returned a knowledge id (content is
+            // already known to have been accepted by Admin).
             var verifiedContent = await _platform
                 .GetActivationScopedRulesContentAsync(
                     context.Message.TenantId, resolvedAgent, resolvedActivation)
@@ -1579,18 +1717,45 @@ public sealed class OnboardingSubagentTools(
                 }
             }
 
-            var merged = !string.IsNullOrWhiteSpace(existing)
+            if (replaceExisting)
+            {
+                var installedAfter = InstalledPluginsCatalog.FromContent(verifiedContent)
+                    .Select(p => InstalledPluginsCatalog.ShortName(p.PluginName))
+                    .ToArray();
+                var extras = installedAfter
+                    .Except(required, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                if (extras.Length > 0)
+                {
+                    return JsonSerializer.Serialize(new
+                    {
+                        ok = false,
+                        error = "Replace save left unexpected plugins in Knowledge: " +
+                                string.Join(", ", extras),
+                        unexpectedPlugins = extras,
+                        requiredPlugins = required,
+                    });
+                }
+            }
+
+            var merged = !replaceExisting
+                && !string.IsNullOrWhiteSpace(existing)
                 && !string.Equals(toSave, rulesJson, StringComparison.Ordinal);
             var installed = InstalledPluginsCatalog.FromContent(
                 string.IsNullOrWhiteSpace(verifiedContent) ? toSave : verifiedContent);
 
             _logger.LogInformation(
-                "Rules Optimizer saved agent-scoped Rules knowledge for tenant {TenantId} / agent {Agent} / activation {Activation} (merged={Merged}, installed={InstalledCount})",
+                "Rules Optimizer saved agent-scoped Rules knowledge for tenant {TenantId} / agent {Agent} / activation {Activation} (merged={Merged}, replace={Replace}, installed={InstalledCount})",
                 context.Message.TenantId,
                 resolvedAgent,
                 resolvedActivation,
                 merged,
+                replaceExisting,
                 installed.Count);
+
+            VerifiedInstalledShortNames = installed
+                .Select(p => InstalledPluginsCatalog.ShortName(p.PluginName))
+                .ToArray();
 
             return JsonSerializer.Serialize(new
             {
@@ -1602,6 +1767,7 @@ public sealed class OnboardingSubagentTools(
                 seedFileHint = "TheAgent/Knowledge/rules.json is the empty system seed uploaded at startup; " +
                                "plugin installs update agent-scoped Knowledge only.",
                 merged,
+                replaceExisting,
                 verifiedFromKnowledge = !string.IsNullOrWhiteSpace(verifiedContent),
                 agentName = resolvedAgent,
                 activationName = resolvedActivation,
@@ -1610,9 +1776,11 @@ public sealed class OnboardingSubagentTools(
                 installedPluginCount = installed.Count,
                 installedPlugins = installed.Select(p => p.PluginName).ToArray(),
                 installedShortNames = installed.Select(p => InstalledPluginsCatalog.ShortName(p.PluginName)).ToArray(),
-                message = merged
-                    ? "Agent-scoped Rules saved; existing plugin executions were kept and new ones merged in. Call CreateWebhookConnection next if the webhook is not set up yet."
-                    : "Agent-scoped Rules saved. Call CreateWebhookConnection next to provision the webhook and get the public URL.",
+                message = replaceExisting
+                    ? "Agent-scoped Rules replaced with the provided document (no merge)."
+                    : merged
+                        ? "Agent-scoped Rules saved; existing plugin executions were kept and new ones merged in. Call CreateWebhookConnection next if the webhook is not set up yet."
+                        : "Agent-scoped Rules saved. Call CreateWebhookConnection next to provision the webhook and get the public URL.",
             });
         }
         catch (Exception ex)

@@ -23,10 +23,10 @@ public class XianixAgent(
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
         logger.LogDebug("Initializing Xians platform connection.");
-        var xiansAgent = await CreateAndRegisterAgentAsync(cancellationToken);
+        var (xiansAgent, certificateTenantId) = await CreateAndRegisterAgentAsync(cancellationToken);
 
         logger.LogDebug("Uploading knowledge resources.");
-        await UploadKnowledgeAsync(xiansAgent, logger);
+        await UploadKnowledgeAsync(xiansAgent, certificateTenantId, logger);
 
         ConfigureCustomWorkflows(xiansAgent);
         ConfigureWebhookWorkflow(xiansAgent, cancellationToken);
@@ -256,7 +256,8 @@ public class XianixAgent(
         });
     }
 
-    private static async Task<XiansAgent> CreateAndRegisterAgentAsync(CancellationToken cancellationToken)
+    private static async Task<(XiansAgent Agent, string? CertificateTenantId)> CreateAndRegisterAgentAsync(
+        CancellationToken cancellationToken)
     {
         var xiansPlatform = await XiansPlatform.InitializeAsync(new()
         {
@@ -280,10 +281,13 @@ public class XianixAgent(
             IsTemplate = EnvConfig.AgentIsTemplate
         });
 
-        return xiansAgent;
+        return (xiansAgent, xiansPlatform.Options.CertificateTenantId);
     }
 
-    private static async Task UploadKnowledgeAsync(XiansAgent xiansAgent, ILogger logger)
+    private static async Task UploadKnowledgeAsync(
+        XiansAgent xiansAgent,
+        string? certificateTenantId,
+        ILogger logger)
     {
         // SYSTEM SCOPE ONLY (Studio: System). These seeds must never be written at
         // tenant/organization or agent/activation scope from startup.
@@ -312,16 +316,24 @@ public class XianixAgent(
         // Studio resolution is Agent → Organization → System. Stale Organization overrides
         // (created via "Override to Organization") keep System marked Overridden even after
         // we re-upload system seeds. Clear those org copies so System becomes Active again.
-        await ClearOrganizationSeedOverridesAsync(logger).ConfigureAwait(false);
+        await ClearOrganizationSeedOverridesAsync(certificateTenantId, logger).ConfigureAwait(false);
     }
 
-    private static async Task ClearOrganizationSeedOverridesAsync(ILogger logger)
+    private static async Task ClearOrganizationSeedOverridesAsync(string? certificateTenantId, ILogger logger)
     {
         var adminKey = EnvConfig.XiansAdminApiKey;
         if (string.IsNullOrWhiteSpace(adminKey))
             return;
 
-        var tenantId = "default";
+        // Tenant comes from the agent API key certificate (O=), never a hardcoded "default".
+        var tenantId = certificateTenantId;
+        if (string.IsNullOrWhiteSpace(tenantId))
+        {
+            logger.LogWarning(
+                "Skipping Organization-scope seed cleanup — CertificateTenantId is empty on the registered platform.");
+            return;
+        }
+
         var agentName = EnvConfig.AgentName;
         if (string.IsNullOrWhiteSpace(agentName))
             return;
@@ -340,14 +352,16 @@ public class XianixAgent(
                 .ConfigureAwait(false);
 
             logger.LogInformation(
-                "Cleared Organization-scope seed overrides for agent '{Agent}' (System Prompt, Rules Optimizer System Prompt, Rules) so Studio shows System as Active.",
+                "Cleared Organization-scope seed overrides for tenant '{Tenant}' agent '{Agent}' (System Prompt, Rules Optimizer System Prompt, Rules) so Studio shows System as Active.",
+                tenantId,
                 agentName);
         }
         catch (Exception ex)
         {
             logger.LogWarning(
                 ex,
-                "Could not clear Organization-scope seed overrides for agent '{Agent}'. System seeds were still uploaded; delete org overrides in Studio if System stays Overridden.",
+                "Could not clear Organization-scope seed overrides for tenant '{Tenant}' agent '{Agent}'. System seeds were still uploaded; delete org overrides in Studio if System stays Overridden.",
+                tenantId,
                 agentName);
         }
     }

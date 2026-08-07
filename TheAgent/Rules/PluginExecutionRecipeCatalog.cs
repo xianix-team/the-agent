@@ -16,7 +16,7 @@ internal static class PluginExecutionRecipeCatalog
                 return [];
 
             return PluginAgentSetupCatalog.TestOverrides.Keys
-                .Where(PluginAgentSetupCatalog.IsInstallableCached)
+                .Where(n => PluginAgentSetupCatalog.IsInstallableCached(n))
                 .ToArray();
         }
     }

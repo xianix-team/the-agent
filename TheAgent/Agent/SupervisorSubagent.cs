@@ -43,7 +43,7 @@ public sealed class SupervisorSubagent
 
     internal const string RulesOptimizerRedirect =
         "Agent setup runs in a separate guided chat. " +
-        "[Open Rules Optimizer](?topic=project-onboarding), then send your setup request there.";
+        "[Open Rules Optimizer](?topic=Rules%20Optimizer), then send your setup request there.";
 
     /// <summary>
     /// User-facing reply we surface when the model finishes a turn without producing
@@ -473,8 +473,9 @@ public sealed class SupervisorSubagent
             : string.Join(", ", counts.Select(kv => $"{kv.Key}={kv.Value}"));
     }
 
-    private static bool IsProjectOnboardingScope(string? scope) =>
-        string.Equals(scope, Constants.ProjectOnboardingScope, StringComparison.OrdinalIgnoreCase);
+    internal static bool IsProjectOnboardingScope(string? scope) =>
+        string.Equals(scope, Constants.ProjectOnboardingScope, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(scope, Constants.LegacyProjectOnboardingScope, StringComparison.OrdinalIgnoreCase);
 
     internal static bool IsRulesSetupRequest(string text)
     {
@@ -487,7 +488,7 @@ public sealed class SupervisorSubagent
             return true;
         }
 
-        // "set up AI agents for your repository" / "configure automations" — leave general chat.
+        // Explicit product onboarding phrasing — leave general chat alone.
         if (Regex.IsMatch(
                 text,
                 @"\b(set\s*up|setup|stup|configur\w*|install\w*|enable\w*)\b.{0,80}\b("
@@ -498,16 +499,18 @@ public sealed class SupervisorSubagent
             return true;
         }
 
+        // Require a setup-like verb (not bare add/create — those match ordinary chat)
+        // plus a Rules Optimizer target (plugins / webhooks / secrets / env vars / rules).
         var hasSetupAction = Regex.IsMatch(
             text,
-            @"\b(set\s*up|setup|stup|configur\w*|install\w*|uninstall\w*|edit\w*|updat\w*|modif\w*|chang\w*|remov\w*|add\w*|creat\w*)\b",
+            @"\b(set\s*up|setup|stup|configur\w*|install\w*|uninstall\w*|edit\w*|updat\w*|modif\w*|chang\w*|remov\w*)\b",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         if (!hasSetupAction)
             return false;
 
         return Regex.IsMatch(
             text,
-            @"\b(rules?|plugins?|webhooks?|secrets?|env(?:ironment)?\s+var(?:iable)?s?|trigger\s+(?:labels?|tags?))\b",
+            @"\b(rules?\.json|rules|plugins?|webhooks?|secrets?|env(?:ironment)?\s+var(?:iable)?s?|trigger\s+(?:labels?|tags?)|rules?\s+optimizer)\b",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 

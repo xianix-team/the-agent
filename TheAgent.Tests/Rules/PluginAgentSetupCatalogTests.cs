@@ -57,6 +57,26 @@ public class PluginAgentSetupCatalogTests : IDisposable
     }
 
     [Fact]
+    public void IsInstallableCached_UsesFolderKey_WhenNameDiffers()
+    {
+        PluginAgentSetupCatalog.TestOverrides = null;
+        PluginAgentSetupCatalog.ClearCache();
+        PluginAgentSetupCatalog.TestReadmeOverrides = new ConcurrentDictionary<string, bool>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["ux-mob-process-plugin"] = true,
+        };
+
+        // Name ≠ folder: looking up by name alone must miss; folder key must hit.
+        Assert.False(PluginAgentSetupCatalog.IsInstallableCached("ux-mob-process"));
+        Assert.True(PluginAgentSetupCatalog.IsInstallableCached(
+            "ux-mob-process",
+            pluginFolder: "ux-mob-process-plugin"));
+
+        PluginCatalogFixtures.SeedAgentSetupTestOverrides();
+    }
+
+    [Fact]
     public void WithoutTestOverrides_InstallableCachedNeedsReadmeCache()
     {
         PluginAgentSetupCatalog.TestOverrides = null;

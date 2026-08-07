@@ -91,8 +91,28 @@ public class SupervisorSubagentRoutingTests
     public void RulesOptimizerRedirect_ContainsScopedStudioLink()
     {
         Assert.Contains(
-            "[Open Rules Optimizer](?topic=project-onboarding)",
+            "[Open Rules Optimizer](?topic=Rules%20Optimizer)",
             SupervisorSubagent.RulesOptimizerRedirect,
             StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Rules Optimizer")]
+    [InlineData("rules optimizer")]
+    [InlineData("project-onboarding")]
+    [InlineData("PROJECT-ONBOARDING")]
+    public void IsProjectOnboardingScope_KnownScopes_ReturnsTrue(string scope)
+    {
+        Assert.True(SupervisorSubagent.IsProjectOnboardingScope(scope));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("general-discussions")]
+    [InlineData("something-else")]
+    public void IsProjectOnboardingScope_OtherScopes_ReturnsFalse(string? scope)
+    {
+        Assert.False(SupervisorSubagent.IsProjectOnboardingScope(scope));
     }
 }

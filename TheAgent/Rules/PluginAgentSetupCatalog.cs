@@ -31,9 +31,10 @@ internal static class PluginAgentSetupCatalog
     public const string DefaultAgentSetupUrlTemplate =
         "https://raw.githubusercontent.com/xianix-team/plugins-official/main/plugins/{0}/.xianix/agent-setup.json";
 
+    // Match MarketplaceCatalog — plugin README probes can be slow on the same GitHub raw CDN.
     private static readonly HttpClient Http = new()
     {
-        Timeout = TimeSpan.FromSeconds(10),
+        Timeout = TimeSpan.FromSeconds(30),
     };
 
     private static readonly ConcurrentDictionary<string, ReadmeCacheEntry> ReadmeCache =
@@ -204,7 +205,12 @@ internal static class PluginAgentSetupCatalog
     /// Synchronous check using caches / test overrides only (no network).
     /// Prefer <see cref="IsInstallableAsync"/> for live README truth.
     /// </summary>
-    public static bool IsInstallableCached(string pluginShortName)
+    /// <param name="pluginShortName">Marketplace plugin name (recipe cache key).</param>
+    /// <param name="pluginFolder">
+    /// Marketplace plugin folder used for README cache lookup. When omitted, falls back to
+    /// <paramref name="pluginShortName"/> (folder==name). Pass the marketplace folder when they differ.
+    /// </param>
+    public static bool IsInstallableCached(string pluginShortName, string? pluginFolder = null)
     {
         if (string.IsNullOrWhiteSpace(pluginShortName))
             return false;
@@ -216,9 +222,22 @@ internal static class PluginAgentSetupCatalog
                 TestOverrides.TryGetValue(name, out var seeded) ? seeded : null);
         }
 
-        var readmeOk = ReadmeCache.TryGetValue(name, out var readme)
-            && readme.ExpiresAtUtc > DateTime.UtcNow
-            && readme.Present;
+        // README cache / overrides are keyed by plugin folder (see HasLiveReadmeAsync).
+        var folder = string.IsNullOrWhiteSpace(pluginFolder)
+            ? name.Trim().Trim('/')
+            : pluginFolder.Trim().Trim('/');
+
+        bool readmeOk;
+        if (TestReadmeOverrides is not null)
+        {
+            readmeOk = TestReadmeOverrides.TryGetValue(folder, out var forced) && forced;
+        }
+        else
+        {
+            readmeOk = ReadmeCache.TryGetValue(folder, out var readme)
+                && readme.ExpiresAtUtc > DateTime.UtcNow
+                && readme.Present;
+        }
 
         if (!readmeOk)
             return false;
@@ -554,9 +573,26 @@ internal static class PluginAgentSetupCatalog
 
     private static PluginAgentSetup? TryLoadLocalRecipe(string pluginShortName, ILogger logger)
     {
+        if (!IsSafePluginPathSegment(pluginShortName))
+        {
+            logger.LogWarning(
+                "Rejected unsafe plugin short name for local recipe path: {Name}",
+                pluginShortName);
+            return null;
+        }
+
         foreach (var root in LocalRecipeRoots())
         {
             var path = Path.Combine(root, pluginShortName, "agent-setup.json");
+            // Defense in depth: ensure resolved path stays under the recipe root.
+            var fullRoot = Path.GetFullPath(root);
+            var fullPath = Path.GetFullPath(path);
+            if (!fullPath.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(fullPath, fullRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
             if (!File.Exists(path))
                 continue;
 
@@ -588,6 +624,27 @@ internal static class PluginAgentSetupCatalog
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// True when <paramref name="name"/> is a single path segment with no traversal characters.
+    /// </summary>
+    internal static bool IsSafePluginPathSegment(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return false;
+
+        var trimmed = name.Trim();
+        if (trimmed is "." or "..")
+            return false;
+
+        if (trimmed.Contains('/') || trimmed.Contains('\\') || trimmed.Contains("..", StringComparison.Ordinal))
+            return false;
+
+        if (trimmed.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            return false;
+
+        return true;
     }
 
     private static IEnumerable<string> LocalRecipeRoots()

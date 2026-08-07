@@ -28,9 +28,11 @@ internal static class MarketplaceCatalog
     public const string MarketplaceGithubBlobUrl =
         "https://github.com/xianix-team/plugins-official/blob/main/.claude-plugin/marketplace.json";
 
+    // Live raw.githubusercontent.com fetches from some networks commonly take 15–25s.
+    // A 10s timeout made the catalog look "unreachable" while the same URL worked in a browser.
     private static readonly HttpClient Http = new()
     {
-        Timeout = TimeSpan.FromSeconds(10),
+        Timeout = TimeSpan.FromSeconds(30),
     };
 
     private static readonly ConcurrentDictionary<string, CacheEntry> Cache = new(StringComparer.Ordinal);

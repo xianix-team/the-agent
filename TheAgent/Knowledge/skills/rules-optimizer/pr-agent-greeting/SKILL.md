@@ -18,7 +18,7 @@ If the user's message already asks to set up / install a specific plugin (e.g. "
 - Do **not** dump a long welcome when intent is clear.
 - Map common aliases: "pr reviewer" / "pr-review" / "PR review" → `pr-reviewer`.
 - If that short name is **already** in installed `use-plugins`: say it's already installed and ask whether to modify/reconfigure or stop.
-- If **not** installed: one short line (`Setting up pr-reviewer.`) then **immediately** load `plugin-marketplace` with that choice already known (silent) — marketplace will verify Ready-to-install and move on.
+- If **not** installed: **do not** say "Setting up …", "I'll configure …", or narrate background work. Silently load `plugin-marketplace` with that choice already known — marketplace verifies Ready-to-install, then continue to ask for the repository URL.
 
 ## Reply shape when intent is open
 

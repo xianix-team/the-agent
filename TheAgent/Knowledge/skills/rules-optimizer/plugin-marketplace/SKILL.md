@@ -21,8 +21,7 @@ If the user (or greeting) already named a Ready-to-install short name (e.g. `pr-
 
 - Confirm it is in `readyToInstall` / `installable: true`.
 - Do **not** ask them to pick again. Do **not** paste the full marketplace list unless they ask.
-- One short ack: `pr-reviewer is ready to install.`
-- Immediately load `plugin-config` and ask for the repository URL.
+- Do **not** say "Setting up …" or narrate verification. Go straight to the repository URL question (load `plugin-config`).
 
 If that name is Coming soon / missing: say so and show Ready-to-install options so they can pick another.
 

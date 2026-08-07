@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -32,8 +33,9 @@ internal static class OnboardingMessageContext
         var fromWorkflow = ParseWorkflowId(SafeGet(() => XiansContext.WorkflowId));
         var fromSafeWorkflow = ParseWorkflowId(SafeGet(() => XiansContext.SafeWorkflowId));
 
+        // Prefer workflow / platform identity over LLM-supplied tool overrides so a prompt
+        // injection cannot redirect Admin-key writes to another activation.
         var agentName = FirstNonEmpty(
-            agentNameOverride,
             SafeGet(() => XiansContext.SafeAgentName),
             fromWorkflow.AgentName,
             fromSafeWorkflow.AgentName,
@@ -42,7 +44,6 @@ internal static class OnboardingMessageContext
             EnvConfig.AgentName);
 
         var activationName = FirstNonEmpty(
-            activationNameOverride,
             SafeGet(() => XiansContext.SafeIdPostfix),
             SafeGet(() => XiansContext.GetIdPostfix()),
             fromWorkflow.ActivationName,
@@ -60,6 +61,15 @@ internal static class OnboardingMessageContext
                 // Not available in this workflow context.
             }
         }
+
+        if (!string.IsNullOrWhiteSpace(agentName) && !string.IsNullOrWhiteSpace(activationName))
+            return (agentName, activationName);
+
+        // Overrides fill gaps only when workflow context did not resolve both names.
+        if (string.IsNullOrWhiteSpace(agentName))
+            agentName = FirstNonEmpty(agentNameOverride);
+        if (string.IsNullOrWhiteSpace(activationName))
+            activationName = FirstNonEmpty(activationNameOverride);
 
         if (!string.IsNullOrWhiteSpace(agentName) && !string.IsNullOrWhiteSpace(activationName))
             return (agentName, activationName);
@@ -151,9 +161,40 @@ internal sealed class OnboardingPlatformClient
 
     public OnboardingPlatformClient(HttpClient? httpClient = null)
     {
-        _http = httpClient ?? new HttpClient();
+        _http = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
         if (_http.BaseAddress is null)
             _http.BaseAddress = new Uri(EnvConfig.XiansServerUrl.TrimEnd('/') + "/");
+        // Honor caller-provided clients that already set a timeout; only fill the default when
+        // InfiniteTimeSpan (HttpClient's default) would hang the onboarding turn indefinitely.
+        if (_http.Timeout == Timeout.InfiniteTimeSpan)
+            _http.Timeout = TimeSpan.FromSeconds(30);
+    }
+
+    private readonly ConcurrentDictionary<string, string> _rulesKnowledgeIdCache = new(StringComparer.Ordinal);
+
+    private static string RulesKnowledgeCacheKey(string tenantId, string agentName, string? activationName)
+        => $"{tenantId}\u001f{agentName}\u001f{activationName ?? ""}";
+
+    /// <summary>
+    /// Truncates / redacts HTTP response bodies before returning them to the model or logs.
+    /// </summary>
+    internal static string SanitizeHttpErrorBody(string? body, int maxLen = 200)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return "(empty)";
+
+        var trimmed = body.Trim();
+        // Strip common secret-bearing JSON fields.
+        trimmed = Regex.Replace(
+            trimmed,
+            @"""(token|secret|password|apiKey|apikey|authorization|value)""\s*:\s*""[^""]*""",
+            "\"$1\":\"[redacted]\"",
+            RegexOptions.IgnoreCase);
+
+        if (trimmed.Length <= maxLen)
+            return trimmed;
+
+        return trimmed[..maxLen] + "…";
     }
 
     /// <summary>
@@ -274,7 +315,7 @@ internal sealed class OnboardingPlatformClient
         if (!createResponse.IsSuccessStatusCode)
         {
             return WebhookCreateResult.Failed(
-                $"Failed to create webhook: HTTP {(int)createResponse.StatusCode} {createBody}");
+                $"Failed to create webhook: HTTP {(int)createResponse.StatusCode} {SanitizeHttpErrorBody(createBody)}");
         }
 
         using var doc = JsonDocument.Parse(createBody);
@@ -287,6 +328,50 @@ internal sealed class OnboardingPlatformClient
             ToPublicWebhookUrl(webhookUrl),
             created: true,
             webhookName: normalizedWebhookName);
+    }
+
+    /// <summary>
+    /// Returns the server-side public URL for an activation webhook only when
+    /// <paramref name="requestedUrl"/> matches a known builtin webhook for that activation.
+    /// LLM-supplied URLs that do not match are rejected (prevents PAT-backed hook hijack).
+    /// </summary>
+    public async Task<string?> ResolveAllowedWebhookPayloadUrlAsync(
+        string tenantId,
+        string agentName,
+        string activationName,
+        string? requestedUrl,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(agentName) || string.IsNullOrWhiteSpace(activationName))
+            return null;
+        if (string.IsNullOrWhiteSpace(requestedUrl))
+            return null;
+
+        var adminKey = EnvConfig.XiansAdminApiKey;
+        if (string.IsNullOrWhiteSpace(adminKey))
+            return null;
+
+        var existing = await ListBuiltinWebhooksAsync(
+                tenantId, agentName, activationName, adminKey, cancellationToken)
+            .ConfigureAwait(false);
+
+        var requested = requestedUrl.Trim();
+        foreach (var webhook in existing)
+        {
+            var publicUrl = ToPublicWebhookUrl(webhook.WebhookUrl);
+            if (string.IsNullOrWhiteSpace(publicUrl))
+                continue;
+
+            if (string.Equals(publicUrl, requested, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(webhook.WebhookUrl, requested, StringComparison.OrdinalIgnoreCase)
+                || IsSameXiansWebhookIdentity(publicUrl, requested))
+            {
+                // Always return the server-resolved public URL, never the raw tool argument.
+                return publicUrl;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -337,7 +422,7 @@ internal sealed class OnboardingPlatformClient
         {
             return RulesSaveResult.Failed(
                 $"Admin API rejected activation-scoped Rules save for {agentName} / {activationName}: " +
-                $"HTTP {(int)response.StatusCode} {body}");
+                $"HTTP {(int)response.StatusCode} {SanitizeHttpErrorBody(body)}");
         }
 
         string? id = null;
@@ -352,14 +437,28 @@ internal sealed class OnboardingPlatformClient
             // Non-fatal: the write succeeded, we just couldn't parse the id out of the response.
         }
 
+        if (!string.IsNullOrWhiteSpace(id))
+            RememberRulesKnowledgeId(tenantId, agentName, activationName, id);
+
         return RulesSaveResult.Succeeded(id, activationName);
     }
 
     /// <summary>
-    /// Deletes Organization-scope (tenant_default) copies of seed knowledge names so Studio
-    /// shows System as Active. Does not touch system-scoped docs or agent/activation docs.
-    /// Uses <c>DELETE .../knowledge/{name}/tenant/versions?agentName=...</c>.
+    /// Remembers a Rules knowledge document id after a successful save so subsequent
+    /// reads in the same client lifetime skip the list-knowledge hop.
     /// </summary>
+    public void RememberRulesKnowledgeId(string tenantId, string agentName, string activationName, string? knowledgeId)
+    {
+        if (string.IsNullOrWhiteSpace(knowledgeId)
+            || string.IsNullOrWhiteSpace(tenantId)
+            || string.IsNullOrWhiteSpace(agentName)
+            || string.IsNullOrWhiteSpace(activationName))
+        {
+            return;
+        }
+
+        _rulesKnowledgeIdCache[RulesKnowledgeCacheKey(tenantId, agentName, activationName)] = knowledgeId;
+    }
     public async Task ClearOrganizationScopedSeedOverridesAsync(
         string tenantId,
         string agentName,
@@ -398,7 +497,7 @@ internal sealed class OnboardingPlatformClient
 
             throw new InvalidOperationException(
                 $"Failed to clear Organization override for '{name}' on agent '{agentName}': " +
-                $"HTTP {(int)response.StatusCode} {body}");
+                $"HTTP {(int)response.StatusCode} {SanitizeHttpErrorBody(body)}");
         }
     }
 
@@ -507,11 +606,27 @@ internal sealed class OnboardingPlatformClient
         if (string.IsNullOrWhiteSpace(adminKey))
             return null;
 
+        var cacheKey = RulesKnowledgeCacheKey(tenantId, agentName, activationName);
+        if (_rulesKnowledgeIdCache.TryGetValue(cacheKey, out var cachedId)
+            && !string.IsNullOrWhiteSpace(cachedId))
+        {
+            var cachedContent = await GetKnowledgeContentByIdAsync(
+                    tenantId, cachedId, adminKey, cancellationToken)
+                .ConfigureAwait(false);
+            if (cachedContent is not null)
+                return cachedContent;
+
+            // Stale id — drop and resolve again.
+            _rulesKnowledgeIdCache.TryRemove(cacheKey, out _);
+        }
+
         var knowledgeId = await FindRulesKnowledgeIdAsync(
                 tenantId, agentName, activationName, adminKey, cancellationToken)
             .ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(knowledgeId))
             return null;
+
+        _rulesKnowledgeIdCache[cacheKey] = knowledgeId;
 
         return await GetKnowledgeContentByIdAsync(
                 tenantId, knowledgeId, adminKey, cancellationToken)
@@ -793,7 +908,8 @@ internal sealed class OnboardingPlatformClient
         string payloadUrl,
         string githubToken,
         IReadOnlyList<string> events,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? webhookSecret = null)
     {
         if (string.IsNullOrWhiteSpace(githubToken))
             return GitHubWebhookResult.Failed("GITHUB-TOKEN value is empty.");
@@ -815,19 +931,24 @@ internal sealed class OnboardingPlatformClient
             .Distinct()
             .ToArray();
 
+        var secret = string.IsNullOrWhiteSpace(webhookSecret)
+            ? Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32))
+            : webhookSecret.Trim();
+
         var existing = await ListGitHubWebhooksAsync(owner, name, githubToken, cancellationToken)
             .ConfigureAwait(false);
 
-        // Prefer an exact URL match; otherwise reuse a prior Xians/cloudflare quick-tunnel hook
-        // so a tunnel hostname rotation updates events+URL instead of leaving a stale hook.
+        // Prefer an exact URL match; otherwise reuse a hook that already targets the same
+        // Xians builtin webhook identity (path + agent/activation/webhook query) so a tunnel
+        // hostname rotation updates in place — never rewrite unrelated trycloudflare/localhost hooks.
         var matched = existing.FirstOrDefault(h =>
                 string.Equals(h.Url, payloadUrl, StringComparison.OrdinalIgnoreCase))
-            ?? existing.FirstOrDefault(h => IsReplaceableXiansWebhookUrl(h.Url));
+            ?? existing.FirstOrDefault(h => IsSameXiansWebhookIdentity(h.Url, payloadUrl));
 
         if (matched is not null)
         {
             var updated = await UpdateGitHubWebhookAsync(
-                    owner, name, matched.Id, payloadUrl, normalizedEvents, githubToken, cancellationToken)
+                    owner, name, matched.Id, payloadUrl, normalizedEvents, githubToken, secret, cancellationToken)
                 .ConfigureAwait(false);
             if (!updated.Success)
                 return updated;
@@ -849,6 +970,7 @@ internal sealed class OnboardingPlatformClient
                 url = payloadUrl,
                 content_type = "json",
                 insecure_ssl = "0",
+                secret,
             },
         });
 
@@ -859,7 +981,7 @@ internal sealed class OnboardingPlatformClient
         {
             return GitHubWebhookResult.Failed(
                 $"GitHub API rejected webhook creation for {owner}/{name}: " +
-                $"HTTP {(int)response.StatusCode} {body}");
+                $"HTTP {(int)response.StatusCode} {SanitizeHttpErrorBody(body)}");
         }
 
         using var doc = JsonDocument.Parse(body);
@@ -882,6 +1004,7 @@ internal sealed class OnboardingPlatformClient
         string payloadUrl,
         IReadOnlyList<string> events,
         string githubToken,
+        string webhookSecret,
         CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(
@@ -897,6 +1020,7 @@ internal sealed class OnboardingPlatformClient
                 url = payloadUrl,
                 content_type = "json",
                 insecure_ssl = "0",
+                secret = webhookSecret,
             },
         });
 
@@ -906,28 +1030,86 @@ internal sealed class OnboardingPlatformClient
         {
             return GitHubWebhookResult.Failed(
                 $"GitHub API rejected webhook update for {owner}/{repo} hook {hookId}: " +
-                $"HTTP {(int)response.StatusCode} {body}");
+                $"HTTP {(int)response.StatusCode} {SanitizeHttpErrorBody(body)}");
         }
 
         return GitHubWebhookResult.Succeeded(hookId, events, created: false);
     }
 
     /// <summary>
-    /// True for prior Xians public webhook URLs we are allowed to replace in-place (quick tunnels
-    /// and localhost tunnels), so re-registration can rotate the hostname without creating
-    /// duplicate hooks.
+    /// True when <paramref name="url"/> targets the Xians builtin webhook ingress
+    /// (<c>/api/user/webhooks/builtin</c>).
     /// </summary>
-    internal static bool IsReplaceableXiansWebhookUrl(string? url)
+    internal static bool IsXiansBuiltinWebhookUrl(string? url)
+        => TryGetXiansBuiltinWebhookIdentity(url, out _);
+
+    /// <summary>
+    /// True when both URLs are Xians builtin webhooks with the same agent / activation /
+    /// webhookName identity (host may differ for tunnel rotation). Does not treat arbitrary
+    /// trycloudflare or localhost hooks as replaceable.
+    /// </summary>
+    internal static bool IsSameXiansWebhookIdentity(string? existingUrl, string? newPayloadUrl)
     {
+        if (!TryGetXiansBuiltinWebhookIdentity(existingUrl, out var existing)
+            || !TryGetXiansBuiltinWebhookIdentity(newPayloadUrl, out var incoming))
+        {
+            return false;
+        }
+
+        return string.Equals(existing.AgentName, incoming.AgentName, StringComparison.OrdinalIgnoreCase)
+               && string.Equals(existing.ActivationName, incoming.ActivationName, StringComparison.OrdinalIgnoreCase)
+               && string.Equals(existing.WebhookName, incoming.WebhookName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Parses agentName / activationName / webhookName from a Xians builtin webhook URL.
+    /// </summary>
+    internal static bool TryGetXiansBuiltinWebhookIdentity(
+        string? url,
+        out (string AgentName, string ActivationName, string WebhookName) identity)
+    {
+        identity = default;
         if (string.IsNullOrWhiteSpace(url))
             return false;
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            && !Uri.TryCreate(
+                "https://placeholder.local" + (url.StartsWith('/') ? url : "/" + url),
+                UriKind.Absolute,
+                out uri))
+        {
+            return false;
+        }
+
+        if (!uri.AbsolutePath.Contains("/api/user/webhooks/builtin", StringComparison.OrdinalIgnoreCase))
             return false;
 
-        var host = uri.Host;
-        return host.EndsWith(".trycloudflare.com", StringComparison.OrdinalIgnoreCase)
-               || string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
-               || string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase);
+        var agentName = GetQueryValue(uri.Query, "agentName");
+        var activationName = GetQueryValue(uri.Query, "activationName");
+        var webhookName = GetQueryValue(uri.Query, "webhookName") ?? "Default";
+        if (string.IsNullOrWhiteSpace(agentName) || string.IsNullOrWhiteSpace(activationName))
+            return false;
+
+        identity = (agentName, activationName, webhookName);
+        return true;
+    }
+
+    private static string? GetQueryValue(string query, string key)
+    {
+        if (string.IsNullOrEmpty(query))
+            return null;
+
+        var trimmed = query.StartsWith('?') ? query[1..] : query;
+        foreach (var part in trimmed.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var eq = part.IndexOf('=');
+            var name = eq >= 0 ? part[..eq] : part;
+            if (!string.Equals(Uri.UnescapeDataString(name), key, StringComparison.OrdinalIgnoreCase))
+                continue;
+            return eq >= 0 ? Uri.UnescapeDataString(part[(eq + 1)..]) : string.Empty;
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -1020,7 +1202,7 @@ internal sealed class OnboardingPlatformClient
 
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         return (false,
-            $"GitHub rejected ping for hook {hookId}: HTTP {(int)response.StatusCode} {body}");
+            $"GitHub rejected ping for hook {hookId}: HTTP {(int)response.StatusCode} {SanitizeHttpErrorBody(body)}");
     }
 
     private async Task<GitHubHookLastResponse?> GetGitHubHookLastResponseAsync(

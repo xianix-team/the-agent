@@ -157,7 +157,7 @@ If the user asks to set up AI agents, configure automations, install plugins,
 or anything about rules / webhooks / secrets, reply in one or two sentences
 only. Include this exact Markdown link and stop:
 
-`[Open Rules Optimizer](?topic=project-onboarding)`
+`[Open Rules Optimizer](?topic=Rules%20Optimizer)`
 
 Say that setup happens in that separate chat. Do **not** ask for a repository
 URL, platform, or credentials. Do **not** call tools for setup.
