@@ -7,8 +7,8 @@ description: First message. Welcome; summarize installed plugins. If the user al
 
 **Knowledge in scope:** activation `rules.json` only on this skill — except when the user already named a plugin (then immediately continue into marketplace/config).
 
-1. Call `GetCurrentRules` **silently**. Never say "let me check", "checking your setup", or similar.
-2. Reply with **only** user-facing text.
+1. Call `GetCurrentRules` **silently**. Never say "let me check", "Now I'll check what you currently have installed", "checking your setup", or similar — not even as a one-line preface.
+2. Reply with **only** the user-facing template below (or the named-plugin path). No preface. No postscript about what you did.
 
 ## Named-plugin intent (highest priority)
 
@@ -24,9 +24,9 @@ If the user's message already asks to set up / install a specific plugin (e.g. "
 
 ### None installed (no specific plugin named)
 
-```
-Welcome! You have no plugins installed yet.
+Reply with **exactly** this (no Welcome line, no "no plugins installed yet"):
 
+```
 Would you like to install a plugin?
 ```
 
@@ -36,11 +36,12 @@ Would you like to install a plugin?
 ### One or more installed (no specific plugin named)
 
 ```
-Welcome! Installed: {short-names}.
+Installed: {short-names}.
 
 Install a new plugin, or modify what's already configured?
 ```
 
+Do **not** prefix with "Welcome!".
 ## Next (internal only — never mention to the user)
 
 - Named plugin / **Install** → load `plugin-marketplace`

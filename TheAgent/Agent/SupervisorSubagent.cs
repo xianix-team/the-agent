@@ -304,6 +304,9 @@ public sealed class SupervisorSubagent
             if (attemptCacheCreate.HasValue) cacheCreationTokens = (cacheCreationTokens ?? 0) + attemptCacheCreate.Value;
 
             var text = lastResponse.Text;
+            if (isOnboarding && !string.IsNullOrWhiteSpace(text))
+                text = StripOnboardingProcessNarration(text);
+
             if (!string.IsNullOrWhiteSpace(text))
             {
                 if (i > 0)
@@ -315,6 +318,7 @@ public sealed class SupervisorSubagent
                         context.Message.TenantId, context.Message.ParticipantId,
                         lastResponse.ResponseId);
                 }
+
                 if (isOnboarding
                     && ClaimsPluginsInstalled(text)
                     && onboardingTools!.VerifiedInstalledShortNames.Count == 0)
@@ -512,6 +516,57 @@ public sealed class SupervisorSubagent
             text,
             @"\b(rules?\.json|rules|plugins?|webhooks?|secrets?|env(?:ironment)?\s+var(?:iable)?s?|trigger\s+(?:labels?|tags?)|rules?\s+optimizer)\b",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    /// <summary>
+    /// Removes user-visible "thinking out loud" lines (tool/skill narration) from Rules Optimizer
+    /// replies. Prompt instructions alone are not enough — models still prepend these.
+    /// </summary>
+    internal static string StripOnboardingProcessNarration(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return text;
+
+        // Whole-line only — never rewrite mid-sentence user-facing content.
+        var narrationLine = new Regex(
+            @"^\s*(?:"
+            + @"(?:now\s+)?(?:I(?:'m| am|'ll| will)|let\s+me)\s+"
+            + @"(?:help|start|check|look(?:\s+at)?|verify|inspect|fetch|load|set\s*up|configure|proceed|continue)\b.*"
+            + @"|checking\b.*"
+            + @"|setting\s+up\b.*"
+            + @"|loading\b(?:\s+the)?\s+(?:skill|marketplace|next|rules|plugin)\b.*"
+            + @"|I(?:'ll| will)\s+need\b.*\bnext\b.*"
+            + @"|welcome!\s+you\s+have\s+no\s+plugins\s+installed\s+yet\.?"
+            + @")\s*$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        var lines = text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var kept = new List<string>(lines.Length);
+        foreach (var line in lines)
+        {
+            if (narrationLine.IsMatch(line))
+                continue;
+            kept.Add(line);
+        }
+
+        // Collapse runs of blank lines left behind after stripping.
+        var collapsed = new List<string>(kept.Count);
+        var previousBlank = true;
+        foreach (var line in kept)
+        {
+            var blank = string.IsNullOrWhiteSpace(line);
+            if (blank && previousBlank)
+                continue;
+            collapsed.Add(blank ? string.Empty : line);
+            previousBlank = blank;
+        }
+
+        while (collapsed.Count > 0 && string.IsNullOrWhiteSpace(collapsed[0]))
+            collapsed.RemoveAt(0);
+        while (collapsed.Count > 0 && string.IsNullOrWhiteSpace(collapsed[^1]))
+            collapsed.RemoveAt(collapsed.Count - 1);
+
+        return string.Join("\n", collapsed);
     }
 
     /// <summary>

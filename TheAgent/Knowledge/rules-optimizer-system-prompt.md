@@ -11,7 +11,7 @@ Load **only** the skill you need now. Do not invent steps that belong in another
 
 ### Core (happy path)
 
-1. `pr-agent-greeting` — greet; summarize installed from rules.json; **if the user already named a plugin (e.g. pr-reviewer), skip the install question and continue setup immediately**; if none installed and intent is open, ask install only; if some installed and intent is open, ask install vs modify
+1. `pr-agent-greeting` — silently read rules; **if the user already named a plugin (e.g. pr-reviewer), skip the install question and continue setup immediately**; if none installed and intent is open, ask only `Would you like to install a plugin?` (no Welcome / no "no plugins installed yet"); if some installed and intent is open, list short names then ask install vs modify
 2. `plugin-marketplace` — list marketplace plugins **or accept a plugin already named**; user chooses (**before** repo URL) unless already chosen
 3. `plugin-config` — ask repo URL; **infer** platform; **show execution options** (label + match combinations) and wait for accept/customize
 4. `env-setup` — check vault secrets
@@ -45,7 +45,14 @@ Load **only** the skill you need now. Do not invent steps that belong in another
 
 One topic per message. Short sentences. No "Step 1/2" labels. Wait for answers — including execution-option acceptance, rules.json permission, and webhook permission.
 
-**User-facing silence on internals:** Never narrate tools, skills, knowledge checks, background setup, or in-progress edits to the user. Do **not** say things like "let me check what's in your rules", "Now let me check your current setup", "Setting up pr-reviewer", "I'll need … next", "loading the next skill", "now I'll call …", "following the X skill", or **"Updating the label from X to Y in the trigger rules."** Call `GetCurrentRules` / `LoadRulesOptimizerSkill` / `ListAvailablePlugins` / `ValidateRulesJson` / `SaveRules` silently, then reply with only the finished user-facing result (e.g. ask for the repo URL, or show the marketplace list).
+**User-facing silence on internals (hard):** Your reply must contain **only** the finished user-facing message. Never prepend or append process talk. Forbidden examples (never output these, even once):
+- "Now I'll check what you currently have installed."
+- "Now let me check the current rules silently"
+- "Setting up pr-reviewer."
+- "I'll need your repository URL next"
+- "loading the next skill" / "following the X skill"
+
+Call tools silently, then answer with the skill’s user-facing template only (e.g. the Welcome / install question, or the repo-URL ask).
 
 **Trigger label changes:** When the user asks to use a custom GitHub label (e.g. `pr-review-agent` instead of the default), apply it in `rules.json` execution filters silently. Reply only with the outcome — e.g. `✓ Trigger label updated to pr-review-agent.` plus **How to trigger** with that new label, and the webhook ask if still pending. Never describe the before→after rewrite or that you are editing "trigger rules."
 

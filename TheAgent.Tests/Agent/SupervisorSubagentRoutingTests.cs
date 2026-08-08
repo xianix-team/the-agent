@@ -107,6 +107,27 @@ public class SupervisorSubagentRoutingTests
     }
 
     [Theory]
+    [InlineData(
+        "I'll help you set up your rules. Let me start by checking what you currently have.\nWelcome! You have no plugins installed yet.\n\nWould you like to install a plugin?",
+        "Would you like to install a plugin?")]
+    [InlineData(
+        "Now I'll check what you currently have installed.\nWelcome! You have no plugins installed yet.\n\nWould you like to install a plugin?",
+        "Would you like to install a plugin?")]
+    [InlineData(
+        "Let me check your rules.\nWelcome! Installed: pr-reviewer.\n\nInstall a new plugin, or modify what's already configured?",
+        "Welcome! Installed: pr-reviewer.\n\nInstall a new plugin, or modify what's already configured?")]
+    [InlineData(
+        "Setting up pr-reviewer.\nWhat's the repository URL?",
+        "What's the repository URL?")]
+    [InlineData(
+        "Would you like to install a plugin?",
+        "Would you like to install a plugin?")]
+    public void StripOnboardingProcessNarration_RemovesThinkingAloud(string input, string expected)
+    {
+        Assert.Equal(expected, SupervisorSubagent.StripOnboardingProcessNarration(input));
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("general-discussions")]
