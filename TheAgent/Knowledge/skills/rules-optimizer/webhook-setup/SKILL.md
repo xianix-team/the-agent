@@ -1,21 +1,19 @@
 ---
 name: webhook-setup
-description: After rules are saved, tell the user how to trigger installed plugins, then ask permission to create the Xians webhook. Do not register/ping GitHub here — that is connection-test.
+description: Context triggers; action CreateWebhookConnection after permission; verify tool success.
 ---
 
 # Webhook setup
 
-**When:** after successful `InstallPlugins` / save. **Ask first** — do not create until the user agrees.
+Follow **context → action → verify**. **Ask first** — do not create until the user agrees.
 
-**Precondition:** activation rules must have installed plugins.
+**Precondition:** activation rules must have installed plugins (from prior verify).
 
-1. If you just confirmed install, briefly restate success (one line). Then **always** tell the user how to trigger each newly installed plugin **before** the webhook question.
+## Context
 
-   Prefer the label/trigger the user already chose in chat if they customized it. Otherwise call `ListAvailablePlugins` with the configured platform if `suggestedTriggers` are not already in context. Use that platform's `suggestedTriggers` only — never invent labels/tags.
-
-   Do **not** narrate edits ("Updating the label from …"). Just state the final how-to-trigger.
-
-   Example shape (adapt to real triggers / custom label):
+1. Briefly restate install success (one line) if just confirmed.
+2. Tell the user how to trigger each installed plugin **before** the webhook question.
+   Prefer the label/trigger they already chose. Otherwise call `ListAvailablePlugins` with the configured platform for `suggestedTriggers` only — never invent.
 
 ```
 pr-reviewer is installed and saved to rules.json.
@@ -25,23 +23,21 @@ How to trigger on GitHub:
 
 Create the Xians webhook for this activation now?
 ```
-   For Azure DevOps, use ADO wording from `suggestedTriggers` (PR created / source branch updated / agent as reviewer / `@xianix` comment) — **not** GitHub label names.
 
-2. Ask once (include the trigger blurb in the **same** message as the ask):
+For Azure DevOps, use ADO wording from `suggestedTriggers` — **not** GitHub label names.
 
-```
-Create the Xians webhook for this activation now?
-```
+## Action
 
-3. If **no** → acknowledge; stop (skip connection-test). Still leave the trigger instructions above as the user's takeaway.
+3. If **no** → acknowledge; stop (skip connection-test). Keep trigger instructions as the takeaway.
 4. If **yes** → call `CreateWebhookConnection` (name `Default` unless changed).
-5. Report one line:
+
+## Verify
+
+5. Report from tool fields only:
    - failed → `Xians webhook: ❌ Failed — {error}`
    - created → `Xians webhook: ✅ Created — {webhookUrl}`
 6. Do **not** claim the SCM connection is ready. `scmConnectionStatus` stays `not_established` until `connection-test`.
 
-**Azure DevOps:** after create, `connection-test` only shows the URL and asks the user to create Service Hooks — no ping/validation.
-
 ## Next
 
-On successful create → load `connection-test` (silently — never mention skills).
+On verified create → load `connection-test` (silently).

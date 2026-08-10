@@ -1,36 +1,36 @@
 ---
 name: plugin-config
-description: After plugins are chosen, ask repo URL; infer platform; show execution options (label + match combinations) and get user acceptance before secrets/save. Load after plugin-marketplace.
+description: Context from URL + marketplace; show execution options; verify user acceptance before secrets/save.
 ---
 
 # Plugin configuration
 
-**Order:** plugins are already chosen. Ask for the repository URL — then infer the platform from that URL. Do **not** ask “GitHub or Azure DevOps?”.
+Follow **context → action → verify**. Plugins are already chosen. Do **not** ask “GitHub or Azure DevOps?”.
 
-Supported hosts: **github.com** → `github`; **dev.azure.com** / **\*.visualstudio.com** → `azuredevops`. No GitLab.
+## Context
 
-Ask only (after a brief ack of their plugin choice if needed — never mention skills):
+Ask for the repository URL:
 
 ```
 What is the repository URL? (e.g. https://github.com/org/repo.git or https://dev.azure.com/org/project/_git/repo)
 ```
 
-## Infer platform from URL (mandatory)
+Infer platform from host only:
 
 | URL host | Platform |
 |----------|----------|
 | `github.com` / `www.github.com` | `github` |
 | `dev.azure.com` / `*.visualstudio.com` | `azuredevops` |
 
-If the host is unknown, say you only support github.com and Azure DevOps cloud URLs — do not guess.
+Unknown host → say only github.com and Azure DevOps cloud are supported — do not guess.
 
 Briefly confirm: `Got it — GitHub repo.` / `Got it — Azure DevOps repo.`
 
-## Show execution options — wait for acceptance (mandatory)
+Then call `ListAvailablePlugins` **with the inferred platform**. Confirm each chosen plugin is Ready to install.
 
-**Before** env-setup or writing `rules.json`, call `ListAvailablePlugins` **with the inferred platform**. Confirm each chosen plugin is Ready to install.
+## Action
 
-From each chosen plugin’s **`executionOptions`** (and `suggestedTriggers`), show the user what will be configured — do **not** dump raw JSON.
+Show **`executionOptions`** / `suggestedTriggers` for the inferred platform — not raw JSON. Wait for accept or custom label.
 
 ### GitHub example (pr-reviewer)
 
@@ -52,15 +52,15 @@ Accept these defaults, or tell me a different trigger label (e.g. `pr-review-age
 
 ### Azure DevOps
 
-Use `executionOptions` / `suggestedTriggers` for ADO wording (PR created / source branch updated / reviewer / `@xianix` comment) — **not** GitHub label names.
+Use ADO wording from `executionOptions` / `suggestedTriggers` — **not** GitHub label names.
 
-Rules:
+## Verify
 
-- Wait for the user to accept defaults **or** choose a custom label / clarify options.
+- User accepted defaults **or** chose a custom label / clarified options.
 - Never invent labels/tags or mix platforms.
 - Do **not** update `rules.json` in this skill.
 - Never store a concrete URL with `constant: false`. Do not add `repository.ref`.
 
 ## Next
 
-Only after the user accepts (or customizes) execution options → load `env-setup` (silently).
+Only after verified acceptance → load `env-setup` (silently).

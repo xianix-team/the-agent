@@ -1,15 +1,23 @@
 ---
 name: connection-test
-description: GitHub — register and ping. Azure DevOps — show webhook URL and ask the user to create Service Hooks (no validation).
+description: Action register/ping (GitHub) or manual URL handoff (ADO); verify only from tool fields.
 ---
 
 # Connection
 
-**Knowledge in scope:** GitHub register/ping, or ADO manual URL handoff. Never claim connected unless tools say so.
+Follow **context → action → verify**. Never claim connected unless tools say so.
 
 ## GitHub
 
-Call `RegisterGitHubRepositoryWebhook` with repo URL, webhook URL, and `events` = union of `suggestedGitHubWebhookEvents` for installed plugins (default `issues,pull_request,issue_comment,push`). Never use event `label`.
+### Context
+
+Repo URL, webhook URL from prior create, and `events` = union of `suggestedGitHubWebhookEvents` for installed plugins (default `issues,pull_request,issue_comment,push`). Never use event `label`.
+
+### Action
+
+Call `RegisterGitHubRepositoryWebhook`.
+
+### Verify
 
 Report from tool fields only:
 
@@ -21,9 +29,11 @@ Never claim ready unless `connectionStatus=established`.
 
 ## Azure DevOps
 
-There is **no** tool that creates Service Hooks. Do **not** call `RegisterGitHubRepositoryWebhook`. Do **not** ping. Do **not** validate. Do **not** say the connection is established.
+### Context / Action
 
-After `CreateWebhookConnection`, show the real `webhookUrl` as a markdown link and ask the user to create the subscription themselves:
+There is **no** tool that creates Service Hooks. Do **not** call `RegisterGitHubRepositoryWebhook`. Do **not** ping.
+
+After `CreateWebhookConnection`, show the real `webhookUrl` as a markdown link and ask the user to create the subscription:
 
 ```
 Azure DevOps Service Hook (manual)
@@ -41,15 +51,12 @@ Create the connection in Azure DevOps:
 Tell me when you've created it (optional) — I won't validate from here.
 ```
 
-Keep it short. Always include the full `webhookUrl`. Do not invent a ping or "HTTP 200".
+### Verify
+
+Do **not** claim the connection is established. No invented ping or "HTTP 200".
 
 ## How to trigger (platform-specific)
 
-Call `ListAvailablePlugins` with the configured platform if needed. For each installed plugin, show **How to trigger** from that platform's `suggestedTriggers` only:
-
-- GitHub → labels (and any other suggested GitHub triggers)
-- Azure DevOps → ADO event wording from `suggestedTriggers` (often PR created / updated / reviewer — **not** GitHub label names)
-
-Never invent triggers. Never show the other platform's labels/tags.
+Context: `ListAvailablePlugins` with the configured platform if needed. For each installed plugin, show **How to trigger** from that platform's `suggestedTriggers` only. Never invent. Never show the other platform's labels/tags.
 
 One short closing line: they can add/remove plugins anytime.

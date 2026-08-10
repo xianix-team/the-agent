@@ -1,18 +1,20 @@
 ---
 name: rules-manager
-description: After secrets are ready, summarize chosen execution options and ask permission to update rules.json, then InstallPlugins. Load after env-setup.
+description: Context plan; action InstallPlugins after permission; verify before confirming save.
 ---
 
 # Rules.json update
 
-**Knowledge in scope:** merge/save of activation rules. Prefer `InstallPlugins` (atomic).
+Follow **context → action → verify**. Prefer `InstallPlugins` (atomic).
 
 **Do not write `rules.json` until the user explicitly agrees** after seeing the execution plan.
 
+## Context
+
 1. Call `GetCurrentRules` (silent).
 2. Call `ListAvailablePlugins` with the inferred platform if you need `executionOptions` / `suggestedTriggers` again.
-3. Optionally call `MaterializePluginRules` for a preview (`notPersisted`) — never say "installed" from it.
-4. Show a short plan and ask **once** for permission to update `rules.json`. Include the execution options the user already accepted (label + match combinations):
+3. Optionally `MaterializePluginRules` for a preview (`notPersisted`) — never say "installed" from it.
+4. Show a short plan and ask **once** for permission:
 
 ```
 Ready to update rules.json for {repo} ({platform}):
@@ -26,19 +28,21 @@ Executions (pr-reviewer):
 Update rules.json with this now?
 ```
 
-Adapt the bullets from the user’s accepted options / custom label — do not invent.
+Adapt bullets from the user’s accepted options / custom label — do not invent.
+
+## Action
 
 5. On confirm → `InstallPlugins` with the full desired short names + repo URL.
-   - If they chose a **custom label**, after a successful install apply that label in execution `match-any` rules, then `ValidateRulesJson` + `SaveRules` — silently (no “Updating the label from …” narration).
-6. If `ok=true` and `claimAllowed=true`, briefly confirm **that result's** `installedShortNames`.
+   - Custom label: after a successful install apply that label in execution `match-any` rules, then `ValidateRulesJson` + `SaveRules` — silently.
+
+## Verify
+
+6. Success only if `ok=true` and `claimAllowed=true` (or a fresh `VerifyInstalledPlugins` shows the expected short names). Confirm **that result's** `installedShortNames`.
 7. If `ok=false` / `claimAllowed=false`, say save failed and retry — never claim success.
 
-## Custom trigger label (later modify)
+### Custom trigger label (later modify)
 
-When the user asks to change the label after rules are already saved:
-
-1. Update filters silently.
-2. Reply only with outcome + how to trigger (+ webhook ask if still pending).
+1. Context: current rules. 2. Action: update filters silently. 3. Verify: `ValidateRulesJson` + successful `SaveRules` / read-back. Reply only with outcome + how to trigger (+ webhook ask if pending).
 
 ```
 ✓ Trigger label updated to pr-review-agent.
@@ -50,4 +54,4 @@ May I create the Xians webhook so this works?
 
 ## Next
 
-On successful install → load `webhook-setup` (how to trigger + ask to create webhook).
+On verified install → load `webhook-setup`.

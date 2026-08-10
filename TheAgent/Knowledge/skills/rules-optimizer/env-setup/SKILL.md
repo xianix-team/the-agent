@@ -1,21 +1,27 @@
 ---
 name: env-setup
-description: Check required vault secrets for the chosen plugins + platform. Never accept pasted secret values. Load after plugin-config.
+description: Context/check vault secrets; verify all required keys exist before rules-manager.
 ---
 
 # Environment variables
 
-**Knowledge in scope:** `requiredEnvs` from each plugin’s local execution recipe (via `ListAvailablePlugins` for chosen plugins + platform).
+Follow **context → action → verify**. Never ask whether secrets are needed. Never accept pasted secret values.
 
-Do this yourself — never ask whether secrets are needed.
+**Context source:** `requiredEnvs` from each plugin’s local recipe via `ListAvailablePlugins` (chosen plugins + platform).
 
 Typical keys: GitHub → `GITHUB-TOKEN`; Azure DevOps → `AZURE-DEVOPS-TOKEN`; models → `ANTHROPIC-API-KEY`.
 
+## Context / Action
+
 1. Call `CheckTenantSecretExists` for each required key.
-2. If any `exists: false`, tell them to add those exact keys in Studio → Settings → Secrets, then say "done". Never ask them to paste values in chat.
-3. On "done", re-check missing keys only.
-4. If a plugin has `requiresAuthorization: true`, note it needs `--authorized` at run time (separate from vault).
+2. If any `exists: false`, tell them to add those exact keys in Studio → Settings → Secrets, then say "done".
+
+## Verify
+
+3. On "done", re-check **only** the missing keys with `CheckTenantSecretExists`.
+4. Do not continue until every required key returns `exists: true`.
+5. If a plugin has `requiresAuthorization: true`, note it needs `--authorized` at run time (separate from vault).
 
 ## Next
 
-When all required keys exist → load `rules-manager` (silently — never mention skills).
+When verify passes → load `rules-manager` (silently).
