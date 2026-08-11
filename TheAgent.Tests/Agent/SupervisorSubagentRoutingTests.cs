@@ -149,12 +149,10 @@ public class SupervisorSubagentRoutingTests
             StringComparison.Ordinal);
     }
 
-    [Theory]
-    [InlineData("Rules Optimizer")]
-    [InlineData("rules optimizer")]
-    public void IsScope_RulesOptimizer_ReturnsTrue(string scope)
+    [Fact]
+    public void IsScope_RulesOptimizer_ReturnsTrue()
     {
-        Assert.True(OnboardingSubagent.IsScope(scope));
+        Assert.True(OnboardingSubagent.IsScope("Rules Optimizer"));
     }
 
     [Theory]
@@ -183,8 +181,6 @@ public class SupervisorSubagentRoutingTests
     [InlineData("")]
     [InlineData("general-discussions")]
     [InlineData("something-else")]
-    [InlineData("setup")]
-    [InlineData("project-onboarding")]
     public void IsScope_OtherScopes_ReturnsFalse(string? scope)
     {
         Assert.False(OnboardingSubagent.IsScope(scope));

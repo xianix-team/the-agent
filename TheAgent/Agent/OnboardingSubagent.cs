@@ -64,7 +64,7 @@ public sealed class OnboardingSubagent
     }
 
     public static bool IsScope(string? scope) =>
-        string.Equals(scope, Constants.ProjectOnboardingScope, StringComparison.OrdinalIgnoreCase);
+        scope == Constants.ProjectOnboardingScope;
 
     public async Task<string> RunAsync(UserMessageContext context, CancellationToken cancellationToken = default)
     {
