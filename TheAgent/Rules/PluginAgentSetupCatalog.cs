@@ -31,6 +31,9 @@ internal static class PluginAgentSetupCatalog
     public const string DefaultAgentSetupUrlTemplate =
         "https://raw.githubusercontent.com/xianix-team/plugins-official/main/plugins/{0}/.xianix/agent-setup.json";
 
+    private const string GitHubRepoPlaceholder = "https://github.com/org/repo.git";
+    private const string AzureDevOpsRepoPlaceholder = "https://dev.azure.com/org/project/_git/repo";
+
     // Match MarketplaceCatalog — plugin README probes can be slow on the same GitHub raw CDN.
     private static readonly HttpClient Http = new()
     {
@@ -307,15 +310,12 @@ internal static class PluginAgentSetupCatalog
             var json = JsonSerializer.Serialize(execution, JsonOptions);
             if (!string.IsNullOrWhiteSpace(repositoryUrl))
             {
-                json = json
-                    .Replace("https://github.com/org/repo.git", repositoryUrl, StringComparison.Ordinal)
-                    .Replace(
-                        "https://dev.azure.com/org/project/_git/repo",
-                        repositoryUrl,
-                        StringComparison.Ordinal);
+                json = ReplaceRecipeRepositoryPlaceholders(json, repositoryUrl);
             }
 
             using var doc = JsonDocument.Parse(json);
+            // Clone() copies into independent backing memory and remains valid after
+            // this JsonDocument is disposed. See JsonElement.Clone remarks.
             results.Add(doc.RootElement.Clone());
         }
 
@@ -342,6 +342,18 @@ internal static class PluginAgentSetupCatalog
             return [];
 
         return MaterializeExecutions(setup, platform, repositoryUrl);
+    }
+
+    /// <summary>
+    /// Replaces recipe placeholder URLs as JSON string values so the incoming
+    /// repository URL is escaped (quotes, backslashes) instead of spliced raw.
+    /// </summary>
+    private static string ReplaceRecipeRepositoryPlaceholders(string json, string repositoryUrl)
+    {
+        var encodedUrl = JsonSerializer.Serialize(repositoryUrl);
+        return json
+            .Replace(JsonSerializer.Serialize(GitHubRepoPlaceholder), encodedUrl, StringComparison.Ordinal)
+            .Replace(JsonSerializer.Serialize(AzureDevOpsRepoPlaceholder), encodedUrl, StringComparison.Ordinal);
     }
 
     public static PluginEntry BuildPluginEntry(PluginAgentSetup setup, string? slashCommandOverride = null)

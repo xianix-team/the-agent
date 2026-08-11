@@ -67,32 +67,32 @@ internal static class MarketplaceCatalog
         try
         {
             using var response = await Http.GetAsync(url, cancellationToken).ConfigureAwait(false);
-            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            if (response.IsSuccessStatusCode)
+            if (!response.IsSuccessStatusCode)
             {
-                var parsed = Parse(body, source: "live");
-                if (parsed.Plugins.Count > 0)
-                {
-                    Cache[url] = new CacheEntry(
-                        parsed,
-                        DateTime.UtcNow.AddSeconds(ttlSeconds));
-                    return parsed;
-                }
-
                 logger.LogWarning(
-                    "Official marketplace JSON from {Url} parsed to zero plugins.",
-                    url);
+                    "Official marketplace fetch from {Url} failed with HTTP {Status}.",
+                    url,
+                    (int)response.StatusCode);
                 return EmptyError(
-                    $"Official marketplace at {url} returned no plugins.");
+                    $"Failed to fetch official marketplace ({MarketplaceGithubBlobUrl}): " +
+                    $"HTTP {(int)response.StatusCode}.");
+            }
+
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            var parsed = Parse(body, source: "live");
+            if (parsed.Plugins.Count > 0)
+            {
+                Cache[url] = new CacheEntry(
+                    parsed,
+                    DateTime.UtcNow.AddSeconds(ttlSeconds));
+                return parsed;
             }
 
             logger.LogWarning(
-                "Official marketplace fetch from {Url} failed with HTTP {Status}.",
-                url,
-                (int)response.StatusCode);
+                "Official marketplace JSON from {Url} parsed to zero plugins.",
+                url);
             return EmptyError(
-                $"Failed to fetch official marketplace ({MarketplaceGithubBlobUrl}): " +
-                $"HTTP {(int)response.StatusCode}.");
+                $"Official marketplace at {url} returned no plugins.");
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
         {

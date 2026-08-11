@@ -304,8 +304,9 @@ public sealed class OnboardingSubagentTools(
                 .GetActivationScopedRulesContentAsync(
                     context.Message.TenantId, resolvedAgent!, resolvedActivation!)
                 .ConfigureAwait(false);
+            var installedPlugins = InstalledPluginsCatalog.FromContent(rulesContent);
 
-            if (!RulesInstallValidation.HasAnyInstalledPlugin(rulesContent))
+            if (installedPlugins.Count == 0)
             {
                 return JsonSerializer.Serialize(new
                 {
@@ -365,8 +366,8 @@ public sealed class OnboardingSubagentTools(
                 agentName = resolvedAgent,
                 activationName = resolvedActivation,
                 tenantId = context.Message.TenantId,
-                installedPluginCount = InstalledPluginsCatalog.FromContent(rulesContent).Count,
-                installedShortNames = InstalledPluginsCatalog.FromContent(rulesContent)
+                installedPluginCount = installedPlugins.Count,
+                installedShortNames = installedPlugins
                     .Select(p => InstalledPluginsCatalog.ShortName(p.PluginName))
                     .ToArray(),
                 message = result.Created
@@ -791,6 +792,8 @@ public sealed class OnboardingSubagentTools(
             installed.Select(p => InstalledPluginsCatalog.ShortName(p.PluginName)),
             StringComparer.OrdinalIgnoreCase);
 
+        // README probes run concurrently (WhenAll below). TryGetSetupAsync is local
+        // recipe I/O only — this is N parallel README checks, not 2N sequential HTTP.
         var setupTasks = marketplace.Plugins
             .Select(async p =>
             {

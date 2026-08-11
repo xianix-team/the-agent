@@ -157,11 +157,16 @@ internal sealed class OnboardingPlatformClient
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
+    private static readonly HttpClient SharedHttp = new()
+    {
+        Timeout = TimeSpan.FromSeconds(30),
+    };
+
     private readonly HttpClient _http;
 
     public OnboardingPlatformClient(HttpClient? httpClient = null)
     {
-        _http = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        _http = httpClient ?? SharedHttp;
         if (_http.BaseAddress is null)
             _http.BaseAddress = new Uri(EnvConfig.XiansServerUrl.TrimEnd('/') + "/");
         // Honor caller-provided clients that already set a timeout; only fill the default when

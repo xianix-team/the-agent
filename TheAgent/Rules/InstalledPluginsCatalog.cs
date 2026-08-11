@@ -65,6 +65,8 @@ internal static class InstalledPluginsCatalog
         }
         catch (JsonException)
         {
+            // Unparseable rules.json means "no installed plugins" at this layer.
+            // Callers that own ILogger (InstallPlugins / SaveRules) report the failure.
             return [];
         }
 

@@ -59,11 +59,11 @@ internal static class RulesOptimizerSkillCatalog
 
         foreach (var resourceName in asm.GetManifestResourceNames())
         {
-            if (!resourceName.Contains("Knowledge.skills.rules_optimizer", StringComparison.OrdinalIgnoreCase)
-                && !resourceName.Contains("Knowledge.skills.rules-optimizer", StringComparison.OrdinalIgnoreCase))
-            {
+            var isRulesOptimizerSkill =
+                resourceName.Contains("Knowledge.skills.rules_optimizer", StringComparison.OrdinalIgnoreCase)
+                || resourceName.Contains("Knowledge.skills.rules-optimizer", StringComparison.OrdinalIgnoreCase);
+            if (!isRulesOptimizerSkill)
                 continue;
-            }
 
             if (!resourceName.EndsWith("SKILL.md", StringComparison.OrdinalIgnoreCase))
                 continue;
