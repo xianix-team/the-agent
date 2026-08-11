@@ -47,6 +47,7 @@ public class OnboardingValidateRulesJsonTests
     {
         Assert.True(RulesOptimizerSkillCatalog.TryGet("rules-manager", out var skill));
         Assert.Contains("InstallPlugins", skill.Body);
+        Assert.Contains("UpdateTriggerLabel", skill.Body);
         Assert.Contains("claimAllowed", skill.Body);
         Assert.Contains("Update rules.json with this now?", skill.Body);
         Assert.Contains("webhook-setup", skill.Body);

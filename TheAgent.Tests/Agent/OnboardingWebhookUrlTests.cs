@@ -36,10 +36,31 @@ public class OnboardingWebhookUrlTests
     }
 
     [Fact]
-    public void ToPublicWebhookUrl_PassesThroughAbsoluteUrls()
+    public void ToPublicWebhookUrl_PassesThroughNonLoopbackAbsoluteUrls()
     {
         var url = "https://example.test/api/user/webhooks/builtin?agentName=A&activationName=B&webhookName=Default";
         Assert.Equal(url, OnboardingPlatformClient.ToPublicWebhookUrl(url));
+    }
+
+    [Theory]
+    [InlineData(
+        "http://localhost:5000/api/user/webhooks/builtin?agentName=A&activationName=act&webhookName=Default",
+        "https://abc.trycloudflare.com",
+        "https://abc.trycloudflare.com/api/user/webhooks/builtin?agentName=A&activationName=act&webhookName=Default")]
+    [InlineData(
+        "http://127.0.0.1:5000/api/user/webhooks/foo",
+        "https://abc.trycloudflare.com/",
+        "https://abc.trycloudflare.com/api/user/webhooks/foo")]
+    [InlineData(
+        "/api/user/webhooks/builtin?webhookName=Default",
+        "https://abc.trycloudflare.com",
+        "https://abc.trycloudflare.com/api/user/webhooks/builtin?webhookName=Default")]
+    public void ToPublicWebhookUrl_RewritesLoopbackOrRelativeOntoPublicBase(
+        string input,
+        string publicBase,
+        string expected)
+    {
+        Assert.Equal(expected, OnboardingPlatformClient.ToPublicWebhookUrl(input, publicBase));
     }
 
     [Fact]

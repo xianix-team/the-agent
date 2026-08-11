@@ -260,6 +260,35 @@ internal sealed class OnboardingPlatformClient
         return null;
     }
 
+    /// <summary>
+    /// Lists builtin webhook integrations for an activation (public URL rewritten).
+    /// Empty when admin key is missing or the API call fails.
+    /// </summary>
+    public async Task<IReadOnlyList<BuiltinWebhookInfo>> ListBuiltinWebhooksForActivationAsync(
+        string tenantId,
+        string agentName,
+        string activationName,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(agentName) || string.IsNullOrWhiteSpace(activationName))
+            return [];
+
+        var adminKey = EnvConfig.XiansAdminApiKey;
+        if (string.IsNullOrWhiteSpace(adminKey))
+            return [];
+
+        var existing = await ListBuiltinWebhooksAsync(
+                tenantId, agentName, activationName, adminKey, cancellationToken)
+            .ConfigureAwait(false);
+
+        return existing
+            .Select(w => new BuiltinWebhookInfo(
+                w.IntegrationId,
+                w.WebhookName,
+                ToPublicWebhookUrl(w.WebhookUrl) ?? w.WebhookUrl))
+            .ToArray();
+    }
+
     public async Task<WebhookCreateResult> EnsureBuiltinWebhookAsync(
         string tenantId,
         string agentName,
@@ -1397,18 +1426,29 @@ internal sealed class OnboardingPlatformClient
         return request;
     }
 
-    internal static string? ToPublicWebhookUrl(string? relativeOrAbsoluteUrl)
+    /// <summary>
+    /// Builds a user/GitHub-facing webhook URL. The server often returns absolute
+    /// <c>http://localhost:5000/...</c> links; those are rewritten onto
+    /// <see cref="EnvConfig.XiansWebhookPublicUrl"/> (e.g. Cloudflare tunnel) so
+    /// external SCM can reach the local server. Already-public absolute URLs pass through.
+    /// </summary>
+    internal static string? ToPublicWebhookUrl(
+        string? relativeOrAbsoluteUrl,
+        string? publicBaseUrl = null)
     {
         if (string.IsNullOrWhiteSpace(relativeOrAbsoluteUrl))
             return null;
 
-        if (relativeOrAbsoluteUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-            relativeOrAbsoluteUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        var baseUrl = (publicBaseUrl ?? EnvConfig.XiansWebhookPublicUrl)?.Trim().TrimEnd('/');
+
+        if (Uri.TryCreate(relativeOrAbsoluteUrl, UriKind.Absolute, out var absolute))
         {
-            return relativeOrAbsoluteUrl;
+            if (!IsLoopbackHttpHost(absolute.Host) || string.IsNullOrWhiteSpace(baseUrl))
+                return relativeOrAbsoluteUrl;
+
+            return baseUrl + absolute.PathAndQuery;
         }
 
-        var baseUrl = EnvConfig.XiansWebhookPublicUrl.TrimEnd('/');
         if (string.IsNullOrWhiteSpace(baseUrl))
             return relativeOrAbsoluteUrl;
 
@@ -1417,9 +1457,21 @@ internal sealed class OnboardingPlatformClient
             : baseUrl + "/" + relativeOrAbsoluteUrl;
     }
 
+    private static bool IsLoopbackHttpHost(string host) =>
+        string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(host, "[::1]", StringComparison.OrdinalIgnoreCase);
+
     private sealed record SecretMetadata(string? Id, string? Key);
 
     private sealed record BuiltinWebhookSummary(
+        string IntegrationId,
+        string WebhookName,
+        string WebhookUrl);
+
+    /// <summary>Public webhook listing row for Rules Optimizer tenant-state snapshots.</summary>
+    public sealed record BuiltinWebhookInfo(
         string IntegrationId,
         string WebhookName,
         string WebhookUrl);

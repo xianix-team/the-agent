@@ -38,6 +38,13 @@ public sealed class OnboardingSubagentTools(
     /// </summary>
     internal bool VerifiedScmConnectionEstablished { get; private set; }
 
+    /// <summary>
+    /// Label value successfully written into match-any rules this turn via
+    /// <see cref="UpdateTriggerLabel"/> or <see cref="InstallPlugins"/> with
+    /// <c>triggerLabel</c>. Empty when no label rewrite was verified.
+    /// </summary>
+    internal string? VerifiedTriggerLabel { get; private set; }
+
     [Description(
         "Load a Rules Optimizer skill by name and return its full instructions. " +
         "Call before each phase; load only the skill needed now. Core: pr-agent-greeting, " +
@@ -73,12 +80,163 @@ public sealed class OnboardingSubagentTools(
     }
 
     [Description(
+        "Full tenant + activation snapshot for Rules Optimizer. Call SILENTLY when you need to know " +
+        "what already exists (before asking for a repository URL, or when a skill says so). Returns: " +
+        "installed plugins, rules.json rule sets / executions, configured repository URLs, onboarded " +
+        "tenant clones, Xians builtin webhooks (name, URL, id), and presence of common vault secrets " +
+        "(exists flags only — never values). Use repositories.distinct for selection: 0 → ask URL; " +
+        "1 → confirm that one; 2+ → list distinct URLs and ask which.")]
+    public async Task<string> GetTenantState()
+    {
+        var tenantId = context.Message.TenantId;
+        var (resolvedAgent, resolvedActivation) = await OnboardingMessageContext
+            .ResolveAsync(context, _platform, agentNameOverride: null, activationNameOverride: null)
+            .ConfigureAwait(false);
+
+        string? content = null;
+        var scope = "missing";
+        if (!string.IsNullOrWhiteSpace(resolvedAgent) && !string.IsNullOrWhiteSpace(resolvedActivation))
+        {
+            content = await _platform
+                .GetActivationScopedRulesContentAsync(
+                    tenantId, resolvedAgent!, resolvedActivation!)
+                .ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(content))
+                scope = "agent";
+        }
+
+        if (string.IsNullOrWhiteSpace(content) && !string.IsNullOrWhiteSpace(resolvedAgent))
+        {
+            content = await _platform
+                .GetSystemScopedRulesContentAsync(tenantId, resolvedAgent!)
+                .ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(content))
+                scope = "system";
+        }
+
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            content = InstalledPluginsCatalog.FreshActivationRulesJson;
+            scope = "system-seed";
+        }
+
+        var snapshot = RulesActivationSnapshot.FromContent(content);
+
+        object[] onboardedRepos;
+        var onboardedUrls = new List<string>();
+        string? onboardedError = null;
+        try
+        {
+            var repos = await TenantVolumeReader.ListAsync(tenantId).ConfigureAwait(false);
+            onboardedRepos = repos
+                .Select(r => (object)new { url = r.Url, onboardedAt = r.OnboardedAt })
+                .ToArray();
+            onboardedUrls.AddRange(
+                repos.Select(r => r.Url).Where(u => !string.IsNullOrWhiteSpace(u)));
+        }
+        catch (Exception ex)
+        {
+            onboardedRepos = [];
+            onboardedError = $"Could not list onboarded clones: {ex.Message}";
+            _logger.LogWarning(ex, "GetTenantState failed to list tenant volumes for {TenantId}", tenantId);
+        }
+
+        object[] webhooks = [];
+        string? webhookError = null;
+        if (!string.IsNullOrWhiteSpace(resolvedAgent) && !string.IsNullOrWhiteSpace(resolvedActivation))
+        {
+            try
+            {
+                var listed = await _platform
+                    .ListBuiltinWebhooksForActivationAsync(
+                        tenantId, resolvedAgent!, resolvedActivation!)
+                    .ConfigureAwait(false);
+                webhooks = listed
+                    .Select(w => (object)new
+                    {
+                        integrationId = w.IntegrationId,
+                        webhookName = w.WebhookName,
+                        webhookUrl = w.WebhookUrl,
+                    })
+                    .ToArray();
+            }
+            catch (Exception ex)
+            {
+                webhookError = $"Could not list webhooks: {ex.Message}";
+                _logger.LogWarning(ex, "GetTenantState failed to list webhooks for {TenantId}", tenantId);
+            }
+        }
+
+        var secretKeys = new[] { "GITHUB-TOKEN", "AZURE-DEVOPS-TOKEN", "ANTHROPIC-API-KEY" };
+        var secrets = new List<object>(secretKeys.Length);
+        foreach (var key in secretKeys)
+        {
+            try
+            {
+                var exists = await _platform.SecretExistsAsync(tenantId, key).ConfigureAwait(false);
+                secrets.Add(new { key, exists });
+            }
+            catch (Exception ex)
+            {
+                secrets.Add(new { key, exists = (bool?)null, error = ex.Message });
+            }
+        }
+
+        var distinctRepoUrls = RepositoryNaming.DeduplicateCloneUrls(
+            snapshot.RepositoryUrls.Concat(onboardedUrls));
+
+        return JsonSerializer.Serialize(new
+        {
+            ok = true,
+            tenantId,
+            agentName = resolvedAgent,
+            activationName = resolvedActivation,
+            rulesScope = scope,
+            plugins = new
+            {
+                installedShortNames = snapshot.InstalledShortNames,
+                count = snapshot.InstalledShortNames.Count,
+            },
+            ruleSets = snapshot.RuleSets.Select(r => new
+            {
+                kind = r.Kind,
+                name = r.Name,
+                pluginShortNames = r.PluginShortNames,
+                executionCount = r.ExecutionCount,
+            }),
+            executions = snapshot.ExecutionSummaries.Select(e => new
+            {
+                ruleSetKind = e.RuleSetKind,
+                ruleSetName = e.RuleSetName,
+                executionName = e.ExecutionName,
+                repositoryUrl = e.RepositoryUrl,
+                pluginShortNames = e.PluginShortNames,
+            }),
+            repositories = new
+            {
+                configured = snapshot.RepositoryUrls,
+                onboarded = onboardedRepos,
+                distinct = distinctRepoUrls,
+                distinctCount = distinctRepoUrls.Count,
+                onboardedError,
+            },
+            webhooks = new
+            {
+                items = webhooks,
+                namesInRules = snapshot.WebhookNames,
+                error = webhookError,
+            },
+            secrets,
+        });
+    }
+
+    [Description(
         "Check whether a tenant-scoped secret already exists in the Xians Secret Vault — " +
         "WITHOUT reading or requesting its value. Use vault key names only " +
         "(e.g. GITHUB-TOKEN, AZURE-DEVOPS-TOKEN, ANTHROPIC-API-KEY) — do NOT prefix with 'secrets.'. " +
-        "Call this yourself for every required key from platform + plugins — do NOT ask the user " +
-        "whether secrets are needed. NEVER ask the user to paste a secret value into chat — " +
-        "only tell them to add missing keys in Studio → Settings → Secrets.")]
+        "ALWAYS call this yourself for every required key — NEVER ask the user whether a secret " +
+        "exists or is set up. If exists=false, tell them to add the key in Studio → Settings → Secrets " +
+        "and say 'done'. NEVER ask the user to paste a secret value into chat.")]
     public async Task<string> CheckTenantSecretExists(
         [Description("Vault key name, e.g. GITHUB-TOKEN or ANTHROPIC-API-KEY.")] string key)
     {
@@ -103,10 +261,12 @@ public sealed class OnboardingSubagentTools(
                 ok = true,
                 key = normalizedKey,
                 exists,
+                userFacingWhenMissing =
+                    $"{normalizedKey} is missing. Add it in Studio → Settings → Secrets (exact key name), then say \"done\".",
                 hint = exists
-                    ? $"{normalizedKey} is already in the tenant vault."
-                    : $"{normalizedKey} is not set yet. Tell the user to add it in Studio → " +
-                      "Settings → Secrets, using this exact key name, then say 'done' to continue.",
+                    ? $"{normalizedKey} is already in the tenant vault. Do NOT ask the user about it — continue."
+                    : $"exists=false. Do NOT ask \"Do you have {normalizedKey}?\" — you already checked. " +
+                      "Tell the user to add it in Studio → Settings → Secrets, then say 'done'.",
             });
         }
         catch (Exception ex)
@@ -212,11 +372,32 @@ public sealed class OnboardingSubagentTools(
                 integrationId = result.IntegrationId,
                 webhookName = result.WebhookName,
                 webhookUrl = result.WebhookUrl,
+                agentName = resolvedAgent,
+                activationName = resolvedActivation,
+                tenantId = context.Message.TenantId,
                 installedPluginCount = InstalledPluginsCatalog.FromContent(rulesContent).Count,
+                installedShortNames = InstalledPluginsCatalog.FromContent(rulesContent)
+                    .Select(p => InstalledPluginsCatalog.ShortName(p.PluginName))
+                    .ToArray(),
                 message = result.Created
                     ? "Xians webhook created successfully."
                     : "Xians webhook already exists — reusing it.",
-                hint = "Report as: 'Xians webhook: ✅ Created — {webhookUrl}'. " +
+                userFacingDetails = new
+                {
+                    summary = result.Created
+                        ? "Xians webhook created"
+                        : "Xians webhook already existed — reused",
+                    webhookName = result.WebhookName,
+                    webhookUrl = result.WebhookUrl,
+                    integrationId = result.IntegrationId,
+                    agentName = resolvedAgent,
+                    activationName = resolvedActivation,
+                    nextStep = "GitHub: call RegisterGitHubRepositoryWebhook. " +
+                               "Azure DevOps: show webhookUrl for manual Service Hooks — do not ping.",
+                },
+                hint = "Report full details to the user: webhook name, URL (as markdown link), " +
+                       "integration id, agent/activation. Then: " +
+                       "'Xians webhook: ✅ Created — {webhookUrl}'. " +
                        "GitHub: scmConnectionStatus stays not_established until " +
                        "RegisterGitHubRepositoryWebhook returns connectionStatus=established. " +
                        "Azure DevOps: show webhookUrl and ask the user to create Service Hooks — " +
@@ -350,8 +531,12 @@ public sealed class OnboardingSubagentTools(
                     connectionStatus = "not_established",
                     connectionCheck = "github_ping",
                     connectivityStatus = "not_connected",
-                    error = "GITHUB-TOKEN is not set in the tenant vault yet. Ask the user to add it in " +
-                            "Studio → Settings → Secrets, then retry.",
+                    missingSecret = "GITHUB-TOKEN",
+                    error = "GITHUB-TOKEN is not set in the tenant vault.",
+                    userFacingMessage =
+                        "GITHUB-TOKEN is missing. Add it in Studio → Settings → Secrets (exact key name), then say \"done\".",
+                    hint = "Do NOT ask whether the user has GITHUB-TOKEN — this tool already checked. " +
+                           "Show userFacingMessage, wait for \"done\", then CheckTenantSecretExists and retry.",
                 });
             }
 
@@ -511,8 +696,9 @@ public sealed class OnboardingSubagentTools(
         "Fetch currently saved Rules for this chat. Prefers agent scope (Studio: Agent = " +
         "activation override). If none exists yet, returns the system-scoped seed without " +
         "creating an agent-scope document — InstallPlugins / SaveRules create agent scope. " +
-        "Call BEFORE drafting when plugins were already saved. Merge into this document. " +
-        "Do NOT call on greetings.")]
+        "Prefer GetTenantState for the pre-phase snapshot (repos/webhooks/secrets). " +
+        "Call GetCurrentRules when you need the raw document to merge/edit. " +
+        "Merge into this document.")]
     public async Task<string> GetCurrentRules()
     {
         var (resolvedAgent, resolvedActivation) = await OnboardingMessageContext
@@ -784,12 +970,14 @@ public sealed class OnboardingSubagentTools(
                    ". Installability requires each plugin's live README " +
                    "(plugins/<folder>/README.md on plugins-official) plus a local execution recipe. " +
                    "When platform is known, each Ready plugin includes executionOptions " +
-                   "(execution names, defaultLabel, matchAny summaries). " +
-                   "Present those before asking permission to update rules.json. " +
+                   "(execution names, defaultLabel, matchAny with name/rule/summary). " +
+                   "Under each execution, present the match-any section, ask how to set it up " +
+                   "(keep all / keep some / change label / skip), then verify by restating their choice " +
+                   "before asking permission to update rules.json. " +
                    "Present 'Installed from rules.json' and 'Available from official marketplace'. " +
                    "Within Available, split Ready to install (installable=true) vs Coming soon (installable=false). " +
                    "Never say 'validated recipe' to the user — say Coming soon. Only Ready-to-install plugins may be added. " +
-                   "Tell users how to invoke plugins via suggestedTriggers / executionOptions (platform triggers), not slash commands.",
+                   "Tell users how to invoke plugins via suggestedTriggers / executionOptions.matchAny (platform triggers), not slash commands.",
         });
     }
 
@@ -800,7 +988,11 @@ public sealed class OnboardingSubagentTools(
     public async Task<string> MaterializePluginRules(
         [Description("Comma-separated plugin short names, e.g. pr-reviewer,test-strategist")] string pluginNames,
         [Description("Repository clone URL — also used to infer platform (github.com → github, dev.azure.com → azuredevops)")] string repositoryUrl,
-        [Description("Optional platform override: github or azuredevops. Omit to infer from repositoryUrl.")] string? platform = null)
+        [Description("Optional platform override: github or azuredevops. Omit to infer from repositoryUrl.")] string? platform = null,
+        [Description(
+            "Optional GitHub PR trigger label to bake into match-any rules " +
+            "(replaces recipe defaults like ai-dlc/pr/pr-review).")]
+        string? triggerLabel = null)
     {
         var names = (pluginNames ?? "")
             .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
@@ -930,12 +1122,55 @@ public sealed class OnboardingSubagentTools(
             },
         };
 
+        object documentOut = document;
+        object[]? executionsOut = executions
+            .Select(e => JsonSerializer.Deserialize<object>(e.GetRawText())!)
+            .ToArray();
+        string? appliedTriggerLabel = null;
+        IReadOnlyList<string>? previousTriggerLabels = null;
+
+        if (!string.IsNullOrWhiteSpace(triggerLabel))
+        {
+            try
+            {
+                var draftJson = JsonSerializer.Serialize(document);
+                var rewritten = RulesTriggerLabelRewriter.Rewrite(draftJson, triggerLabel);
+                using var rewrittenDoc = JsonDocument.Parse(rewritten.RulesJson);
+                documentOut = JsonSerializer.Deserialize<object>(rewritten.RulesJson)!;
+                appliedTriggerLabel = rewritten.NewLabel;
+                previousTriggerLabels = rewritten.PreviousLabels;
+
+                // Keep top-level executions array in sync with the rewritten document.
+                if (rewrittenDoc.RootElement.ValueKind == JsonValueKind.Array
+                    && rewrittenDoc.RootElement.GetArrayLength() > 0
+                    && rewrittenDoc.RootElement[0].TryGetProperty("executions", out var execArr)
+                    && execArr.ValueKind == JsonValueKind.Array)
+                {
+                    executionsOut = execArr
+                        .EnumerateArray()
+                        .Select(e => JsonSerializer.Deserialize<object>(e.GetRawText())!)
+                        .ToArray();
+                }
+            }
+            catch (Exception ex)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    ok = false,
+                    error = $"Invalid triggerLabel: {ex.Message}",
+                    notPersisted = true,
+                });
+            }
+        }
+
         return JsonSerializer.Serialize(new
         {
             ok = true,
             platform = normalizedPlatform,
             repositoryUrl = repositoryUrl.Trim(),
             plugins = names,
+            triggerLabel = appliedTriggerLabel,
+            previousTriggerLabels,
             hint = "NOT persisted. Prefer InstallPlugins to materialize + validate + save atomically. " +
                    "If drafting manually: merge these kebab-case fragments into GetCurrentRules, " +
                    "then ValidateRulesJson(requiredPlugins=...) + SaveRules(requiredPlugins=...).",
@@ -943,8 +1178,8 @@ public sealed class OnboardingSubagentTools(
             withEnvs,
             webhookUsePlugins = webhookPlugins,
             chatUsePlugins = chatPlugins,
-            executions = executions.Select(e => JsonSerializer.Deserialize<object>(e.GetRawText())).ToArray(),
-            document,
+            executions = executionsOut,
+            document = documentOut,
         });
     }
 
@@ -968,7 +1203,12 @@ public sealed class OnboardingSubagentTools(
         [Description(
             "When true, pluginNames is the complete desired set — omitted installed plugins are removed. " +
             "Use for uninstall / replace flows. Default false keeps already-installed plugins.")]
-        bool replaceExistingSet = false)
+        bool replaceExistingSet = false,
+        [Description(
+            "Optional GitHub PR trigger label to bake into match-any rules before save " +
+            "(e.g. pr-review-agent). Replaces recipe defaults like ai-dlc/pr/pr-review. " +
+            "For label changes after install, prefer UpdateTriggerLabel.")]
+        string? triggerLabel = null)
     {
         var requested = RulesInstallValidation.ParsePluginNameList(pluginNames);
         if (requested.Length == 0 && !replaceExistingSet)
@@ -1054,7 +1294,8 @@ public sealed class OnboardingSubagentTools(
             .ToArray();
         var fullSetCsv = string.Join(",", fullSet);
 
-        var materializeJson = await MaterializePluginRules(fullSetCsv, repositoryUrl, normalizedPlatform)
+        var materializeJson = await MaterializePluginRules(
+                fullSetCsv, repositoryUrl, normalizedPlatform, triggerLabel)
             .ConfigureAwait(false);
         using var materializeDoc = JsonDocument.Parse(materializeJson);
         if (!materializeDoc.RootElement.TryGetProperty("ok", out var matOk) || !matOk.GetBoolean())
@@ -1079,6 +1320,25 @@ public sealed class OnboardingSubagentTools(
         }
 
         var incomingRulesJson = documentProp.GetRawText();
+        string? appliedTriggerLabel = null;
+        IReadOnlyList<string>? previousTriggerLabels = null;
+        if (materializeDoc.RootElement.TryGetProperty("triggerLabel", out var tlProp)
+            && tlProp.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(tlProp.GetString()))
+        {
+            appliedTriggerLabel = tlProp.GetString();
+        }
+
+        if (materializeDoc.RootElement.TryGetProperty("previousTriggerLabels", out var prevProp)
+            && prevProp.ValueKind == JsonValueKind.Array)
+        {
+            previousTriggerLabels = prevProp.EnumerateArray()
+                .Select(e => e.GetString())
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Select(s => s!)
+                .ToArray();
+        }
+
         var saveJson = await SaveRules(
                 incomingRulesJson,
                 resolvedAgent,
@@ -1169,6 +1429,8 @@ public sealed class OnboardingSubagentTools(
             replaceExistingSet);
 
         VerifiedInstalledShortNames = installedShort;
+        if (!string.IsNullOrWhiteSpace(appliedTriggerLabel))
+            VerifiedTriggerLabel = appliedTriggerLabel;
 
         return JsonSerializer.Serialize(new
         {
@@ -1183,6 +1445,8 @@ public sealed class OnboardingSubagentTools(
             newlyRequested = requested,
             installedPlugins = installed.Select(p => p.PluginName).ToArray(),
             installedShortNames = installedShort,
+            triggerLabel = appliedTriggerLabel,
+            previousTriggerLabels,
             agentName = resolvedAgent,
             activationName = resolvedActivation,
             content = verified.Content,
@@ -1191,6 +1455,174 @@ public sealed class OnboardingSubagentTools(
                    "then ask the user for permission to create the Xians webhook (CreateWebhookConnection only after they agree). " +
                    "For GitHub, RegisterGitHubRepositoryWebhook after the webhook URL exists. " +
                    "Call VerifyInstalledPlugins only if the user asks to double-check later.",
+        });
+    }
+
+    [Description(
+        "Rewrite the GitHub PR trigger label inside activation rules.json match-any filters " +
+        "(label.name / labels.*.name) and save. Use when the user asks to change the trigger label " +
+        "after plugins are already installed. Do NOT hand-edit JSON — call this tool. " +
+        "Returns ok=true only after Knowledge read-back contains the new label.")]
+    public async Task<string> UpdateTriggerLabel(
+        [Description("New GitHub label, e.g. ai-dlc/pr/pr-review-agent or pr-review-agent.")]
+        string newLabel,
+        [Description(
+            "Optional existing label to replace. Omit to replace every label found in match-any rules.")]
+        string? fromLabel = null,
+        [Description("Optional override when agent context is missing.")] string? agentName = null,
+        [Description("Optional override when activation context is missing.")] string? activationName = null)
+    {
+        if (string.IsNullOrWhiteSpace(newLabel))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                ok = false,
+                error = "newLabel is required.",
+            });
+        }
+
+        var (resolvedAgent, resolvedActivation) = await OnboardingMessageContext
+            .ResolveAsync(context, _platform, agentName, activationName)
+            .ConfigureAwait(false);
+
+        if (string.IsNullOrWhiteSpace(resolvedAgent) || string.IsNullOrWhiteSpace(resolvedActivation))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                ok = false,
+                error = "Could not resolve agent/activation for UpdateTriggerLabel.",
+                resolvedAgent,
+                resolvedActivation,
+            });
+        }
+
+        var existing = await _platform
+            .GetActivationScopedRulesContentAsync(
+                context.Message.TenantId, resolvedAgent!, resolvedActivation!)
+            .ConfigureAwait(false);
+
+        if (string.IsNullOrWhiteSpace(existing)
+            || !RulesInstallValidation.HasAnyInstalledPlugin(existing))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                ok = false,
+                error = "No installed plugins in activation rules.json — install a plugin first, " +
+                        "or pass triggerLabel to InstallPlugins during install.",
+            });
+        }
+
+        RulesTriggerLabelRewriter.RewriteResult rewritten;
+        try
+        {
+            rewritten = RulesTriggerLabelRewriter.Rewrite(existing, newLabel, fromLabel);
+        }
+        catch (Exception ex)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                ok = false,
+                error = $"Failed to rewrite trigger label: {ex.Message}",
+            });
+        }
+
+        if (rewritten.ReplacementCount == 0)
+        {
+            var currentLabels = RulesTriggerLabelRewriter.ExtractLabels(existing!);
+            if (currentLabels.Contains(rewritten.NewLabel, StringComparer.Ordinal))
+            {
+                VerifiedTriggerLabel = rewritten.NewLabel;
+                return JsonSerializer.Serialize(new
+                {
+                    ok = true,
+                    claimAllowed = true,
+                    alreadyApplied = true,
+                    triggerLabel = rewritten.NewLabel,
+                    previousLabels = currentLabels,
+                    replacements = 0,
+                    message = $"Trigger label is already `{rewritten.NewLabel}` in rules.json.",
+                });
+            }
+
+            return JsonSerializer.Serialize(new
+            {
+                ok = false,
+                error = fromLabel is null
+                    ? "No GitHub trigger labels found in match-any rules to rewrite."
+                    : $"Label `{fromLabel}` was not found in match-any rules.",
+                currentLabels,
+            });
+        }
+
+        var installedShort = InstalledPluginsCatalog.FromContent(existing)
+            .Select(p => InstalledPluginsCatalog.ShortName(p.PluginName))
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var requiredCsv = string.Join(",", installedShort);
+
+        var saveJson = await SaveRules(
+                rewritten.RulesJson,
+                resolvedAgent,
+                resolvedActivation,
+                requiredPlugins: requiredCsv,
+                replaceExisting: true)
+            .ConfigureAwait(false);
+
+        using var saveDoc = JsonDocument.Parse(saveJson);
+        if (!saveDoc.RootElement.TryGetProperty("ok", out var saveOk) || !saveOk.GetBoolean())
+        {
+            return JsonSerializer.Serialize(new
+            {
+                ok = false,
+                error = "UpdateTriggerLabel refused — SaveRules / validation failed. Label was not updated.",
+                save = saveJson,
+            });
+        }
+
+        var verified = await _platform
+            .GetActivationScopedRulesContentAsync(
+                context.Message.TenantId, resolvedAgent!, resolvedActivation!)
+            .ConfigureAwait(false);
+        var labelsAfter = RulesTriggerLabelRewriter.ExtractLabels(verified ?? "");
+        if (!labelsAfter.Contains(rewritten.NewLabel, StringComparer.Ordinal))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                ok = false,
+                claimAllowed = false,
+                error = "Save reported ok but re-read rules.json does not contain the new trigger label.",
+                expectedLabel = rewritten.NewLabel,
+                labelsAfter,
+            });
+        }
+
+        VerifiedTriggerLabel = rewritten.NewLabel;
+        VerifiedInstalledShortNames = installedShort;
+
+        _logger.LogInformation(
+            "UpdateTriggerLabel set label {NewLabel} (from [{Old}]) for {Agent}/{Activation} replacements={Count}",
+            rewritten.NewLabel,
+            string.Join(", ", rewritten.PreviousLabels),
+            resolvedAgent,
+            resolvedActivation,
+            rewritten.ReplacementCount);
+
+        return JsonSerializer.Serialize(new
+        {
+            ok = true,
+            claimAllowed = true,
+            persisted = true,
+            verifiedFromKnowledge = true,
+            triggerLabel = rewritten.NewLabel,
+            previousLabels = rewritten.PreviousLabels,
+            replacements = rewritten.ReplacementCount,
+            installedShortNames = installedShort,
+            agentName = resolvedAgent,
+            activationName = resolvedActivation,
+            message = $"Trigger label updated to `{rewritten.NewLabel}` and re-read from Knowledge.",
+            hint = "Report: '✓ Trigger label updated to {triggerLabel}.' then How to trigger with that label.",
         });
     }
 

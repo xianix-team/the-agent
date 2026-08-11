@@ -1,27 +1,48 @@
 ---
 name: env-setup
-description: Context/check vault secrets; verify all required keys exist before rules-manager.
+description: Auto-check vault secrets with tools; never ask if secrets exist; evidence before rules-manager.
 ---
 
 # Environment variables
 
-Follow **context → action → verify**. Never ask whether secrets are needed. Never accept pasted secret values.
+Follow **context → action → evidence**. Never accept pasted secret values.
 
-**Context source:** `requiredEnvs` from each plugin’s local recipe via `ListAvailablePlugins` (chosen plugins + platform).
+**You check secrets yourself.** Call tools — never ask the user whether a secret exists.
 
-Typical keys: GitHub → `GITHUB-TOKEN`; Azure DevOps → `AZURE-DEVOPS-TOKEN`; models → `ANTHROPIC-API-KEY`.
+**Forbidden** (never say these):
+- "Do you have GITHUB-TOKEN set up?"
+- "Do you have this set up in Studio → Settings → Secrets?"
+- "Is ANTHROPIC-API-KEY configured?"
+- Any yes/no question about whether a vault key exists
 
+**Context source:** `requiredEnvs` from each plugin’s local recipe via `ListAvailablePlugins` (chosen plugins + platform), plus `GetTenantState.secrets`.
+
+Typical keys (always auto-check these when required by platform/plugins):
+- GitHub → `GITHUB-TOKEN`
+- Azure DevOps → `AZURE-DEVOPS-TOKEN`
+- Models → **`ANTHROPIC-API-KEY`** (always required for plugin runs)
+
+**Always include `ANTHROPIC-API-KEY` in the silent check** — never ask the user if they have it. Call `CheckTenantSecretExists("ANTHROPIC-API-KEY")` (or use `GetTenantState.secrets`). Only if `exists: false`, tell them to add it.
 ## Context / Action
 
-1. Call `CheckTenantSecretExists` for each required key.
-2. If any `exists: false`, tell them to add those exact keys in Studio → Settings → Secrets, then say "done".
+1. Call `GetTenantState` (silent) — use `secrets[].exists` when present.
+2. Call `CheckTenantSecretExists` for **every** required key (confirm live; do not trust chat memory).
+3. If all `exists: true` → evidence line and continue — **do not mention secrets** to the user.
+4. If any `exists: false` → state the fact only (no question):
 
-## Verify
+```
+4. Check secrets: ❌ missing {KEY}
 
-3. On "done", re-check **only** the missing keys with `CheckTenantSecretExists`.
-4. Do not continue until every required key returns `exists: true`.
-5. If a plugin has `requiresAuthorization: true`, note it needs `--authorized` at run time (separate from vault).
+{KEY} is missing. Add it in Studio → Settings → Secrets (exact key name), then say "done".
+```
+
+## Evidence
+
+5. On "done", re-check **only** the missing keys with `CheckTenantSecretExists`.
+6. Do not continue until every required key returns `exists: true`.
+7. When all present: `4. Check secrets: ✅ {keys}` (optional one short line — no interrogation).
+8. If a plugin has `requiresAuthorization: true`, note it needs `--authorized` at run time (separate from vault).
 
 ## Next
 
-When verify passes → load `rules-manager` (silently).
+When evidence passes → load `rules-manager` (silently).

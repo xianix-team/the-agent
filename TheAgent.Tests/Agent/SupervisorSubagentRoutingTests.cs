@@ -87,6 +87,33 @@ public class SupervisorSubagentRoutingTests
                 SupervisorSubagent.UnverifiedScmConnectionClaimFallback));
     }
 
+    [Theory]
+    [InlineData("✓ Trigger label updated to pr-review-agent.")]
+    [InlineData("The label was updated to ai-dlc/pr/pr-review-agent.")]
+    [InlineData("Trigger label changed to my-label.")]
+    public void ClaimsTriggerLabelUpdated_SuccessNarration_ReturnsTrue(string reply)
+    {
+        Assert.True(SupervisorSubagent.ClaimsTriggerLabelUpdated(reply));
+    }
+
+    [Theory]
+    [InlineData("What label should I use for the trigger?")]
+    [InlineData("I'll change the label once you confirm.")]
+    [InlineData("Keep the default label.")]
+    [InlineData("")]
+    public void ClaimsTriggerLabelUpdated_NoSuccessNarration_ReturnsFalse(string reply)
+    {
+        Assert.False(SupervisorSubagent.ClaimsTriggerLabelUpdated(reply));
+    }
+
+    [Fact]
+    public void UnverifiedTriggerLabelClaimFallback_DoesNotItselfClaimUpdate()
+    {
+        Assert.False(
+            SupervisorSubagent.ClaimsTriggerLabelUpdated(
+                SupervisorSubagent.UnverifiedTriggerLabelClaimFallback));
+    }
+
     [Fact]
     public void RulesOptimizerRedirect_ContainsScopedStudioLink()
     {

@@ -32,14 +32,18 @@ public sealed class SupervisorSubagent
     /// successful install it never performed, leaving rules.json short a plugin.
     /// </summary>
     internal const string UnverifiedInstallClaimFallback =
-        "I could not confirm this change in rules.json, so I won't report it as complete. " +
-        "Ask me to install the plugin again and I will run the install and re-read " +
-        "rules.json before telling you the result.";
+        "I wasn't able to finish installing the plugin just now. " +
+        "Please ask me to install it again and I'll retry.";
 
     internal const string UnverifiedScmConnectionClaimFallback =
-        "I cannot confirm the SCM webhook connection. For GitHub, registration+ping must succeed " +
-        "first. For Azure DevOps, I only provide the webhook URL — create Service Hooks in " +
-        "Project settings yourself; I do not validate that step.";
+        "I can't confirm the webhook connection yet. " +
+        "For GitHub, I need registration and a successful ping first. " +
+        "For Azure DevOps, use the webhook URL to create Service Hooks in Project settings — " +
+        "I don't validate that step from here.";
+
+    internal const string UnverifiedTriggerLabelClaimFallback =
+        "I wasn't able to finish updating the trigger label just now. " +
+        "Please ask me to update it again and I'll retry.";
 
     internal const string RulesOptimizerRedirect =
         "Agent setup runs in a separate guided chat. " +
@@ -74,6 +78,18 @@ public sealed class SupervisorSubagent
         "Previous attempts produced no text. Conversation history has been omitted " +
         "for this attempt. Reply to the user's latest message with at least one short " +
         "sentence of text. Empty output is not acceptable.";
+
+    /// <summary>
+    /// Extra instruction when a prior attempt claimed install without
+    /// <c>InstallPlugins</c> / <c>VerifyInstalledPlugins</c> confirming the save.
+    /// </summary>
+    private const string UnverifiedInstallRetryNudge =
+        "\n\n## CRITICAL\n\n" +
+        "Your previous reply claimed a plugin was installed, but InstallPlugins / " +
+        "VerifyInstalledPlugins did not confirm it in rules.json this turn. " +
+        "Call InstallPlugins now (or VerifyInstalledPlugins if already saved), wait for " +
+        "ok=true and claimAllowed=true, then reply only from that result. " +
+        "Do not claim install from memory.";
 
     /// <summary>
     /// Resolves the Anthropic API key on the first chat message <em>for each
@@ -247,6 +263,7 @@ public sealed class SupervisorSubagent
         };
 
         AgentResponse? lastResponse = null;
+        var retryUnverifiedInstall = false;
 
         // Token usage is summed across attempts: each attempt is a billed Claude call, so an
         // empty-response retry that eventually succeeds still consumed tokens on every try.
@@ -256,6 +273,9 @@ public sealed class SupervisorSubagent
         {
             cancellationToken.ThrowIfCancellationRequested();
             var attempt = attempts[i];
+            var instructions = retryUnverifiedInstall
+                ? baseInstructions + UnverifiedInstallRetryNudge
+                : attempt.Instructions;
 
             var session = await agent.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
             if (attempt.IncludeHistory)
@@ -265,12 +285,13 @@ public sealed class SupervisorSubagent
 
             var runOptions = new ChatClientAgentRunOptions(new ChatOptions
             {
-                Instructions = attempt.Instructions,
+                Instructions = instructions,
                 Tools = isOnboarding
                     ?
                     [
                         AIFunctionFactory.Create(onboardingTools!.LoadRulesOptimizerSkill),
                         AIFunctionFactory.Create(onboardingTools.GetCurrentDateTime),
+                        AIFunctionFactory.Create(onboardingTools.GetTenantState),
                         AIFunctionFactory.Create(onboardingTools.CheckTenantSecretExists),
                         AIFunctionFactory.Create(onboardingTools.CreateWebhookConnection),
                         AIFunctionFactory.Create(onboardingTools.RegisterGitHubRepositoryWebhook),
@@ -278,6 +299,7 @@ public sealed class SupervisorSubagent
                         AIFunctionFactory.Create(onboardingTools.ListAvailablePlugins),
                         AIFunctionFactory.Create(onboardingTools.MaterializePluginRules),
                         AIFunctionFactory.Create(onboardingTools.InstallPlugins),
+                        AIFunctionFactory.Create(onboardingTools.UpdateTriggerLabel),
                         AIFunctionFactory.Create(onboardingTools.VerifyInstalledPlugins),
                         AIFunctionFactory.Create(onboardingTools.ValidateRulesJson),
                         AIFunctionFactory.Create(onboardingTools.SaveRules),
@@ -323,10 +345,25 @@ public sealed class SupervisorSubagent
                     && ClaimsPluginsInstalled(text)
                     && onboardingTools!.VerifiedInstalledShortNames.Count == 0)
                 {
+                    if (i < attempts.Length - 1)
+                    {
+                        _logger.LogWarning(
+                            "Unverified install claim in Rules Optimizer reply — retrying " +
+                            "{Attempt}/{Total} so InstallPlugins can run before telling the user. " +
+                            "Tenant={TenantId}, Participant={ParticipantId}, Reply={Reply}.",
+                            i + 2, attempts.Length,
+                            context.Message.TenantId,
+                            context.Message.ParticipantId,
+                            Truncate(text, 400));
+                        retryUnverifiedInstall = true;
+                        continue;
+                    }
+
                     _logger.LogError(
-                        "Blocked unverified install claim in Rules Optimizer reply — no InstallPlugins / " +
-                        "VerifyInstalledPlugins read plugins back from Knowledge this turn. " +
+                        "Blocked unverified install claim in Rules Optimizer reply after {Attempts} attempts — " +
+                        "no InstallPlugins / VerifyInstalledPlugins read plugins back from Knowledge. " +
                         "Tenant={TenantId}, Participant={ParticipantId}, Reply={Reply}.",
+                        attempts.Length,
                         context.Message.TenantId,
                         context.Message.ParticipantId,
                         Truncate(text, 400));
@@ -350,6 +387,22 @@ public sealed class SupervisorSubagent
 
                     await ReportTurnAsync(succeeded: true, attemptsMade: i + 1).ConfigureAwait(false);
                     return UnverifiedScmConnectionClaimFallback;
+                }
+
+                if (isOnboarding
+                    && ClaimsTriggerLabelUpdated(text)
+                    && string.IsNullOrWhiteSpace(onboardingTools!.VerifiedTriggerLabel))
+                {
+                    _logger.LogError(
+                        "Blocked unverified trigger-label claim in Rules Optimizer reply — " +
+                        "UpdateTriggerLabel / InstallPlugins(triggerLabel) did not verify a label this turn. " +
+                        "Tenant={TenantId}, Participant={ParticipantId}, Reply={Reply}.",
+                        context.Message.TenantId,
+                        context.Message.ParticipantId,
+                        Truncate(text, 400));
+
+                    await ReportTurnAsync(succeeded: true, attemptsMade: i + 1).ConfigureAwait(false);
+                    return UnverifiedTriggerLabelClaimFallback;
                 }
 
                 await ReportTurnAsync(succeeded: true, attemptsMade: i + 1).ConfigureAwait(false);
@@ -534,6 +587,8 @@ public sealed class SupervisorSubagent
             + @"(?:help|start|check|look(?:\s+at)?|verify|inspect|fetch|load|set\s*up|configure|proceed|continue)\b.*"
             + @"|checking\b.*"
             + @"|setting\s+up\b.*"
+            + @"|now\s+registering\b.*"
+            + @"|testing\s+the\s+connection\b.*"
             + @"|loading\b(?:\s+the)?\s+(?:skill|marketplace|next|rules|plugin)\b.*"
             + @"|I(?:'ll| will)\s+need\b.*\bnext\b.*"
             + @"|welcome!\s+you\s+have\s+no\s+plugins\s+installed\s+yet\.?"
@@ -583,6 +638,23 @@ public sealed class SupervisorSubagent
             @"\b(?:(?:is|are|was|were|has\s+been|have\s+been|successfully|now)\s+"
             + @"(?:installed|saved|added)|installed\s+and\s+saved|saved\s+to\s+rules\.json)\b",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    /// <summary>
+    /// True when the reply asserts a trigger label was updated/saved. Narrow so planning
+    /// wording ("I'll change the label") is not treated as a claim.
+    /// </summary>
+    internal static bool ClaimsTriggerLabelUpdated(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        return Regex.IsMatch(
+            text,
+            @"\b(?:trigger\s+label|label)\b.{0,40}\b(?:updated|changed|set)\b"
+            + @"|\b(?:updated|changed)\s+(?:the\s+)?(?:trigger\s+)?label\b"
+            + @"|\btrigger\s+label\s+updated\s+to\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline);
     }
 
     /// <summary>

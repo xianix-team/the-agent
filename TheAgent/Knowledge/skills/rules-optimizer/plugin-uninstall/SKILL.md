@@ -1,15 +1,15 @@
 ---
 name: plugin-uninstall
-description: Context installed set; action replaceExistingSet InstallPlugins; verify with VerifyInstalledPlugins.
+description: GetTenantState; replaceExistingSet InstallPlugins; VerifyInstalledPlugins.
 ---
 
 # Plugin removal
 
-Follow **context → action → verify**.
+Follow **context → action → evidence**.
 
 ## Context
 
-1. Call `GetCurrentRules` / `VerifyInstalledPlugins` — only remove plugins that are actually installed.
+1. Call `GetTenantState` / `VerifyInstalledPlugins` — only remove plugins that are actually installed.
 2. Confirm which short name(s) to remove.
 
 ## Action
@@ -20,7 +20,7 @@ Follow **context → action → verify**.
    - **`replaceExistingSet=true`** (required — without this, omitted plugins stay installed)
 4. To remove **all** plugins: `InstallPlugins` with empty `pluginNames` and `replaceExistingSet=true`.
 
-## Verify
+## Evidence
 
 5. Call `VerifyInstalledPlugins` before claiming removal succeeded. Expected short names must match the kept set (or empty).
 
@@ -28,4 +28,4 @@ Do **not** rely on merge-only `SaveRules` for uninstall — merge keeps existing
 
 ## Next
 
-If they want to add another plugin → `plugin-marketplace`. Otherwise stop.
+If they want to add another plugin → `plugin-marketplace`. Otherwise stop with a clear completed/failed line for this edit.

@@ -58,4 +58,33 @@ public class RepositoryNamingTests
         // helper must never throw — it just round-trips an empty string so logs stay sane.
         Assert.Equal(string.Empty, RepositoryNaming.DeriveName(null!));
     }
+
+    [Fact]
+    public void DeduplicateCloneUrls_CollapsesGitSuffixVariants()
+    {
+        var urls = new[]
+        {
+            "https://github.com/HasiniA99x/circle_poc",
+            "https://github.com/HasiniA99x/circle_poc.git",
+            "https://github.com/other/repo",
+        };
+
+        var distinct = RepositoryNaming.DeduplicateCloneUrls(urls);
+
+        Assert.Equal(2, distinct.Count);
+        Assert.Contains(distinct, u => u.Contains("circle_poc.git", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(distinct, u => u.Contains("other/repo", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(distinct, u =>
+            u.Equals("https://github.com/HasiniA99x/circle_poc", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData("https://github.com/acme/app.git", "https://github.com/acme/app")]
+    [InlineData("https://github.com/acme/app/", "https://github.com/acme/app.git")]
+    public void NormalizeCloneUrlKey_TreatsGitSuffixAsSame(string a, string b)
+    {
+        Assert.Equal(
+            RepositoryNaming.NormalizeCloneUrlKey(a),
+            RepositoryNaming.NormalizeCloneUrlKey(b));
+    }
 }
