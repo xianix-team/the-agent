@@ -568,8 +568,7 @@ public sealed class SupervisorSubagent
     }
 
     internal static bool IsProjectOnboardingScope(string? scope) =>
-        string.Equals(scope, Constants.ProjectOnboardingScope, StringComparison.OrdinalIgnoreCase)
-        || string.Equals(scope, Constants.LegacyProjectOnboardingScope, StringComparison.OrdinalIgnoreCase);
+        string.Equals(scope, Constants.ProjectOnboardingScope, StringComparison.OrdinalIgnoreCase);
 
     internal static bool IsRulesSetupRequest(string text)
     {

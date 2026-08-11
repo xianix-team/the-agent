@@ -23,10 +23,10 @@ public class XianixAgent(
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
         logger.LogDebug("Initializing Xians platform connection.");
-        var (xiansAgent, certificateTenantId) = await CreateAndRegisterAgentAsync(cancellationToken);
+        var xiansAgent = await CreateAndRegisterAgentAsync(cancellationToken);
 
         logger.LogDebug("Uploading knowledge resources.");
-        await UploadKnowledgeAsync(xiansAgent, certificateTenantId, logger);
+        await UploadKnowledgeAsync(xiansAgent);
 
         ConfigureCustomWorkflows(xiansAgent);
         ConfigureWebhookWorkflow(xiansAgent, cancellationToken);
@@ -75,13 +75,9 @@ public class XianixAgent(
 
         conversationWorkflow.OnUserChatMessage(async (context) =>
         {
-            if (context.Message.Scope == "setup")
-            {
-                await context.ReplyAsync("Hello, how can I help you with your setup????");
-                return;
-            }
             try
             {
+                // Rules Optimizer vs supervisor is chosen by message scope inside RunAsync.
                 var reply = await subagent.RunAsync(context, cancellationToken);
 
                 // Defence-in-depth: SupervisorSubagent already substitutes a fallback
@@ -256,7 +252,7 @@ public class XianixAgent(
         });
     }
 
-    private static async Task<(XiansAgent Agent, string? CertificateTenantId)> CreateAndRegisterAgentAsync(
+    private static async Task<XiansAgent> CreateAndRegisterAgentAsync(
         CancellationToken cancellationToken)
     {
         var xiansPlatform = await XiansPlatform.InitializeAsync(new()
@@ -273,21 +269,16 @@ public class XianixAgent(
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        var xiansAgent = xiansPlatform.Agents.Register(new()
+        return xiansPlatform.Agents.Register(new()
         {
             Name = EnvConfig.AgentName,
             Description = "A versatile automation agent that listens for incoming webhooks from your tools and services, then triggers intelligent AI-powered workflows using Claude Code plugins — helping your team automate code reviews, respond to events, and streamline everyday development tasks without lifting a finger.",
             Summary = "AI automation agent that turns webhook events into smart, plugin-driven actions.",
             IsTemplate = EnvConfig.AgentIsTemplate
         });
-
-        return (xiansAgent, xiansPlatform.Options.CertificateTenantId);
     }
 
-    private static async Task UploadKnowledgeAsync(
-        XiansAgent xiansAgent,
-        string? certificateTenantId,
-        ILogger logger)
+    private static async Task UploadKnowledgeAsync(XiansAgent xiansAgent)
     {
         // SYSTEM SCOPE ONLY (Studio: System). These seeds must never be written at
         // tenant/organization or agent/activation scope from startup.
@@ -312,58 +303,6 @@ public class XianixAgent(
             knowledgeName: Constants.RulesKnowledgeName,
             knowledgeType: "json"
         );
-
-        // Studio resolution is Agent → Organization → System. Stale Organization overrides
-        // (created via "Override to Organization") keep System marked Overridden even after
-        // we re-upload system seeds. Clear those org copies so System becomes Active again.
-        await ClearOrganizationSeedOverridesAsync(certificateTenantId, logger).ConfigureAwait(false);
-    }
-
-    private static async Task ClearOrganizationSeedOverridesAsync(string? certificateTenantId, ILogger logger)
-    {
-        var adminKey = EnvConfig.XiansAdminApiKey;
-        if (string.IsNullOrWhiteSpace(adminKey))
-            return;
-
-        // Tenant comes from the agent API key certificate (O=), never a hardcoded "default".
-        var tenantId = certificateTenantId;
-        if (string.IsNullOrWhiteSpace(tenantId))
-        {
-            logger.LogWarning(
-                "Skipping Organization-scope seed cleanup — CertificateTenantId is empty on the registered platform.");
-            return;
-        }
-
-        var agentName = EnvConfig.AgentName;
-        if (string.IsNullOrWhiteSpace(agentName))
-            return;
-
-        var platform = new OnboardingPlatformClient();
-        try
-        {
-            await platform.ClearOrganizationScopedSeedOverridesAsync(
-                    tenantId,
-                    agentName,
-                    [
-                        Constants.SystemPromptKnowledgeName,
-                        Constants.OnboardingSystemPromptKnowledgeName,
-                        Constants.RulesKnowledgeName,
-                    ])
-                .ConfigureAwait(false);
-
-            logger.LogInformation(
-                "Cleared Organization-scope seed overrides for tenant '{Tenant}' agent '{Agent}' (System Prompt, Rules Optimizer System Prompt, Rules) so Studio shows System as Active.",
-                tenantId,
-                agentName);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(
-                ex,
-                "Could not clear Organization-scope seed overrides for tenant '{Tenant}' agent '{Agent}'. System seeds were still uploaded; delete org overrides in Studio if System stays Overridden.",
-                tenantId,
-                agentName);
-        }
     }
 
     private void LogWebhookVerificationFailure(

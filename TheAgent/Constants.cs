@@ -14,10 +14,4 @@ public static class Constants
     /// Studio displays the scope string as the topic name.
     /// </summary>
     public const string ProjectOnboardingScope = "Rules Optimizer";
-
-    /// <summary>
-    /// Legacy scope id from before the topic was renamed. Still treated as Rules Optimizer
-    /// so existing chats keep working.
-    /// </summary>
-    public const string LegacyProjectOnboardingScope = "project-onboarding";
 }

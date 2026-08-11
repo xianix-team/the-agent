@@ -493,47 +493,6 @@ internal sealed class OnboardingPlatformClient
 
         _rulesKnowledgeIdCache[RulesKnowledgeCacheKey(tenantId, agentName, activationName)] = knowledgeId;
     }
-    public async Task ClearOrganizationScopedSeedOverridesAsync(
-        string tenantId,
-        string agentName,
-        IEnumerable<string> knowledgeNames,
-        CancellationToken cancellationToken = default)
-    {
-        if (string.IsNullOrWhiteSpace(tenantId) || string.IsNullOrWhiteSpace(agentName))
-            return;
-
-        var adminKey = EnvConfig.XiansAdminApiKey;
-        if (string.IsNullOrWhiteSpace(adminKey))
-            return;
-
-        foreach (var name in knowledgeNames
-                     .Where(n => !string.IsNullOrWhiteSpace(n))
-                     .Distinct(StringComparer.Ordinal))
-        {
-            var path =
-                $"/api/v1/admin/tenants/{Uri.EscapeDataString(tenantId)}/knowledge/" +
-                $"{Uri.EscapeDataString(name)}/tenant/versions" +
-                $"?agentName={Uri.EscapeDataString(agentName)}";
-
-            using var request = BuildAdminRequest(HttpMethod.Delete, path, tenantId, adminKey);
-            using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
-            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-
-            if (response.IsSuccessStatusCode)
-            {
-                // 200 with deletedCount, or empty success — either way org override is gone.
-                continue;
-            }
-
-            // 404 = nothing to clear (already System-only). Anything else is logged by caller.
-            if ((int)response.StatusCode == 404)
-                continue;
-
-            throw new InvalidOperationException(
-                $"Failed to clear Organization override for '{name}' on agent '{agentName}': " +
-                $"HTTP {(int)response.StatusCode} {SanitizeHttpErrorBody(body)}");
-        }
-    }
 
     /// <summary>
     /// Fetches the raw content of the <b>system-scoped</b> Rules knowledge document for

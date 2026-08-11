@@ -152,8 +152,6 @@ public class SupervisorSubagentRoutingTests
     [Theory]
     [InlineData("Rules Optimizer")]
     [InlineData("rules optimizer")]
-    [InlineData("project-onboarding")]
-    [InlineData("PROJECT-ONBOARDING")]
     public void IsProjectOnboardingScope_KnownScopes_ReturnsTrue(string scope)
     {
         Assert.True(SupervisorSubagent.IsProjectOnboardingScope(scope));
@@ -185,6 +183,8 @@ public class SupervisorSubagentRoutingTests
     [InlineData("")]
     [InlineData("general-discussions")]
     [InlineData("something-else")]
+    [InlineData("setup")]
+    [InlineData("project-onboarding")]
     public void IsProjectOnboardingScope_OtherScopes_ReturnsFalse(string? scope)
     {
         Assert.False(SupervisorSubagent.IsProjectOnboardingScope(scope));
