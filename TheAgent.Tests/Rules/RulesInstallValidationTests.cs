@@ -76,6 +76,30 @@ public class RulesInstallValidationTests
     }
 
     [Fact]
+    public void DesiredInstallSet_KeepsExistingPluginsWhenAdding()
+    {
+        var desired = RulesInstallValidation.DesiredInstallSet(
+            WithPrReviewer, ["perf-optimizer"], replaceExistingSet: false);
+        Assert.Equal(["perf-optimizer", "pr-reviewer"], desired);
+    }
+
+    [Fact]
+    public void DesiredInstallSet_ReplaceUsesRequestedOnly()
+    {
+        var desired = RulesInstallValidation.DesiredInstallSet(
+            WithPrReviewer, ["perf-optimizer"], replaceExistingSet: true);
+        Assert.Equal(["perf-optimizer"], desired);
+    }
+
+    [Fact]
+    public void DesiredInstallSet_EmptyCurrent_UsesRequested()
+    {
+        var desired = RulesInstallValidation.DesiredInstallSet(
+            null, ["pr-reviewer"], replaceExistingSet: false);
+        Assert.Equal(["pr-reviewer"], desired);
+    }
+
+    [Fact]
     public void ParsePluginNameList_DedupesAndTrims()
     {
         var names = RulesInstallValidation.ParsePluginNameList(" pr-reviewer, perf-optimizer,pr-reviewer ");

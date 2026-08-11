@@ -84,4 +84,38 @@ internal static class RulesInstallValidation
             .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+    /// <summary>
+    /// Plugin short names that <c>InstallPlugins</c> must rematerialize. Default keeps
+    /// whatever is already in the effective rules document (activation override, else
+    /// system-scoped) plus <paramref name="requestedShortNames"/>. Replace mode uses
+    /// the requested list only.
+    /// </summary>
+    public static string[] DesiredInstallSet(
+        string? currentRulesJson,
+        IEnumerable<string> requestedShortNames,
+        bool replaceExistingSet)
+    {
+        var requested = requestedShortNames
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Select(n => n.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        if (replaceExistingSet)
+        {
+            return requested
+                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+
+        var alreadyInstalled = InstalledPluginsCatalog.FromContent(currentRulesJson)
+            .Select(p => InstalledPluginsCatalog.ShortName(p.PluginName))
+            .Where(n => !string.IsNullOrWhiteSpace(n));
+
+        return alreadyInstalled
+            .Concat(requested)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
 }

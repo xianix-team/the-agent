@@ -99,27 +99,9 @@ public sealed class OnboardingSubagentTools(
             .ResolveAsync(context, _platform, agentNameOverride: null, activationNameOverride: null)
             .ConfigureAwait(false);
 
-        string? content = null;
-        var scope = "missing";
-        if (!string.IsNullOrWhiteSpace(resolvedAgent) && !string.IsNullOrWhiteSpace(resolvedActivation))
-        {
-            content = await _platform
-                .GetActivationScopedRulesContentAsync(
-                    tenantId, resolvedAgent!, resolvedActivation!)
-                .ConfigureAwait(false);
-            if (!string.IsNullOrWhiteSpace(content))
-                scope = "agent";
-        }
-
-        if (string.IsNullOrWhiteSpace(content) && !string.IsNullOrWhiteSpace(resolvedAgent))
-        {
-            content = await _platform
-                .GetSystemScopedRulesContentAsync(tenantId, resolvedAgent!)
-                .ConfigureAwait(false);
-            if (!string.IsNullOrWhiteSpace(content))
-                scope = "system";
-        }
-
+        var (content, scope) = await LoadEffectiveRulesContentAsync(
+                tenantId, resolvedAgent, resolvedActivation)
+            .ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(content))
         {
             content = InstalledPluginsCatalog.FreshActivationRulesJson;
@@ -716,27 +698,9 @@ public sealed class OnboardingSubagentTools(
         // Agent scope first (Studio label "Agent" = activation-scoped Knowledge).
         // Do NOT create an empty agent-scope document on read — only InstallPlugins / SaveRules
         // should write agent scope. Until then Studio shows the system seed.
-        string? content = null;
-        var scope = "missing";
-        if (!string.IsNullOrWhiteSpace(resolvedAgent) && !string.IsNullOrWhiteSpace(resolvedActivation))
-        {
-            content = await _platform
-                .GetActivationScopedRulesContentAsync(
-                    context.Message.TenantId, resolvedAgent!, resolvedActivation!)
-                .ConfigureAwait(false);
-            if (!string.IsNullOrWhiteSpace(content))
-                scope = "agent";
-        }
-
-        if (string.IsNullOrWhiteSpace(content) && !string.IsNullOrWhiteSpace(resolvedAgent))
-        {
-            content = await _platform
-                .GetSystemScopedRulesContentAsync(context.Message.TenantId, resolvedAgent!)
-                .ConfigureAwait(false);
-            if (!string.IsNullOrWhiteSpace(content))
-                scope = "system";
-        }
-
+        var (content, scope) = await LoadEffectiveRulesContentAsync(
+                context.Message.TenantId, resolvedAgent, resolvedActivation)
+            .ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(content))
         {
             content = InstalledPluginsCatalog.FreshActivationRulesJson;
@@ -813,21 +777,16 @@ public sealed class OnboardingSubagentTools(
             });
         }
 
-        // Installed = activation-scoped use-plugins (union across webhook/chat/executions).
+        // Installed = rules currently in effect (activation override, else system-scoped).
         var (resolvedAgent, resolvedActivation) = await OnboardingMessageContext
             .ResolveAsync(context, _platform, agentNameOverride: null, activationNameOverride: null)
             .ConfigureAwait(false);
 
-        string? activationRules = null;
-        if (!string.IsNullOrWhiteSpace(resolvedAgent) && !string.IsNullOrWhiteSpace(resolvedActivation))
-        {
-            activationRules = await _platform
-                .GetActivationScopedRulesContentAsync(
-                    context.Message.TenantId, resolvedAgent!, resolvedActivation!)
-                .ConfigureAwait(false);
-        }
+        var (effectiveRules, _) = await LoadEffectiveRulesContentAsync(
+                context.Message.TenantId, resolvedAgent, resolvedActivation)
+            .ConfigureAwait(false);
 
-        var installed = InstalledPluginsCatalog.FromContent(activationRules);
+        var installed = InstalledPluginsCatalog.FromContent(effectiveRules);
         var installedShortNames = new HashSet<string>(
             installed.Select(p => InstalledPluginsCatalog.ShortName(p.PluginName)),
             StringComparer.OrdinalIgnoreCase);
@@ -1292,24 +1251,16 @@ public sealed class OnboardingSubagentTools(
             });
         }
 
-        var existing = await _platform
-            .GetActivationScopedRulesContentAsync(
-                context.Message.TenantId, resolvedAgent!, resolvedActivation!)
+        // Use rules currently in effect (activation override, else system-scoped).
+        // First agent-scope save would otherwise drop system-scoped plugins.
+        var (existing, _) = await LoadEffectiveRulesContentAsync(
+                context.Message.TenantId, resolvedAgent, resolvedActivation)
             .ConfigureAwait(false);
-
-        var alreadyInstalled = InstalledPluginsCatalog.FromContent(existing)
-            .Select(p => InstalledPluginsCatalog.ShortName(p.PluginName))
-            .Where(n => !string.IsNullOrWhiteSpace(n))
-            .ToArray();
 
         // Default: rematerialize full desired set so adding plugin N cannot leave N unverified.
         // replaceExistingSet: treat requested as the complete set (supports uninstall).
-        var fullSet = (replaceExistingSet
-                ? requested
-                : alreadyInstalled.Concat(requested))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        var fullSet = RulesInstallValidation.DesiredInstallSet(
+            existing, requested, replaceExistingSet);
         var fullSetCsv = string.Join(",", fullSet);
 
         var materializeJson = await MaterializePluginRules(
@@ -1562,9 +1513,8 @@ public sealed class OnboardingSubagentTools(
             });
         }
 
-        var existing = await _platform
-            .GetActivationScopedRulesContentAsync(
-                context.Message.TenantId, resolvedAgent!, resolvedActivation!)
+        var (existing, _) = await LoadEffectiveRulesContentAsync(
+                context.Message.TenantId, resolvedAgent, resolvedActivation)
             .ConfigureAwait(false);
 
         if (string.IsNullOrWhiteSpace(existing)
@@ -1573,7 +1523,7 @@ public sealed class OnboardingSubagentTools(
             return JsonSerializer.Serialize(new
             {
                 ok = false,
-                error = "No installed plugins in activation rules.json — install a plugin first, " +
+                error = "No installed plugins in rules.json — install a plugin first, " +
                         "or pass triggerLabel to InstallPlugins during install.",
             });
         }
@@ -1774,6 +1724,36 @@ public sealed class OnboardingSubagentTools(
             content = verified.Content,
             hint = "claimAllowed=true — report ONLY installedShortNames from this response to the user.",
         });
+    }
+
+    /// <summary>
+    /// Rules currently in effect: activation override, else system-scoped seed.
+    /// Does not create documents. An empty/missing activation document is not an override.
+    /// </summary>
+    private async Task<(string? Content, string Scope)> LoadEffectiveRulesContentAsync(
+        string tenantId,
+        string? agentName,
+        string? activationName)
+    {
+        if (!string.IsNullOrWhiteSpace(agentName) && !string.IsNullOrWhiteSpace(activationName))
+        {
+            var activationContent = await _platform
+                .GetActivationScopedRulesContentAsync(tenantId, agentName, activationName)
+                .ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(activationContent))
+                return (activationContent, "agent");
+        }
+
+        if (!string.IsNullOrWhiteSpace(agentName))
+        {
+            var systemContent = await _platform
+                .GetSystemScopedRulesContentAsync(tenantId, agentName)
+                .ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(systemContent))
+                return (systemContent, "system");
+        }
+
+        return (null, "missing");
     }
 
     private async Task<(bool Ok, string? Content, IReadOnlyList<string> Missing)> ReadActivationRulesUntilPluginsPresentAsync(
@@ -2132,8 +2112,9 @@ public sealed class OnboardingSubagentTools(
         {
             // Merge-on-save by default so adding a plugin cannot wipe earlier ones.
             // replaceExisting=true: persist the incoming document as the complete desired set.
-            var existing = await _platform
-                .GetActivationScopedRulesContentAsync(
+            // Merge against rules currently in effect (activation override, else system).
+            // First agent-scope save must keep system-scoped plugins or the override shadows them.
+            var (existing, _) = await LoadEffectiveRulesContentAsync(
                     context.Message.TenantId, resolvedAgent, resolvedActivation)
                 .ConfigureAwait(false);
 
