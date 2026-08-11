@@ -26,7 +26,7 @@ public sealed class OnboardingSubagentTools(
     /// <summary>
     /// Short names this turn actually read back from activation Knowledge via
     /// <see cref="InstallPlugins"/> or <see cref="VerifyInstalledPlugins"/>. Empty when the
-    /// model never verified anything, which lets <see cref="SupervisorSubagent"/> block a
+    /// model never verified anything, which lets <see cref="OnboardingSubagent"/> block a
     /// fabricated "installed and saved" claim instead of trusting the model's memory.
     /// </summary>
     internal IReadOnlyList<string> VerifiedInstalledShortNames { get; private set; } = [];

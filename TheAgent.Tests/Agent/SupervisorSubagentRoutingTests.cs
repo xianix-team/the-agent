@@ -38,7 +38,7 @@ public class SupervisorSubagentRoutingTests
     [InlineData("perf-optimizer was added to your activation rules.")]
     public void ClaimsPluginsInstalled_SuccessNarration_ReturnsTrue(string reply)
     {
-        Assert.True(SupervisorSubagent.ClaimsPluginsInstalled(reply));
+        Assert.True(OnboardingSubagent.ClaimsPluginsInstalled(reply));
     }
 
     [Theory]
@@ -48,15 +48,15 @@ public class SupervisorSubagentRoutingTests
     [InlineData("")]
     public void ClaimsPluginsInstalled_NoSuccessNarration_ReturnsFalse(string reply)
     {
-        Assert.False(SupervisorSubagent.ClaimsPluginsInstalled(reply));
+        Assert.False(OnboardingSubagent.ClaimsPluginsInstalled(reply));
     }
 
     [Fact]
     public void UnverifiedInstallClaimFallback_DoesNotItselfClaimInstall()
     {
         Assert.False(
-            SupervisorSubagent.ClaimsPluginsInstalled(
-                SupervisorSubagent.UnverifiedInstallClaimFallback));
+            OnboardingSubagent.ClaimsPluginsInstalled(
+                OnboardingSubagent.UnverifiedInstallClaimFallback));
     }
 
     [Theory]
@@ -65,7 +65,7 @@ public class SupervisorSubagentRoutingTests
     [InlineData("SCM webhook connected successfully.")]
     public void ClaimsScmConnectionEstablished_SuccessNarration_ReturnsTrue(string reply)
     {
-        Assert.True(SupervisorSubagent.ClaimsScmConnectionEstablished(reply));
+        Assert.True(OnboardingSubagent.ClaimsScmConnectionEstablished(reply));
     }
 
     [Theory]
@@ -76,15 +76,15 @@ public class SupervisorSubagentRoutingTests
     [InlineData("")]
     public void ClaimsScmConnectionEstablished_NoSuccessNarration_ReturnsFalse(string reply)
     {
-        Assert.False(SupervisorSubagent.ClaimsScmConnectionEstablished(reply));
+        Assert.False(OnboardingSubagent.ClaimsScmConnectionEstablished(reply));
     }
 
     [Fact]
     public void UnverifiedScmConnectionClaimFallback_DoesNotItselfClaimConnection()
     {
         Assert.False(
-            SupervisorSubagent.ClaimsScmConnectionEstablished(
-                SupervisorSubagent.UnverifiedScmConnectionClaimFallback));
+            OnboardingSubagent.ClaimsScmConnectionEstablished(
+                OnboardingSubagent.UnverifiedScmConnectionClaimFallback));
     }
 
     [Theory]
@@ -93,7 +93,7 @@ public class SupervisorSubagentRoutingTests
     [InlineData("Trigger label changed to my-label.")]
     public void ClaimsTriggerLabelUpdated_SuccessNarration_ReturnsTrue(string reply)
     {
-        Assert.True(SupervisorSubagent.ClaimsTriggerLabelUpdated(reply));
+        Assert.True(OnboardingSubagent.ClaimsTriggerLabelUpdated(reply));
     }
 
     [Theory]
@@ -103,15 +103,15 @@ public class SupervisorSubagentRoutingTests
     [InlineData("")]
     public void ClaimsTriggerLabelUpdated_NoSuccessNarration_ReturnsFalse(string reply)
     {
-        Assert.False(SupervisorSubagent.ClaimsTriggerLabelUpdated(reply));
+        Assert.False(OnboardingSubagent.ClaimsTriggerLabelUpdated(reply));
     }
 
     [Fact]
     public void UnverifiedTriggerLabelClaimFallback_DoesNotItselfClaimUpdate()
     {
         Assert.False(
-            SupervisorSubagent.ClaimsTriggerLabelUpdated(
-                SupervisorSubagent.UnverifiedTriggerLabelClaimFallback));
+            OnboardingSubagent.ClaimsTriggerLabelUpdated(
+                OnboardingSubagent.UnverifiedTriggerLabelClaimFallback));
     }
 
     [Theory]
@@ -120,7 +120,7 @@ public class SupervisorSubagentRoutingTests
     [InlineData("match-any updated to keep only the label rule.")]
     public void ClaimsExecutionsUpdated_SuccessNarration_ReturnsTrue(string reply)
     {
-        Assert.True(SupervisorSubagent.ClaimsExecutionsUpdated(reply));
+        Assert.True(OnboardingSubagent.ClaimsExecutionsUpdated(reply));
     }
 
     [Theory]
@@ -129,15 +129,15 @@ public class SupervisorSubagentRoutingTests
     [InlineData("")]
     public void ClaimsExecutionsUpdated_NoSuccessNarration_ReturnsFalse(string reply)
     {
-        Assert.False(SupervisorSubagent.ClaimsExecutionsUpdated(reply));
+        Assert.False(OnboardingSubagent.ClaimsExecutionsUpdated(reply));
     }
 
     [Fact]
     public void UnverifiedExecutionClaimFallback_DoesNotItselfClaimUpdate()
     {
         Assert.False(
-            SupervisorSubagent.ClaimsExecutionsUpdated(
-                SupervisorSubagent.UnverifiedExecutionClaimFallback));
+            OnboardingSubagent.ClaimsExecutionsUpdated(
+                OnboardingSubagent.UnverifiedExecutionClaimFallback));
     }
 
     [Fact]
@@ -152,9 +152,9 @@ public class SupervisorSubagentRoutingTests
     [Theory]
     [InlineData("Rules Optimizer")]
     [InlineData("rules optimizer")]
-    public void IsProjectOnboardingScope_KnownScopes_ReturnsTrue(string scope)
+    public void IsScope_RulesOptimizer_ReturnsTrue(string scope)
     {
-        Assert.True(SupervisorSubagent.IsProjectOnboardingScope(scope));
+        Assert.True(OnboardingSubagent.IsScope(scope));
     }
 
     [Theory]
@@ -175,7 +175,7 @@ public class SupervisorSubagentRoutingTests
         "Would you like to install a plugin?")]
     public void StripOnboardingProcessNarration_RemovesThinkingAloud(string input, string expected)
     {
-        Assert.Equal(expected, SupervisorSubagent.StripOnboardingProcessNarration(input));
+        Assert.Equal(expected, OnboardingSubagent.StripOnboardingProcessNarration(input));
     }
 
     [Theory]
@@ -185,8 +185,8 @@ public class SupervisorSubagentRoutingTests
     [InlineData("something-else")]
     [InlineData("setup")]
     [InlineData("project-onboarding")]
-    public void IsProjectOnboardingScope_OtherScopes_ReturnsFalse(string? scope)
+    public void IsScope_OtherScopes_ReturnsFalse(string? scope)
     {
-        Assert.False(SupervisorSubagent.IsProjectOnboardingScope(scope));
+        Assert.False(OnboardingSubagent.IsScope(scope));
     }
 }

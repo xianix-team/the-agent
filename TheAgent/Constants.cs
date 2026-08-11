@@ -9,8 +9,9 @@ public static class Constants
 
     /// <summary>
     /// Messaging scope / Studio topic id for the Rules Optimizer chat.
-    /// When <c>UserMessageContext.Message.Scope</c> equals this value, the supervisor
-    /// loads the onboarding prompt and onboarding tools instead of the general chat flow.
+    /// When <c>UserMessageContext.Message.Scope</c> equals this value,
+    /// <c>OnUserChatMessage</c> invokes <c>OnboardingSubagent</c> instead of
+    /// <c>SupervisorSubagent</c>.
     /// Studio displays the scope string as the topic name.
     /// </summary>
     public const string ProjectOnboardingScope = "Rules Optimizer";

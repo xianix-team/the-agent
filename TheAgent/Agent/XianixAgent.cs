@@ -40,13 +40,13 @@ public class XianixAgent(
     {
         var conversationWorkflow = xiansAgent.Workflows.DefineSupervisor();
 
-        // The Anthropic key resolver runs on the supervisor's first message per
-        // tenant (SupervisorSubagent caches one AIAgent per TenantId; see
-        // EnsureAgentForTenantAsync there). At that point XiansContext.CurrentAgent
-        // is bound to the calling message's tenant — the platform scopes it via
-        // AsyncLocal — so all of the resolver's reads happen against the right
-        // tenant: rules.json comes from XiansContext.CurrentAgent.Knowledge and any
-        // `secrets.*` entry is fetched from XiansContext.CurrentAgent.Secrets.TenantScope().
+        // The Anthropic key resolver runs on each subagent's first message per
+        // tenant (each caches one AIAgent per TenantId). At that point
+        // XiansContext.CurrentAgent is bound to the calling message's tenant — the
+        // platform scopes it via AsyncLocal — so all of the resolver's reads happen
+        // against the right tenant: rules.json comes from
+        // XiansContext.CurrentAgent.Knowledge and any `secrets.*` entry is fetched
+        // from XiansContext.CurrentAgent.Secrets.TenantScope().
         //
         // Resolution order, identical to the container path's `with-envs` merge:
         //   1. Rule-set-level `with-envs` entry named `ANTHROPIC-API-KEY` in rules.json
@@ -56,7 +56,7 @@ public class XianixAgent(
         //   2. Host env `ANTHROPIC-API-KEY` (or `ANTHROPIC_API_KEY`) — fallback when
         //      the rules.json entry is absent, points at an unset host var, or the
         //      tenant's Secret Vault has no entry under the configured key.
-        //   3. Empty — SupervisorSubagent surfaces a loud, tenant-tagged error which
+        //   3. Empty — the subagent surfaces a loud, tenant-tagged error which
         //      OnUserChatMessage's catch logs and replies to the user.
         async Task<string> ResolveAnthropicApiKeyAsync()
         {
@@ -65,31 +65,35 @@ public class XianixAgent(
             return resolved ?? EnvConfig.AnthropicApiKey;
         }
 
-        var subagent = new SupervisorSubagent(
+        var supervisor = new SupervisorSubagent(
             ResolveAnthropicApiKeyAsync,
             EnvConfig.AnthropicDeploymentName,
             supervisorLogger,
             supervisorToolsLogger,
-            onboardingToolsLogger: loggerFactory?.CreateLogger<OnboardingSubagentTools>(),
-            loggerFactory: loggerFactory);
+            loggerFactory);
+
+        var onboarding = new OnboardingSubagent(
+            ResolveAnthropicApiKeyAsync,
+            EnvConfig.AnthropicDeploymentName,
+            loggerFactory?.CreateLogger<OnboardingSubagent>(),
+            loggerFactory?.CreateLogger<OnboardingSubagentTools>(),
+            loggerFactory);
 
         conversationWorkflow.OnUserChatMessage(async (context) =>
         {
             try
             {
-                // Rules Optimizer vs supervisor is chosen by message scope inside RunAsync.
-                var reply = await subagent.RunAsync(context, cancellationToken);
+                var reply = OnboardingSubagent.IsScope(context.Message.Scope)
+                    ? await onboarding.RunAsync(context, cancellationToken)
+                    : await supervisor.RunAsync(context, cancellationToken);
 
-                // Defence-in-depth: SupervisorSubagent already substitutes a fallback
-                // message for empty model output, but guard here too so we never publish
-                // an empty bubble to the user even if that contract regresses.
                 if (string.IsNullOrWhiteSpace(reply))
                 {
                     logger.LogWarning(
-                        "Supervisor returned empty reply for tenant '{TenantId}', participant '{ParticipantId}'. " +
+                        "Chat subagent returned empty reply for tenant '{TenantId}', participant '{ParticipantId}'. " +
                         "Sending generic retry prompt instead.",
                         context.Message.TenantId, context.Message.ParticipantId);
-                    reply = SupervisorSubagent.EmptyResponseFallback;
+                    reply = AnthropicChatSubagent.EmptyResponseFallback;
                 }
 
                 await context.ReplyAsync(reply);
@@ -101,8 +105,8 @@ public class XianixAgent(
             catch (Exception ex)
             {
                 logger.LogError(ex,
-                    "SupervisorSubagent failed for tenant '{TenantId}', participant '{ParticipantId}'.",
-                    context.Message.TenantId, context.Message.ParticipantId);
+                    "Chat subagent failed for tenant '{TenantId}', participant '{ParticipantId}', scope '{Scope}'.",
+                    context.Message.TenantId, context.Message.ParticipantId, context.Message.Scope);
 
                 // Surface the root cause to the user so actionable failures (e.g. a
                 // missing ANTHROPIC-API-KEY for this tenant) can be fixed without
