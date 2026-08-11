@@ -22,7 +22,7 @@ Ready to update rules.json for {repo} ({platform}):
 
 Plugins: {plugins}
 
-Executions (pr-reviewer):
+Executions (pr-reviewer) — webhook only, never chat / slash-command:
 - github-pull-request-review
   match-any: label `pr-review-agent` on open / labeled / synchronized PRs (all three)
 - github-pr-agent-comment-instruction
@@ -38,6 +38,9 @@ Adapt the bullets from the user’s verified match-any choices / custom label �
 6. On confirm → `InstallPlugins` with the full desired short names + repo URL.
    - Custom label at install time: pass `triggerLabel` to `InstallPlugins` (do not hand-edit JSON).
    - After install, to change the label: call `UpdateTriggerLabel` — never invent a save.
+   - **Skip an execution:** pass `skipExecutions` (comma-separated execution names). Do not omit them from a merged SaveRules draft — merge keeps omitted executions and the file will not change.
+   - **Keep only some match-any alternatives:** pass `skipMatchAny` (the entry names to drop).
+   - Never claim an execution was updated unless that `InstallPlugins` result has `ok=true` and the skipped names are absent from `executionNames`.
 
 ## Evidence
 

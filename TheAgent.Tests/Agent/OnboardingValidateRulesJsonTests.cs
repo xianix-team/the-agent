@@ -48,6 +48,7 @@ public class OnboardingValidateRulesJsonTests
         Assert.True(RulesOptimizerSkillCatalog.TryGet("rules-manager", out var skill));
         Assert.Contains("InstallPlugins", skill.Body);
         Assert.Contains("UpdateTriggerLabel", skill.Body);
+        Assert.Contains("skipExecutions", skill.Body);
         Assert.Contains("claimAllowed", skill.Body);
         Assert.Contains("Update rules.json with this now?", skill.Body);
         Assert.Contains("webhook-setup", skill.Body);
@@ -80,6 +81,7 @@ public class OnboardingValidateRulesJsonTests
         Assert.Contains("Do **not** ask “GitHub or Azure DevOps?”", skill.Body);
         Assert.Contains("executionOptions", skill.Body);
         Assert.Contains("suggestedTriggers", skill.Body);
+        Assert.Contains("Do **not** list `chat`, slash-command", skill.Body);
         Assert.Contains("env-setup", skill.Body);
     }
 

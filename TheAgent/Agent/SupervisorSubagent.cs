@@ -45,6 +45,10 @@ public sealed class SupervisorSubagent
         "I wasn't able to finish updating the trigger label just now. " +
         "Please ask me to update it again and I'll retry.";
 
+    internal const string UnverifiedExecutionClaimFallback =
+        "I wasn't able to finish updating that execution in rules.json just now. " +
+        "Please ask me to apply the change again and I'll retry.";
+
     internal const string RulesOptimizerRedirect =
         "Agent setup runs in a separate guided chat. " +
         "[Open Rules Optimizer](?topic=Rules%20Optimizer), then send your setup request there.";
@@ -89,7 +93,9 @@ public sealed class SupervisorSubagent
         "VerifyInstalledPlugins did not confirm it in rules.json this turn. " +
         "Call InstallPlugins now (or VerifyInstalledPlugins if already saved), wait for " +
         "ok=true and claimAllowed=true, then reply only from that result. " +
-        "Do not claim install from memory.";
+        "If the user skipped an execution or match-any alternative, pass skipExecutions / " +
+        "skipMatchAny so the save replaces rules.json (merge keeps omitted executions). " +
+        "Do not claim install or execution updates from memory.";
 
     /// <summary>
     /// Resolves the Anthropic API key on the first chat message <em>for each
@@ -405,6 +411,37 @@ public sealed class SupervisorSubagent
                     return UnverifiedTriggerLabelClaimFallback;
                 }
 
+                if (isOnboarding
+                    && ClaimsExecutionsUpdated(text)
+                    && !onboardingTools!.VerifiedExecutionChange)
+                {
+                    if (i < attempts.Length - 1)
+                    {
+                        _logger.LogWarning(
+                            "Unverified execution-update claim in Rules Optimizer reply — retrying " +
+                            "{Attempt}/{Total} so InstallPlugins can persist skip/match-any before telling the user. " +
+                            "Tenant={TenantId}, Participant={ParticipantId}, Reply={Reply}.",
+                            i + 2, attempts.Length,
+                            context.Message.TenantId,
+                            context.Message.ParticipantId,
+                            Truncate(text, 400));
+                        retryUnverifiedInstall = true;
+                        continue;
+                    }
+
+                    _logger.LogError(
+                        "Blocked unverified execution-update claim in Rules Optimizer reply after {Attempts} attempts — " +
+                        "InstallPlugins did not verify an execution change in Knowledge this turn. " +
+                        "Tenant={TenantId}, Participant={ParticipantId}, Reply={Reply}.",
+                        attempts.Length,
+                        context.Message.TenantId,
+                        context.Message.ParticipantId,
+                        Truncate(text, 400));
+
+                    await ReportTurnAsync(succeeded: true, attemptsMade: i + 1).ConfigureAwait(false);
+                    return UnverifiedExecutionClaimFallback;
+                }
+
                 await ReportTurnAsync(succeeded: true, attemptsMade: i + 1).ConfigureAwait(false);
                 return text;
             }
@@ -654,6 +691,24 @@ public sealed class SupervisorSubagent
             @"\b(?:trigger\s+label|label)\b.{0,40}\b(?:updated|changed|set)\b"
             + @"|\b(?:updated|changed)\s+(?:the\s+)?(?:trigger\s+)?label\b"
             + @"|\btrigger\s+label\s+updated\s+to\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline);
+    }
+
+    /// <summary>
+    /// True when the reply asserts an execution or match-any change was saved.
+    /// Planning wording ("I'll skip that execution") is not treated as a claim.
+    /// </summary>
+    internal static bool ClaimsExecutionsUpdated(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        return Regex.IsMatch(
+            text,
+            @"\bexecutions?\b.{0,50}\b(?:updated|changed|saved|removed|skipped)\b"
+            + @"|\b(?:updated|changed|removed|skipped)\s+(?:the\s+)?executions?\b"
+            + @"|\bmatch-any\b.{0,40}\b(?:updated|changed|saved)\b"
+            + @"|\bupdated\s+(?:in\s+)?rules\.json\b",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline);
     }
 

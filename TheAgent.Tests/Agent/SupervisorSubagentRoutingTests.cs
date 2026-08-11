@@ -114,6 +114,32 @@ public class SupervisorSubagentRoutingTests
                 SupervisorSubagent.UnverifiedTriggerLabelClaimFallback));
     }
 
+    [Theory]
+    [InlineData("The execution was updated in rules.json.")]
+    [InlineData("Skipped execution github-pr-agent-comment-instruction.")]
+    [InlineData("match-any updated to keep only the label rule.")]
+    public void ClaimsExecutionsUpdated_SuccessNarration_ReturnsTrue(string reply)
+    {
+        Assert.True(SupervisorSubagent.ClaimsExecutionsUpdated(reply));
+    }
+
+    [Theory]
+    [InlineData("How do you want to set this execution up?")]
+    [InlineData("I'll skip that execution once you confirm.")]
+    [InlineData("")]
+    public void ClaimsExecutionsUpdated_NoSuccessNarration_ReturnsFalse(string reply)
+    {
+        Assert.False(SupervisorSubagent.ClaimsExecutionsUpdated(reply));
+    }
+
+    [Fact]
+    public void UnverifiedExecutionClaimFallback_DoesNotItselfClaimUpdate()
+    {
+        Assert.False(
+            SupervisorSubagent.ClaimsExecutionsUpdated(
+                SupervisorSubagent.UnverifiedExecutionClaimFallback));
+    }
+
     [Fact]
     public void RulesOptimizerRedirect_ContainsScopedStudioLink()
     {

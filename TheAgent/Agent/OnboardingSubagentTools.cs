@@ -45,6 +45,12 @@ public sealed class OnboardingSubagentTools(
     /// </summary>
     internal string? VerifiedTriggerLabel { get; private set; }
 
+    /// <summary>
+    /// True when this turn persisted an execution / match-any change that was
+    /// re-read from activation Knowledge (skip, keep-some, or first install).
+    /// </summary>
+    internal bool VerifiedExecutionChange { get; private set; }
+
     [Description(
         "Load a Rules Optimizer skill by name and return its full instructions. " +
         "Call before each phase; load only the skill needed now. Core: pr-agent-greeting, " +
@@ -204,14 +210,16 @@ public sealed class OnboardingSubagentTools(
                 pluginShortNames = r.PluginShortNames,
                 executionCount = r.ExecutionCount,
             }),
-            executions = snapshot.ExecutionSummaries.Select(e => new
-            {
-                ruleSetKind = e.RuleSetKind,
-                ruleSetName = e.RuleSetName,
-                executionName = e.ExecutionName,
-                repositoryUrl = e.RepositoryUrl,
-                pluginShortNames = e.PluginShortNames,
-            }),
+            executions = snapshot.ExecutionSummaries
+                .Where(e => string.Equals(e.RuleSetKind, "webhook", StringComparison.OrdinalIgnoreCase))
+                .Select(e => new
+                {
+                    ruleSetKind = e.RuleSetKind,
+                    ruleSetName = e.RuleSetName,
+                    executionName = e.ExecutionName,
+                    repositoryUrl = e.RepositoryUrl,
+                    pluginShortNames = e.PluginShortNames,
+                }),
             repositories = new
             {
                 configured = snapshot.RepositoryUrls,
@@ -971,9 +979,10 @@ public sealed class OnboardingSubagentTools(
                    "(plugins/<folder>/README.md on plugins-official) plus a local execution recipe. " +
                    "When platform is known, each Ready plugin includes executionOptions " +
                    "(execution names, defaultLabel, matchAny with name/rule/summary). " +
-                   "Under each execution, present the match-any section, ask how to set it up " +
+                   "Under each webhook execution, present the match-any section, ask how to set it up " +
                    "(keep all / keep some / change label / skip), then verify by restating their choice " +
                    "before asking permission to update rules.json. " +
+                   "Never list chat / slash-command (e.g. /pr-review) as an execution. " +
                    "Present 'Installed from rules.json' and 'Available from official marketplace'. " +
                    "Within Available, split Ready to install (installable=true) vs Coming soon (installable=false). " +
                    "Never say 'validated recipe' to the user — say Coming soon. Only Ready-to-install plugins may be added. " +
@@ -1208,7 +1217,16 @@ public sealed class OnboardingSubagentTools(
             "Optional GitHub PR trigger label to bake into match-any rules before save " +
             "(e.g. pr-review-agent). Replaces recipe defaults like ai-dlc/pr/pr-review. " +
             "For label changes after install, prefer UpdateTriggerLabel.")]
-        string? triggerLabel = null)
+        string? triggerLabel = null,
+        [Description(
+            "Optional comma-separated execution names to omit from the saved document " +
+            "(e.g. github-pr-agent-comment-instruction). Required when the user asked to skip " +
+            "an execution — merge-on-save would otherwise keep the old one.")]
+        string? skipExecutions = null,
+        [Description(
+            "Optional comma-separated match-any entry names to omit " +
+            "(e.g. github-pr-opened-with-tag). Use when the user asked to keep only some alternatives.")]
+        string? skipMatchAny = null)
     {
         var requested = RulesInstallValidation.ParsePluginNameList(pluginNames);
         if (requested.Length == 0 && !replaceExistingSet)
@@ -1320,6 +1338,13 @@ public sealed class OnboardingSubagentTools(
         }
 
         var incomingRulesJson = documentProp.GetRawText();
+        var skippedExecutions = RulesInstallValidation.ParsePluginNameList(skipExecutions);
+        var skippedMatchAny = RulesInstallValidation.ParsePluginNameList(skipMatchAny);
+        if (skippedExecutions.Length > 0)
+            incomingRulesJson = RulesExecutionEditor.DropExecutions(incomingRulesJson, skippedExecutions);
+        if (skippedMatchAny.Length > 0)
+            incomingRulesJson = RulesExecutionEditor.DropMatchAny(incomingRulesJson, skippedMatchAny);
+
         string? appliedTriggerLabel = null;
         IReadOnlyList<string>? previousTriggerLabels = null;
         if (materializeDoc.RootElement.TryGetProperty("triggerLabel", out var tlProp)
@@ -1339,12 +1364,17 @@ public sealed class OnboardingSubagentTools(
                 .ToArray();
         }
 
+        // Skipping an execution/match-any requires replace: merge-on-save keeps omitted names.
+        var replaceForExecutionEdit = replaceExistingSet
+            || skippedExecutions.Length > 0
+            || skippedMatchAny.Length > 0;
+
         var saveJson = await SaveRules(
                 incomingRulesJson,
                 resolvedAgent,
                 resolvedActivation,
                 requiredPlugins: fullSetCsv,
-                replaceExisting: replaceExistingSet)
+                replaceExisting: replaceForExecutionEdit)
             .ConfigureAwait(false);
 
         using var saveDoc = JsonDocument.Parse(saveJson);
@@ -1428,7 +1458,40 @@ public sealed class OnboardingSubagentTools(
             resolvedActivation,
             replaceExistingSet);
 
+        var executionNamesAfter = RulesExecutionEditor.ExecutionNames(verified.Content);
+        var matchAnyAfter = RulesExecutionEditor.MatchAnyNames(verified.Content);
+        var leftoverExecutions = skippedExecutions
+            .Where(n => executionNamesAfter.Contains(n, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+        var leftoverMatchAny = skippedMatchAny
+            .Where(n => matchAnyAfter.Contains(n, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+        if (leftoverExecutions.Length > 0 || leftoverMatchAny.Length > 0)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                ok = false,
+                claimAllowed = false,
+                error = "Rules save did not persist the execution update (re-read still has skipped items). " +
+                        "Do NOT tell the user the execution was updated.",
+                leftoverExecutions,
+                leftoverMatchAny,
+                executionNames = executionNamesAfter,
+                agentName = resolvedAgent,
+                activationName = resolvedActivation,
+            });
+        }
+
+        var namesBefore = RulesExecutionEditor.ExecutionNames(existing);
+        var matchBefore = RulesExecutionEditor.MatchAnyNames(existing);
         VerifiedInstalledShortNames = installedShort;
+        VerifiedExecutionChange = skippedExecutions.Length > 0
+            || skippedMatchAny.Length > 0
+            || !string.IsNullOrWhiteSpace(appliedTriggerLabel)
+            || !namesBefore.OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+                .SequenceEqual(executionNamesAfter.OrderBy(n => n, StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase)
+            || !matchBefore.OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+                .SequenceEqual(matchAnyAfter.OrderBy(n => n, StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
         if (!string.IsNullOrWhiteSpace(appliedTriggerLabel))
             VerifiedTriggerLabel = appliedTriggerLabel;
 
@@ -1440,7 +1503,10 @@ public sealed class OnboardingSubagentTools(
             persisted = true,
             verifiedFromKnowledge = true,
             scope = "activation",
-            replaceExistingSet,
+            replaceExistingSet = replaceForExecutionEdit,
+            skippedExecutions,
+            skippedMatchAny,
+            executionNames = executionNamesAfter,
             requiredPlugins = fullSet,
             newlyRequested = requested,
             installedPlugins = installed.Select(p => p.PluginName).ToArray(),
@@ -1600,6 +1666,7 @@ public sealed class OnboardingSubagentTools(
 
         VerifiedTriggerLabel = rewritten.NewLabel;
         VerifiedInstalledShortNames = installedShort;
+        VerifiedExecutionChange = true;
 
         _logger.LogInformation(
             "UpdateTriggerLabel set label {NewLabel} (from [{Old}]) for {Agent}/{Activation} replacements={Count}",

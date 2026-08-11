@@ -55,7 +55,9 @@ Then call `ListAvailablePlugins` **with the inferred platform**. Confirm each ch
 
 For each chosen plugin, use that platform’s **`executionOptions`** (not raw JSON).
 
-For **every** execution:
+**Webhook executions only.** Do **not** list `chat`, slash-command, or “Allows manual /pr-review in chat” as an execution. Chat slash commands are not configured in this step.
+
+For **every webhook execution**:
 
 1. Show the execution name.
 2. Show its **`match-any`** section clearly (OR alternatives — the run fires if **any** of these match).
