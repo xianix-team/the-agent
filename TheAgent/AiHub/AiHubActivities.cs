@@ -62,14 +62,17 @@ public sealed class AiHubActivities
         try
         {
             var apiKey = _apiKeyProvider();
-            var actorId = _actorIdProvider();
-            if (!AiHubEventReporter.IsConfigured(apiKey, actorId))
+            if (!AiHubEventReporter.IsConfigured(apiKey))
             {
                 logger.LogDebug(
-                    "AI Hub not configured (missing API key or actor id); skipping report for block '{Block}'.",
+                    "AI Hub not configured (missing API key); skipping report for block '{Block}'.",
                     request.BlockName ?? "—");
                 return;
             }
+
+            var actorId = _actorIdProvider();
+            if (string.IsNullOrWhiteSpace(actorId))
+                actorId = "xianix-agent";
 
             if (_catalog.IsEmpty)
             {

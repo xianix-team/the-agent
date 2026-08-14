@@ -143,13 +143,14 @@ public class AiHubEventBuilderTests
     public void BuildPayloadJson_IncludesExpectedDimensions()
     {
         var json = AiHubEventBuilder.BuildPayloadJson(
-            Mapping(), Result(), "hasinia@99x.io", "corr-9");
+            Mapping(), Result(), "xianix-agent", "corr-9");
 
         using var doc = JsonDocument.Parse(json);
         var root = Assert.Single(doc.RootElement.EnumerateArray());
         Assert.Equal("corr-9", root.GetProperty("correlationId").GetString());
         Assert.Equal("ai-code-review", root.GetProperty("activity").GetString());
-        Assert.Equal("hasinia@99x.io", root.GetProperty("actors")[0].GetProperty("id").GetString());
+        Assert.Equal(JsonValueKind.String, root.GetProperty("actors")[0].ValueKind);
+        Assert.Equal("xianix-agent", root.GetProperty("actors")[0].GetString());
 
         var dims = root.GetProperty("dimensions");
         Assert.Equal(1200, dims.GetProperty("tokens").GetInt64());
@@ -162,7 +163,7 @@ public class AiHubEventBuilderTests
     public void BuildPayloadJson_FailedRun_SetsErrorStatus()
     {
         var json = AiHubEventBuilder.BuildPayloadJson(
-            Mapping(), Result(exitCode: 1), "hasinia@99x.io", "x");
+            Mapping(), Result(exitCode: 1), "xianix-agent", "x");
 
         using var doc = JsonDocument.Parse(json);
         var status = doc.RootElement[0].GetProperty("dimensions").GetProperty("status").GetString();
@@ -173,7 +174,7 @@ public class AiHubEventBuilderTests
     public void BuildPayloadJson_MissingModel_UsesUnknown()
     {
         var json = AiHubEventBuilder.BuildPayloadJson(
-            Mapping(), Result(models: []), "hasinia@99x.io", "x");
+            Mapping(), Result(models: []), "xianix-agent", "x");
 
         using var doc = JsonDocument.Parse(json);
         Assert.Equal("unknown", doc.RootElement[0].GetProperty("dimensions").GetProperty("model").GetString());
@@ -183,7 +184,7 @@ public class AiHubEventBuilderTests
     public void BuildPayloadJson_EmptyCorrelationId_GeneratesGuid()
     {
         var json = AiHubEventBuilder.BuildPayloadJson(
-            Mapping(), Result(), "hasinia@99x.io", null);
+            Mapping(), Result(), "xianix-agent", null);
 
         using var doc = JsonDocument.Parse(json);
         var id = doc.RootElement[0].GetProperty("correlationId").GetString();
@@ -208,12 +209,11 @@ public class AiHubEventBuilderTests
 public class AiHubEventReporterTests
 {
     [Fact]
-    public void IsConfigured_RequiresApiKeyAndActor()
+    public void IsConfigured_RequiresApiKey()
     {
-        Assert.False(AiHubEventReporter.IsConfigured("", "a@b.com"));
-        Assert.False(AiHubEventReporter.IsConfigured("key", ""));
-        Assert.False(AiHubEventReporter.IsConfigured(null, null));
-        Assert.True(AiHubEventReporter.IsConfigured("key", "a@b.com"));
+        Assert.False(AiHubEventReporter.IsConfigured(""));
+        Assert.False(AiHubEventReporter.IsConfigured(null));
+        Assert.True(AiHubEventReporter.IsConfigured("key"));
     }
 
     [Fact]
@@ -304,7 +304,7 @@ public class AiHubActivitiesTests
             Catalog(),
             () => new HttpClient(handler),
             () => "api-key",
-            () => "hasinia@99x.io",
+            () => "xianix-agent",
             () => "https://ai-hub.test");
 
         await activities.ReportExecutionAsync(new AiHubReportRequest
@@ -317,8 +317,16 @@ public class AiHubActivitiesTests
 
         Assert.Equal(1, handler.CallCount);
         Assert.Contains("/metrics/nodes/4/events", handler.LastUrl);
-        Assert.Contains("ai-code-review", handler.LastBody);
-        Assert.Contains("hasinia@99x.io", handler.LastBody);
+        using var doc = JsonDocument.Parse(handler.LastBody!);
+        var root = Assert.Single(doc.RootElement.EnumerateArray());
+        Assert.Equal("ai-code-review", root.GetProperty("activity").GetString());
+        Assert.Equal(JsonValueKind.String, root.GetProperty("actors")[0].ValueKind);
+        Assert.Equal("xianix-agent", root.GetProperty("actors")[0].GetString());
+        var dims = root.GetProperty("dimensions");
+        Assert.Equal(15, dims.GetProperty("tokens").GetInt64());
+        Assert.Equal(0.01, dims.GetProperty("costUsd").GetDouble());
+        Assert.Equal("claude-sonnet-4-5", dims.GetProperty("model").GetString());
+        Assert.Equal("success", dims.GetProperty("status").GetString());
     }
 
     [Fact]
@@ -329,7 +337,7 @@ public class AiHubActivitiesTests
             Catalog(),
             () => new HttpClient(handler),
             () => "api-key",
-            () => "hasinia@99x.io",
+            () => "xianix-agent",
             () => "https://ai-hub.test");
 
         await activities.ReportExecutionAsync(new AiHubReportRequest
@@ -351,7 +359,7 @@ public class AiHubActivitiesTests
             Catalog(),
             () => new HttpClient(handler),
             () => "",
-            () => "hasinia@99x.io",
+            () => "xianix-agent",
             () => "https://ai-hub.test");
 
         await activities.ReportExecutionAsync(new AiHubReportRequest

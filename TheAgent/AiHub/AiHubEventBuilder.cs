@@ -47,10 +47,7 @@ internal static class AiHubEventBuilder
             {
                 CorrelationId = id,
                 Activity = mapping.Activity,
-                Actors =
-                [
-                    new AiHubActorDto { Id = actorId.Trim() },
-                ],
+                Actors = [actorId.Trim()],
                 Dimensions = new AiHubDimensionsDto
                 {
                     Tokens = tokens,
@@ -97,13 +94,8 @@ internal static class AiHubEventBuilder
     {
         public required string CorrelationId { get; init; }
         public required string Activity { get; init; }
-        public required AiHubActorDto[] Actors { get; init; }
+        public required string[] Actors { get; init; }
         public required AiHubDimensionsDto Dimensions { get; init; }
-    }
-
-    private sealed class AiHubActorDto
-    {
-        public required string Id { get; init; }
     }
 
     private sealed class AiHubDimensionsDto

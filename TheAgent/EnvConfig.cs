@@ -174,10 +174,10 @@ public static class EnvConfig
     public static string AiHubApiKey => Get("AIHUB-API-KEY");
 
     /// <summary>
-    /// Actor id (typically a real AI Hub user email) written into each event's <c>actors[0].id</c>.
-    /// When empty, AI Hub posting is skipped.
+    /// Actor string written into each event's <c>actors</c> array. Defaults to
+    /// <c>xianix-agent</c>. Override with <c>AIHUB-ACTOR-ID</c> if needed.
     /// </summary>
-    public static string AiHubActorId => Get("AIHUB-ACTOR-ID");
+    public static string AiHubActorId => Get("AIHUB-ACTOR-ID", "xianix-agent");
 
     /// <summary>
     /// Optional path to an <c>ai-hub.json</c> mapping file. Empty means: file next to the

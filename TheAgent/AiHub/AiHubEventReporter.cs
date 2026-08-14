@@ -27,13 +27,13 @@ internal sealed class AiHubEventReporter
     }
 
     /// <summary>
-    /// Returns <see langword="true"/> when host env has both API key and actor id configured.
+    /// Returns <see langword="true"/> when an API key is configured. Actor defaults to
+    /// <c>xianix-agent</c> and is not required to post.
     /// </summary>
-    public static bool IsConfigured(string? apiKey = null, string? actorId = null)
+    public static bool IsConfigured(string? apiKey = null)
     {
         var key = string.IsNullOrWhiteSpace(apiKey) ? EnvConfig.AiHubApiKey : apiKey;
-        var actor = string.IsNullOrWhiteSpace(actorId) ? EnvConfig.AiHubActorId : actorId;
-        return !string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(actor);
+        return !string.IsNullOrWhiteSpace(key);
     }
 
     public async Task<bool> PostEventAsync(
