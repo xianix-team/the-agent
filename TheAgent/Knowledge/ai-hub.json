@@ -13,8 +13,8 @@
     "aihub-node-id": "3",
     "aihub-activity": "performance-refactoring",
     "xianix-execution-plugin": {
-      "execution": "github-performance-review",
-      "plugin-name": "performance-reviewer@xianix-plugins-official"
+      "execution": "github-performance-optimizer",
+      "plugin-name": "perf-optimizer@xianix-plugins-official"
     }
   }
 ]

@@ -278,6 +278,12 @@ public class XianixAgent(
             knowledgeName: Constants.SystemPromptKnowledgeName,
             knowledgeType: "markdown"
         );
+
+        await xiansAgent.Knowledge.UploadEmbeddedResourceAsync(
+            resourcePath: "Knowledge/ai-hub.json",
+            knowledgeName: Constants.AiHubMappingKnowledgeName,
+            knowledgeType: "json"
+        );
     }
 
     private void LogWebhookVerificationFailure(

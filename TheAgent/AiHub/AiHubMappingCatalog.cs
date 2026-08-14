@@ -1,14 +1,14 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using TheAgent;
 using Xianix.Rules;
 
 namespace Xianix.AiHub;
 
 /// <summary>
-/// Loads <c>ai-hub.json</c> once per process. Override path: <c>AIHUB-MAPPING-PATH</c>,
-/// then a file next to the assembly under <c>AiHub/ai-hub.json</c>. Missing/empty file
-/// means AI Hub posting is off (empty catalog).
+/// Parsed execution-block → AI Hub node mappings from the
+/// <see cref="Xianix.Constants.AiHubMappingKnowledgeName"/> knowledge document.
+/// At runtime use <see cref="AiHubMappingKnowledge.LoadAsync"/>; <see cref="Parse"/>
+/// is for tests and that loader. Empty catalog means AI Hub posting is off.
 /// </summary>
 public sealed class AiHubMappingCatalog
 {
@@ -20,11 +20,6 @@ public sealed class AiHubMappingCatalog
     };
 
     private readonly IReadOnlyList<AiHubMappingEntry> _entries;
-
-    private static readonly Lazy<AiHubMappingCatalog> Shared =
-        new(LoadDefault, LazyThreadSafetyMode.ExecutionAndPublication);
-
-    public static AiHubMappingCatalog Default => Shared.Value;
 
     public IReadOnlyList<AiHubMappingEntry> Entries => _entries;
 
@@ -101,20 +96,6 @@ public sealed class AiHubMappingCatalog
         }
 
         return null;
-    }
-
-    private static AiHubMappingCatalog LoadDefault()
-    {
-        var path = EnvConfig.AiHubMappingPath;
-        if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
-            return Parse(File.ReadAllText(path));
-
-        var besideAssembly = Path.Combine(
-            AppContext.BaseDirectory, "AiHub", "ai-hub.json");
-        if (File.Exists(besideAssembly))
-            return Parse(File.ReadAllText(besideAssembly));
-
-        return new AiHubMappingCatalog([]);
     }
 
     private sealed class MappingFileEntryDto

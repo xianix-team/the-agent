@@ -186,6 +186,59 @@
           "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}}. Run /pr-review {{pr-number}} to perform the automated review."
         },
         {
+          "name": "github-performance-optimizer",
+          "platform": "github",
+          "repository": {
+            "url": "repository.clone_url",
+            "ref": "repository.default_branch"
+          },
+          "match-any": [
+            {
+              "name": "github-issue-label-applied",
+              "rule": "action==labeled&&label.name=='ai-dlc/perf/optimize'&&issue.number?&&issue.pull_request!?"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "issue-number",
+              "value": "issue.number",
+              "mandatory": true
+            },
+            {
+              "name": "issue-title",
+              "value": "issue.title"
+            },
+            {
+              "name": "issue-body",
+              "value": "issue.body"
+            },
+            {
+              "name": "repository-name",
+              "value": "repository.full_name"
+            },
+            {
+              "name": "default-branch",
+              "value": "repository.default_branch"
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "perf-optimizer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "GITHUB-TOKEN",
+              "value": "secrets.GITHUB-TOKEN",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 5,
+          "execute-prompt": "You are running a whole-codebase performance review for repository {{repository-name}} triggered by issue #{{issue-number}} titled \"{{issue-title}}\".\n\nFetch the default branch ({{default-branch}}), parse any `Scope:` / `Target:` hints from the issue body below, and run /perf-optimize across the selected scope (default: entire codebase).\n\nApply only low-risk optimizations on a new branch named `perf/issue-{{issue-number}}-<slug>` and open a pull request against {{default-branch}}. The PR body MUST embed the full performance report and include `Closes #{{issue-number}}`. After opening the PR, post a comment on issue #{{issue-number}} linking to it.\n\nIssue body:\n{{issue-body}}"
+        },
+        {
           "name": "azuredevops-pull-request-review",
           "platform": "azuredevops",
           "repository": {

@@ -9,10 +9,12 @@ namespace Xianix.AiHub;
 /// <summary>
 /// Temporal activity that posts mapped container-execution metrics to AI Hub.
 /// Failures are swallowed so metrics never break a user-facing run.
+/// Mapping comes from the <see cref="Xianix.Constants.AiHubMappingKnowledgeName"/> knowledge
+/// document (same channel as <c>rules.json</c>).
 /// </summary>
 public sealed class AiHubActivities
 {
-    private readonly AiHubMappingCatalog _catalog;
+    private readonly Func<ILogger, Task<AiHubMappingCatalog?>> _catalogProvider;
     private readonly Func<HttpClient> _httpClientFactory;
     private readonly Func<string> _apiKeyProvider;
     private readonly Func<string> _actorIdProvider;
@@ -20,7 +22,7 @@ public sealed class AiHubActivities
 
     public AiHubActivities()
         : this(
-            AiHubMappingCatalog.Default,
+            AiHubMappingKnowledge.LoadAsync,
             () => new HttpClient(),
             () => EnvConfig.AiHubApiKey,
             () => EnvConfig.AiHubActorId,
@@ -28,15 +30,30 @@ public sealed class AiHubActivities
     {
     }
 
-    /// <summary>Test/seam constructor.</summary>
+    /// <summary>Test/seam constructor taking a fixed catalog.</summary>
     internal AiHubActivities(
         AiHubMappingCatalog catalog,
         Func<HttpClient> httpClientFactory,
         Func<string> apiKeyProvider,
         Func<string> actorIdProvider,
         Func<string> apiUrlProvider)
+        : this(
+            _ => Task.FromResult<AiHubMappingCatalog?>(catalog ?? throw new ArgumentNullException(nameof(catalog))),
+            httpClientFactory,
+            apiKeyProvider,
+            actorIdProvider,
+            apiUrlProvider)
     {
-        _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+    }
+
+    private AiHubActivities(
+        Func<ILogger, Task<AiHubMappingCatalog?>> catalogProvider,
+        Func<HttpClient> httpClientFactory,
+        Func<string> apiKeyProvider,
+        Func<string> actorIdProvider,
+        Func<string> apiUrlProvider)
+    {
+        _catalogProvider = catalogProvider ?? throw new ArgumentNullException(nameof(catalogProvider));
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _apiKeyProvider = apiKeyProvider ?? throw new ArgumentNullException(nameof(apiKeyProvider));
         _actorIdProvider = actorIdProvider ?? throw new ArgumentNullException(nameof(actorIdProvider));
@@ -74,14 +91,15 @@ public sealed class AiHubActivities
             if (string.IsNullOrWhiteSpace(actorId))
                 actorId = "xianix-agent";
 
-            if (_catalog.IsEmpty)
+            var catalog = await _catalogProvider(logger).ConfigureAwait(false);
+            if (catalog is null || catalog.IsEmpty)
             {
                 logger.LogDebug("AI Hub mapping catalog is empty; skipping report.");
                 return;
             }
 
             var plugins = request.Plugins ?? [];
-            var mapping = _catalog.TryFind(request.BlockName, plugins);
+            var mapping = catalog.TryFind(request.BlockName, plugins);
             if (mapping is null)
             {
                 logger.LogDebug(

@@ -178,10 +178,4 @@ public static class EnvConfig
     /// <c>xianix-agent</c>. Override with <c>AIHUB-ACTOR-ID</c> if needed.
     /// </summary>
     public static string AiHubActorId => Get("AIHUB-ACTOR-ID", "xianix-agent");
-
-    /// <summary>
-    /// Optional path to an <c>ai-hub.json</c> mapping file. Empty means: file next to the
-    /// assembly under <c>AiHub/ai-hub.json</c>. Missing file = AI Hub off.
-    /// </summary>
-    public static string AiHubMappingPath => Get("AIHUB-MAPPING-PATH");
 }
