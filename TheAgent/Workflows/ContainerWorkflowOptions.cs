@@ -49,4 +49,14 @@ public static class ContainerWorkflowOptions
         StartToCloseTimeout = TimeSpan.FromMinutes(2),
         RetryPolicy = new() { MaximumAttempts = 1 },
     };
+
+    /// <summary>
+    /// Options for optional AI Hub metrics posting. Short timeout, no retries —
+    /// avoid duplicate events on 4xx and never stall the container pipeline.
+    /// </summary>
+    public static readonly ActivityOptions AiHub = new()
+    {
+        StartToCloseTimeout = TimeSpan.FromSeconds(30),
+        RetryPolicy = new() { MaximumAttempts = 1 },
+    };
 }

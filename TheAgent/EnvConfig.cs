@@ -160,4 +160,28 @@ public static class EnvConfig
     /// Defaults to the cheapest tier so building context never becomes a meaningful cost line.
     /// </summary>
     public static string ExecutorContextLlmModel => Get("EXECUTOR-CONTEXT-LLM-MODEL", "claude-haiku-4-5");
+
+    // AI Hub (optional post-execution metrics)
+    /// <summary>
+    /// Base URL for the AI Hub metrics API. Defaults to <c>https://ai-hub-api.99x.io</c>.
+    /// Events are posted to <c>{url}/metrics/nodes/{nodeId}/events</c> when a mapping matches.
+    /// </summary>
+    public static string AiHubApiUrl => Get("AIHUB-API-URL", "https://ai-hub-api.99x.io").TrimEnd('/');
+
+    /// <summary>
+    /// Personal or team API key sent as <c>X-Api-Key</c>. When empty, AI Hub posting is skipped.
+    /// </summary>
+    public static string AiHubApiKey => Get("AIHUB-API-KEY");
+
+    /// <summary>
+    /// Actor id (typically a real AI Hub user email) written into each event's <c>actors[0].id</c>.
+    /// When empty, AI Hub posting is skipped.
+    /// </summary>
+    public static string AiHubActorId => Get("AIHUB-ACTOR-ID");
+
+    /// <summary>
+    /// Optional path to an <c>ai-hub.json</c> mapping file. Empty means: file next to the
+    /// assembly under <c>AiHub/ai-hub.json</c>. Missing file = AI Hub off.
+    /// </summary>
+    public static string AiHubMappingPath => Get("AIHUB-MAPPING-PATH");
 }

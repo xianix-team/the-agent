@@ -1,0 +1,20 @@
+[
+  {
+    "aihub-workflow-name": "Main development Flow",
+    "aihub-node-id": "4",
+    "aihub-activity": "ai-code-review",
+    "xianix-execution-plugin": {
+      "execution": "github-pull-request-review",
+      "plugin-name": "pr-reviewer@xianix-plugins-official"
+    }
+  },
+  {
+    "aihub-workflow-name": "Main development Flow",
+    "aihub-node-id": "3",
+    "aihub-activity": "performance-refactoring",
+    "xianix-execution-plugin": {
+      "execution": "github-performance-review",
+      "plugin-name": "performance-reviewer@xianix-plugins-official"
+    }
+  }
+]

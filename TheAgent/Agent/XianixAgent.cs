@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using TheAgent;
 using Xianix.Activities;
+using Xianix.AiHub;
 using Xianix.Orchestrator;
 using Xianix.Rules;
 using Xianix.Workflows;
@@ -126,12 +127,14 @@ public class XianixAgent(
             .DefineCustom<ProcessingWorkflow>(
                 new WorkflowOptions { Activable = false },
                 typeName: EnvConfig.AgentName + ":Processing Workflow")
-            .AddActivity<ContainerActivities>();
+            .AddActivity<ContainerActivities>()
+            .AddActivity<AiHubActivities>();
 
         xiansAgent.Workflows
             .DefineCustom<ClaudeCodeChatWorkflow>(new WorkflowOptions { Activable = false },
             typeName: EnvConfig.AgentName + ":ClaudeCodeChat Workflow")
-            .AddActivity<ContainerActivities>();
+            .AddActivity<ContainerActivities>()
+            .AddActivity<AiHubActivities>();
 
         xiansAgent.Workflows
             .DefineCustom<OnboardRepositoryWorkflow>(new WorkflowOptions { Activable = false },

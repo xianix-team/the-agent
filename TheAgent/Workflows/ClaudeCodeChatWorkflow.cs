@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Temporalio.Exceptions;
 using Temporalio.Workflows;
 using Xianix.Activities;
+using Xianix.AiHub;
 using Xianix.Containers;
 using Xians.Lib.Agents.Core;
 
@@ -73,10 +74,11 @@ public class ClaudeCodeChatWorkflow
     private static async Task ExecutePipelineAsync(
         ClaudeCodeChatRequest req, string volumeName, string runtimeVolumeName)
     {
+        var executionId = Workflow.NewGuid().ToString("N")[..8];
         var input = new ContainerExecutionInput
         {
             TenantId          = req.TenantId,
-            ExecutionId       = Workflow.NewGuid().ToString("N")[..8],
+            ExecutionId       = executionId,
             InputsJson        = JsonSerializer.Serialize(req.Inputs),
             ClaudeCodePlugins = ContainerPluginSerialization.Serialize(req.Plugins),
             WithEnvsJson      = ContainerEnvSerialization.Serialize(req.WithEnvs),
@@ -111,6 +113,7 @@ public class ClaudeCodeChatWorkflow
 
             ContainerOutputParser.Parse(result);
             await ReportChatExecutionMetricsAsync(req, result);
+            await ReportAiHubMetricsAsync(req, result, executionId);
 
             string summary;
             if (result.Succeeded)
@@ -216,6 +219,37 @@ public class ClaudeCodeChatWorkflow
         {
             Workflow.Logger.LogWarning(ex,
                 "Failed to report chat execution metrics for tenant '{TenantId}', repo '{Repo}'. Metrics are non-critical.",
+                req.TenantId, req.RepositoryName);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort AI Hub post when chat-driven plugins match a mapping. Chat runs usually
+    /// have no execution block name, so most will no-op unless a block name is present later.
+    /// </summary>
+    private static async Task ReportAiHubMetricsAsync(
+        ClaudeCodeChatRequest req,
+        ContainerExecutionResult result,
+        string executionId)
+    {
+        try
+        {
+            var request = new AiHubReportRequest
+            {
+                BlockName = null,
+                Plugins = req.Plugins,
+                CorrelationId = executionId,
+                Result = result,
+            };
+
+            await Workflow.ExecuteActivityAsync(
+                (AiHubActivities a) => a.ReportExecutionAsync(request),
+                ContainerWorkflowOptions.AiHub);
+        }
+        catch (Exception ex)
+        {
+            Workflow.Logger.LogWarning(ex,
+                "Failed to report AI Hub metrics for tenant '{TenantId}', repo '{Repo}'. Metrics are non-critical.",
                 req.TenantId, req.RepositoryName);
         }
     }
