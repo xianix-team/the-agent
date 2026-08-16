@@ -38,13 +38,18 @@ log() { echo "$@" >&2; }
 # instead; bash handles the braces correctly there.
 : "${XIANIX_INPUTS:={\}}"
 REPOSITORY_URL=$(echo "${XIANIX_INPUTS}" | jq -r '."repository-url" // empty')
-PLATFORM=$(echo "${XIANIX_INPUTS}"       | jq -r '.platform // empty')
+# Named XIANIX_PLATFORM (not PLATFORM): MSBuild treats PLATFORM as the solution
+# Platform property, so `export PLATFORM=github` makes `dotnet build` fail with
+# MSB4126 ("Debug|github is invalid") and can send the agent into retry/OOM.
+XIANIX_PLATFORM=$(echo "${XIANIX_INPUTS}" | jq -r '.platform // empty')
 
-if [ -n "${REPOSITORY_URL}" ] && [ -z "${PLATFORM}" ]; then
-    PLATFORM="github"
+if [ -n "${REPOSITORY_URL}" ] && [ -z "${XIANIX_PLATFORM}" ]; then
+    XIANIX_PLATFORM="github"
 fi
 
-export REPOSITORY_URL PLATFORM
+export REPOSITORY_URL XIANIX_PLATFORM
+# Drop an inherited PLATFORM so MSBuild never sees github/azuredevops as a target.
+unset PLATFORM
 
 # ── Workspace paths ──────────────────────────────────────────────────────────
 REPO_DIR="/workspace/repo"
@@ -76,7 +81,7 @@ _set_basic_auth_header() {
 configure_credentials() {
     : > "${GIT_CRED_FILE}"
 
-    case "${PLATFORM}" in
+    case "${XIANIX_PLATFORM}" in
         github)
             if [ -z "${GITHUB_TOKEN:-}" ]; then
                 # Fail loudly instead of cloning anonymously. An anonymous clone of a
@@ -119,7 +124,7 @@ configure_credentials() {
             fi
             ;;
         *)
-            log "WARNING: Unknown platform '${PLATFORM}' — no credentials configured."
+            log "WARNING: Unknown platform '${XIANIX_PLATFORM}' — no credentials configured."
             ;;
     esac
 

@@ -54,7 +54,7 @@ log "Tenant:              ${TENANT_ID}"
 log "Execution ID:        ${EXECUTION_ID}"
 log "Mode:                ${XIANIX_MODE}"
 log "Repository:          ${REPOSITORY_URL:-<none>}"
-log "Platform:            ${PLATFORM:-<none>}"
+log "Platform:            ${XIANIX_PLATFORM:-<none>}"
 
 # True when the bare repo has linked worktrees beyond itself, i.e. another
 # concurrent execution is (or recently was) checked out against this volume.
