@@ -148,6 +148,8 @@ RUN set -eux; \
 
 COPY execute_plugin.py /workspace/execute_plugin.py
 COPY host_context.py /workspace/host_context.py
+COPY instruction_hardening.py /workspace/instruction_hardening.py
+COPY system_prompt_hardening.md /workspace/system_prompt_hardening.md
 COPY _common.sh /workspace/_common.sh
 COPY prepare_repo.sh /workspace/prepare_repo.sh
 COPY run_prompt.sh /workspace/run_prompt.sh

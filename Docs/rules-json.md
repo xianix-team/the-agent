@@ -506,7 +506,9 @@ The decrypted value is injected as the named env var into the executor container
 
 A string template run as the Claude Code prompt after plugins are installed. Use `{{input-name}}` placeholders for resolved `use-inputs` values.
 
-Placeholders are replaced case-insensitively. Any `{{name}}` with no matching input is left unchanged.
+Placeholders are replaced case-insensitively. Each substituted value is wrapped in `<user_data name="…">…</user_data>` so the executor model treats webhook fields (PR titles, comments, etc.) as untrusted data rather than instructions. A payload that contains the literal `</user_data>` sequence has that sequence broken up so it cannot close the wrapper. Any `{{name}}` with no matching input is left unchanged.
+
+The executor then appends a hardened system prompt (Claude Code preset + a per-run canary) and refuses environment-variable / secret-path tool calls regardless of what the interpolated prompt says.
 
 ---
 
