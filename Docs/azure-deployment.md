@@ -81,7 +81,7 @@ Tenant CM credentials (GitHub PAT, Azure DevOps PAT, …) are **not** read from 
 
 At container-start time the agent calls `XiansContext.CurrentAgent.Secrets.TenantScope().FetchByKeyAsync("GITHUB-TOKEN")` for the active tenant. If the secret is missing and the entry is `mandatory: true`, the executor container fails to start with a non-retryable error — there is no host-level fallback that would silently let one tenant borrow another's credential.
 
-Use the Key Vault entries described below only for genuinely host-wide settings (`XIANS-API-KEY`, `XIANS-SERVER-URL`, deployment knobs, and *optionally* `ANTHROPIC-API-KEY` if you want a host-level fallback for the supervisor + executor LLM key). `ANTHROPIC-API-KEY` is no longer required for the agent to boot: it is resolved at the supervisor's first chat message from the rule-set-level `with-envs` entry in `rules.json` and only falls back to the host value when present — see [`Docs/rules-json.md`](./rules-json.md#5-with-envs--container-environment-variables) for full resolution rules. The startup script (`Scripts/vm/start-agent.sh`) gates only `XIANS-SERVER-URL` and `XIANS-API-KEY`.
+Use the Key Vault entries described below for host-wide settings (`XIANS-API-KEY`, `XIANS-SERVER-URL`, deployment knobs, and `ANTHROPIC-API-KEY` for the supervisor + Rules Optimizer chat agents). Chat subagents read the Anthropic key from the host env at process start. Executor containers still seed from that host value when present, or from a rule-set-level `with-envs` entry in `rules.json` — see [`Docs/rules-json.md`](./rules-json.md#5-with-envs--container-environment-variables). The startup script (`Scripts/vm/start-agent.sh`) gates `XIANS-SERVER-URL` and `XIANS-API-KEY`.
 
 ### Working with KeyVault secrets
 

@@ -127,27 +127,24 @@ public sealed class OnboardingSubagentTools(
 
         object[] webhooks = [];
         string? webhookError = null;
-        if (!string.IsNullOrWhiteSpace(resolvedAgent) && !string.IsNullOrWhiteSpace(resolvedActivation))
+        try
         {
-            try
-            {
-                var listed = await _platform
-                    .ListBuiltinWebhooksAsync()
-                    .ConfigureAwait(false);
-                webhooks = listed
-                    .Select(w => (object)new
-                    {
-                        integrationId = w.IntegrationId,
-                        webhookName = w.WebhookName,
-                        webhookUrl = w.WebhookUrl,
-                    })
-                    .ToArray();
-            }
-            catch (Exception ex)
-            {
-                webhookError = $"Could not list webhooks: {ex.Message}";
-                _logger.LogWarning(ex, "GetTenantState failed to list webhooks for {TenantId}", tenantId);
-            }
+            var listed = await _platform
+                .ListBuiltinWebhooksAsync()
+                .ConfigureAwait(false);
+            webhooks = listed
+                .Select(w => (object)new
+                {
+                    integrationId = w.IntegrationId,
+                    webhookName = w.WebhookName,
+                    webhookUrl = w.WebhookUrl,
+                })
+                .ToArray();
+        }
+        catch (Exception ex)
+        {
+            webhookError = $"Could not list webhooks: {ex.Message}";
+            _logger.LogWarning(ex, "GetTenantState failed to list webhooks for {TenantId}", tenantId);
         }
 
         var secretKeys = new[] { "GITHUB-TOKEN", "AZURE-DEVOPS-TOKEN", "ANTHROPIC-API-KEY" };
@@ -272,11 +269,8 @@ public sealed class OnboardingSubagentTools(
         "Returns the full public webhook URL. For GitHub this is NOT fully done — call " +
         "RegisterGitHubRepositoryWebhook next and require connectionStatus=established.")]
     public async Task<string> CreateWebhookConnection(
-        [Description("Webhook name from rules.json (default: Default).")] string webhookName = "Default",
-        [Description("Optional override when activation context is missing.")] string? agentName = null,
-        [Description("Optional override when activation context is missing.")] string? activationName = null)
+        [Description("Webhook name from rules.json (default: Default).")] string webhookName = "Default")
     {
-        // agentName/activationName tool params kept for schema stability; identity always comes from context.
         var (resolvedAgent, resolvedActivation) = OnboardingMessageContext.Resolve();
 
         if (string.IsNullOrWhiteSpace(resolvedAgent) || string.IsNullOrWhiteSpace(resolvedActivation))
@@ -1144,8 +1138,6 @@ public sealed class OnboardingSubagentTools(
         string pluginNames,
         [Description("Repository clone URL baked into executions; also used to infer platform when platform is omitted. Optional when replaceExistingSet=true and pluginNames is empty.")] string? repositoryUrl = null,
         [Description("Optional platform override: github or azuredevops. Omit to infer from repositoryUrl.")] string? platform = null,
-        [Description("Optional override when agent context is missing.")] string? agentName = null,
-        [Description("Optional override when activation context is missing.")] string? activationName = null,
         [Description(
             "When true, pluginNames is the complete desired set — omitted installed plugins are removed. " +
             "Use for uninstall / replace flows. Default false keeps already-installed plugins.")]
@@ -1180,8 +1172,6 @@ public sealed class OnboardingSubagentTools(
             // Uninstall-all: persist the empty activation skeleton (no rematerialize / repo needed).
             var clearJson = await SaveRules(
                     InstalledPluginsCatalog.FreshActivationRulesJson,
-                    agentName,
-                    activationName,
                     requiredPlugins: null,
                     replaceExisting: true)
                 .ConfigureAwait(false);
@@ -1214,7 +1204,6 @@ public sealed class OnboardingSubagentTools(
             });
         }
 
-        // agentName/activationName tool params kept for schema stability; identity always comes from context.
         var (resolvedAgent, resolvedActivation) = OnboardingMessageContext.Resolve();
 
         if (string.IsNullOrWhiteSpace(resolvedAgent) || string.IsNullOrWhiteSpace(resolvedActivation))
@@ -1297,8 +1286,6 @@ public sealed class OnboardingSubagentTools(
 
         var saveJson = await SaveRules(
                 incomingRulesJson,
-                resolvedAgent,
-                resolvedActivation,
                 requiredPlugins: fullSetCsv,
                 replaceExisting: replaceForExecutionEdit)
             .ConfigureAwait(false);
@@ -1460,9 +1447,7 @@ public sealed class OnboardingSubagentTools(
         string newLabel,
         [Description(
             "Optional existing label to replace. Omit to replace every label found in match-any rules.")]
-        string? fromLabel = null,
-        [Description("Optional override when agent context is missing.")] string? agentName = null,
-        [Description("Optional override when activation context is missing.")] string? activationName = null)
+        string? fromLabel = null)
     {
         if (string.IsNullOrWhiteSpace(newLabel))
         {
@@ -1473,7 +1458,6 @@ public sealed class OnboardingSubagentTools(
             });
         }
 
-        // agentName/activationName tool params kept for schema stability; identity always comes from context.
         var (resolvedAgent, resolvedActivation) = OnboardingMessageContext.Resolve();
 
         if (string.IsNullOrWhiteSpace(resolvedAgent) || string.IsNullOrWhiteSpace(resolvedActivation))
@@ -1552,8 +1536,6 @@ public sealed class OnboardingSubagentTools(
 
         var saveJson = await SaveRules(
                 rewritten.RulesJson,
-                resolvedAgent,
-                resolvedActivation,
                 requiredPlugins: requiredCsv,
                 replaceExisting: true)
             .ConfigureAwait(false);
@@ -1624,12 +1606,9 @@ public sealed class OnboardingSubagentTools(
         [Description(
             "Optional comma-separated short names that MUST be present " +
             "(e.g. perf-optimizer,pr-reviewer,req-analyst).")]
-        string? requiredPlugins = null,
-        [Description("Optional override when agent context is missing.")] string? agentName = null,
-        [Description("Optional override when activation context is missing.")] string? activationName = null)
+        string? requiredPlugins = null)
     {
         var required = RulesInstallValidation.ParsePluginNameList(requiredPlugins);
-        // agentName/activationName tool params kept for schema stability; identity always comes from context.
         var (resolvedAgent, resolvedActivation) = OnboardingMessageContext.Resolve();
 
         if (string.IsNullOrWhiteSpace(resolvedAgent) || string.IsNullOrWhiteSpace(resolvedActivation))
@@ -2013,8 +1992,6 @@ public sealed class OnboardingSubagentTools(
         "ONLY call after ValidateRulesJson succeeded and the user explicitly confirmed — or prefer InstallPlugins for installs.")]
     public async Task<string> SaveRules(
         [Description("Complete validated rules.json text (JSON array) including ALL configured plugins.")] string rulesJson,
-        [Description("Optional override when agent context is missing.")] string? agentName = null,
-        [Description("Optional override when activation context is missing.")] string? activationName = null,
         [Description(
             "Optional comma-separated plugin short names that MUST be present after merge/save " +
             "(e.g. pr-reviewer,perf-optimizer). Required for install flows.")]
@@ -2038,7 +2015,6 @@ public sealed class OnboardingSubagentTools(
 
         // Updates land at AGENT scope (Studio: Agent = activation-scoped Knowledge).
         // systemScoped=false + activationName=… — system seed and org scope stay untouched.
-        // agentName/activationName tool params kept for schema stability; identity always comes from context.
         var (resolvedAgent, resolvedActivation) = OnboardingMessageContext.Resolve();
 
         if (string.IsNullOrWhiteSpace(resolvedAgent) || string.IsNullOrWhiteSpace(resolvedActivation))
@@ -2112,8 +2088,6 @@ public sealed class OnboardingSubagentTools(
             }
 
             // Strict post-save verify: re-read Knowledge and ensure required plugins persisted.
-            // Prefer a short verify when the save already returned a knowledge id (content is
-            // already known to have been accepted by Admin).
             var verifiedContent = await _platform
                 .GetRulesContentAsync()
                 .ConfigureAwait(false);

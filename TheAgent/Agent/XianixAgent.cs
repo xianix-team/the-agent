@@ -83,10 +83,8 @@ public class XianixAgent(
                     "Chat subagent failed for tenant '{TenantId}', participant '{ParticipantId}', scope '{Scope}'.",
                     context.Message.TenantId, context.Message.ParticipantId, context.Message.Scope);
 
-                // Surface the root cause to the user so actionable failures (e.g. a
-                // missing ANTHROPIC-API-KEY for this tenant) can be fixed without
-                // digging through server logs. GetBaseException unwraps wrapper
-                // exceptions so the innermost, most specific message is shown.
+                // Surface the root cause so the user can fix it without logs.
+                // GetBaseException unwraps wrappers to the innermost message.
                 var reason = ex.GetBaseException().Message;
                 await context.ReplyAsync(
                     string.IsNullOrWhiteSpace(reason)

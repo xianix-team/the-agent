@@ -3,13 +3,9 @@ set -euo pipefail
 
 VAULT_NAME="xianix-kv-agent"
 # Only the Xians platform credentials are required at the script level.
-# ANTHROPIC-API-KEY is deliberately optional here: it is resolved by the agent
-# from the rule-set-level `with-envs` entry in the uploaded rules.json on the
-# supervisor's first chat message (see Xianix.Rules.StartupEnvResolver), and
-# the host env still acts as a fallback when present. If the secret exists in
-# Key Vault it is forwarded; if not, the agent falls back to its rules.json
-# resolution. Removing it from this gate lets the VM boot without a host-level
-# Anthropic key so operators can manage that credential entirely from rules.json.
+# Chat subagents read ANTHROPIC-API-KEY from the host env at process start.
+# If the secret exists in Key Vault it is forwarded; if not, the agent process
+# will fail when constructing those subagents.
 REQUIRED_VARS=("XIANS-SERVER-URL" "XIANS-API-KEY")
 
 # ── Acquire a bearer token from the Azure Instance Metadata Service (IMDS) ──

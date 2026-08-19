@@ -2,7 +2,6 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using TheAgent;
 using Xians.Lib.Agents.Core;
 using Xians.Lib.Agents.Knowledge;
 using Xianix;
@@ -19,18 +18,7 @@ internal static class OnboardingMessageContext
         string? agentName = null;
         string? activationName = null;
         try { agentName = XiansContext.CurrentAgent?.Name; } catch { /* no agent bound */ }
-        if (string.IsNullOrWhiteSpace(agentName))
-        {
-            try { agentName = XiansContext.SafeAgentName; } catch { /* ignore */ }
-        }
-        if (string.IsNullOrWhiteSpace(agentName))
-            agentName = TheAgent.EnvConfig.AgentName;
-
-        try { activationName = XiansContext.GetIdPostfix(); } catch { /* ignore */ }
-        if (string.IsNullOrWhiteSpace(activationName))
-        {
-            try { activationName = XiansContext.SafeIdPostfix; } catch { /* ignore */ }
-        }
+        try { activationName = XiansContext.GetIdPostfix(); } catch { /* no workflow bound */ }
 
         return (
             string.IsNullOrWhiteSpace(agentName) ? null : agentName.Trim(),
@@ -103,7 +91,7 @@ internal sealed class OnboardingPlatformClient
     }
 
     /// <summary>
-    /// Lists builtin webhook integrations for the current activation (public URL rewritten).
+    /// Lists builtin webhook integrations for the current activation.
     /// </summary>
     public async Task<IReadOnlyList<BuiltinWebhookInfo>> ListBuiltinWebhooksAsync(
         CancellationToken cancellationToken = default)
@@ -117,7 +105,7 @@ internal sealed class OnboardingPlatformClient
             .Select(w => new BuiltinWebhookInfo(
                 w.Id,
                 w.WebhookName ?? "Default",
-                ToPublicWebhookUrl(w.WebhookUrl) ?? w.WebhookUrl))
+                w.WebhookUrl))
             .ToArray();
     }
 
@@ -138,7 +126,7 @@ internal sealed class OnboardingPlatformClient
         {
             return WebhookCreateResult.Succeeded(
                 matched.Id,
-                ToPublicWebhookUrl(matched.WebhookUrl),
+                matched.WebhookUrl,
                 created: false,
                 webhookName: normalizedWebhookName);
         }
@@ -151,7 +139,7 @@ internal sealed class OnboardingPlatformClient
 
             return WebhookCreateResult.Succeeded(
                 created.Id,
-                ToPublicWebhookUrl(created.WebhookUrl),
+                created.WebhookUrl,
                 created: true,
                 webhookName: normalizedWebhookName);
         }
@@ -181,16 +169,13 @@ internal sealed class OnboardingPlatformClient
         var requested = requestedUrl.Trim();
         foreach (var webhook in existing)
         {
-            var publicUrl = ToPublicWebhookUrl(webhook.WebhookUrl);
-            if (string.IsNullOrWhiteSpace(publicUrl))
+            if (string.IsNullOrWhiteSpace(webhook.WebhookUrl))
                 continue;
 
-            if (string.Equals(publicUrl, requested, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(webhook.WebhookUrl, requested, StringComparison.OrdinalIgnoreCase)
-                || IsSameXiansWebhookIdentity(publicUrl, requested))
+            if (string.Equals(webhook.WebhookUrl, requested, StringComparison.OrdinalIgnoreCase)
+                || IsSameXiansWebhookIdentity(webhook.WebhookUrl, requested))
             {
-                // Always return the server-resolved public URL, never the raw tool argument.
-                return publicUrl;
+                return webhook.WebhookUrl;
             }
         }
 
@@ -892,41 +877,6 @@ internal sealed class OnboardingPlatformClient
 
         return null;
     }
-
-    /// <summary>
-    /// Builds a user/GitHub-facing webhook URL. SDK-provided URLs pass through unchanged.
-    /// An explicit base URL can still be supplied by tests or local development callers.
-    /// </summary>
-    internal static string? ToPublicWebhookUrl(
-        string? relativeOrAbsoluteUrl,
-        string? publicBaseUrl = null)
-    {
-        if (string.IsNullOrWhiteSpace(relativeOrAbsoluteUrl))
-            return null;
-
-        var baseUrl = publicBaseUrl?.Trim().TrimEnd('/');
-
-        if (Uri.TryCreate(relativeOrAbsoluteUrl, UriKind.Absolute, out var absolute))
-        {
-            if (!IsLoopbackHttpHost(absolute.Host) || string.IsNullOrWhiteSpace(baseUrl))
-                return relativeOrAbsoluteUrl;
-
-            return baseUrl + absolute.PathAndQuery;
-        }
-
-        if (string.IsNullOrWhiteSpace(baseUrl))
-            return relativeOrAbsoluteUrl;
-
-        return relativeOrAbsoluteUrl.StartsWith('/')
-            ? baseUrl + relativeOrAbsoluteUrl
-            : baseUrl + "/" + relativeOrAbsoluteUrl;
-    }
-
-    private static bool IsLoopbackHttpHost(string host) =>
-        string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(host, "[::1]", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Public webhook listing row for Rules Optimizer tenant-state snapshots.</summary>
     public sealed record BuiltinWebhookInfo(

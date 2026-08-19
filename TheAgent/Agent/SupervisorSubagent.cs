@@ -14,8 +14,6 @@ namespace Xianix.Agent;
 /// </summary>
 public sealed class SupervisorSubagent
 {
-    internal const string EmptyResponseFallback = AnthropicChatSubagent.EmptyResponseFallback;
-
     private readonly AnthropicChatSubagent _runner;
     private readonly ILogger<SupervisorSubagentTools> _toolsLogger;
 

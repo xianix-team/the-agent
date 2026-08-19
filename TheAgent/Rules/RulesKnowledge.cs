@@ -9,8 +9,8 @@ namespace Xianix.Rules;
 /// <summary>
 /// Single canonical reader for the <c>rules.json</c> knowledge document. Every caller
 /// that wants to look at the parsed rules — <see cref="WebhookRulesEvaluator"/>,
-/// <see cref="AvailablePluginsCatalog"/>, <see cref="RulesEnvCatalog"/>,
-/// <see cref="StartupEnvResolver"/> — goes through here so the "fetch from Xians
+/// <see cref="AvailablePluginsCatalog"/>, <see cref="RulesEnvCatalog"/> —
+/// goes through here so the "fetch from Xians
 /// Knowledge then deserialise" recipe lives in exactly one place. Previously each
 /// caller open-coded the same three lines, which made it easy to drift on JSON
 /// options, error logging, or the document name.
@@ -18,9 +18,7 @@ namespace Xianix.Rules;
 /// The document is fetched via <see cref="XiansContext"/>.<c>CurrentAgent.Knowledge</c>
 /// — same channel the Xians platform uses everywhere else — which means this method
 /// is only callable from a workflow / agent execution context where
-/// <see cref="XiansContext.CurrentAgent"/> is bound. Process-startup callers can't
-/// use it directly; they must defer to a later (per-message) call site. See
-/// <see cref="StartupEnvResolver"/> for an example of that deferral.
+/// <see cref="XiansContext.CurrentAgent"/> is bound.
 /// </summary>
 public static class RulesKnowledge
 {
