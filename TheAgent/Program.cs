@@ -52,12 +52,6 @@ try
     logger = serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("Program");
     logger.LogInformation("Services configured. Environment: {AppEnv}.", appEnv ?? "default");
 
-    if (string.IsNullOrWhiteSpace(EnvConfig.XiansWebhookPublicUrl))
-    {
-        logger.LogWarning(
-            "XIANS-WEBHOOK-PUBLIC-URL is not set — CreateWebhookConnection may return localhost URLs that GitHub/ADO cannot reach.");
-    }
-
     var agent = serviceProvider.GetRequiredService<XianixAgent>();
     await agent.RunAsync(cts.Token);
 }

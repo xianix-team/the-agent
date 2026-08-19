@@ -4,31 +4,24 @@ namespace TheAgent.Tests.Agent;
 
 public class SupervisorSubagentRoutingTests
 {
-    [Theory]
-    [InlineData("need to setup rules")]
-    [InlineData("need to stup rules")]
-    [InlineData("configure rules.json")]
-    [InlineData("install a PR review plugin")]
-    [InlineData("set up the GitHub webhook")]
-    [InlineData("update the environment variables")]
-    [InlineData("set up AI agents for your repository")]
-    [InlineData("setup ai agents for my repo")]
-    [InlineData("configure automations")]
-    [InlineData("enable PR reviews")]
-    public void IsRulesSetupRequest_RulesConfigurationIntent_ReturnsTrue(string message)
+    [Fact]
+    public void SystemPrompt_InstructsAgentToRedirectSetupToRulesOptimizer()
     {
-        Assert.True(SupervisorSubagent.IsRulesSetupRequest(message));
-    }
+        var promptPath = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..", "..", "..", "..",
+            "TheAgent", "Knowledge", "system-prompt.md"));
+        Assert.True(File.Exists(promptPath), $"Missing system prompt at {promptPath}");
 
-    [Theory]
-    [InlineData("review PR 42 using the plugin")]
-    [InlineData("run tests on my repository")]
-    [InlineData("what can you do?")]
-    [InlineData("add this repository https://github.com/org/repo")]
-    [InlineData("")]
-    public void IsRulesSetupRequest_GeneralIntent_ReturnsFalse(string message)
-    {
-        Assert.False(SupervisorSubagent.IsRulesSetupRequest(message));
+        var prompt = File.ReadAllText(promptPath);
+        Assert.Contains(
+            "[Open Rules Optimizer](?topic=Rules%20Optimizer)",
+            prompt,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "decide whether the user's message is a setup/configuration request",
+            prompt,
+            StringComparison.Ordinal);
     }
 
     [Theory]
@@ -138,15 +131,6 @@ public class SupervisorSubagentRoutingTests
         Assert.False(
             OnboardingSubagent.ClaimsExecutionsUpdated(
                 OnboardingSubagent.UnverifiedExecutionClaimFallback));
-    }
-
-    [Fact]
-    public void RulesOptimizerRedirect_ContainsScopedStudioLink()
-    {
-        Assert.Contains(
-            "[Open Rules Optimizer](?topic=Rules%20Optimizer)",
-            SupervisorSubagent.RulesOptimizerRedirect,
-            StringComparison.Ordinal);
     }
 
     [Fact]

@@ -47,17 +47,20 @@ public sealed class OnboardingSubagent
     private readonly ILogger<OnboardingSubagent> _logger;
 
     public OnboardingSubagent(
-        Func<Task<string>> anthropicApiKeyResolver,
+        string anthropicApiKey,
         string modelName,
         ILogger<OnboardingSubagent>? logger = null,
         ILogger<OnboardingSubagentTools>? toolsLogger = null,
         ILoggerFactory? loggerFactory = null)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(anthropicApiKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelName);
+
         _logger = logger ?? NullLogger<OnboardingSubagent>.Instance;
         _toolsLogger = toolsLogger ?? NullLogger<OnboardingSubagentTools>.Instance;
         _runner = new AnthropicChatSubagent(
             agentName: nameof(OnboardingSubagent),
-            anthropicApiKeyResolver,
+            anthropicApiKey,
             modelName,
             _logger,
             loggerFactory);

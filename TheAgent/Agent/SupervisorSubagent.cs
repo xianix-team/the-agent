@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -9,34 +8,31 @@ using Xians.Lib.Agents.Messaging;
 namespace Xianix.Agent;
 
 /// <summary>
-/// General-chat MAF agent. Setup requests are redirected to Rules Optimizer;
-/// the onboarding thread is handled by <see cref="OnboardingSubagent"/>.
+/// General-chat MAF agent. Setup vs run intent is judged by the model from the
+/// system prompt (Rules Optimizer redirect); the onboarding thread itself is
+/// handled by <see cref="OnboardingSubagent"/>.
 /// </summary>
 public sealed class SupervisorSubagent
 {
-    internal const string RulesOptimizerRedirect =
-        "Agent setup runs in a separate guided chat. " +
-        "[Open Rules Optimizer](?topic=Rules%20Optimizer), then send your setup request there.";
-
     internal const string EmptyResponseFallback = AnthropicChatSubagent.EmptyResponseFallback;
 
     private readonly AnthropicChatSubagent _runner;
     private readonly ILogger<SupervisorSubagentTools> _toolsLogger;
 
     public SupervisorSubagent(
-        Func<Task<string>> anthropicApiKeyResolver,
+        string anthropicApiKey,
         string modelName,
         ILogger<SupervisorSubagent>? logger = null,
         ILogger<SupervisorSubagentTools>? toolsLogger = null,
         ILoggerFactory? loggerFactory = null)
     {
-        ArgumentNullException.ThrowIfNull(anthropicApiKeyResolver);
+        ArgumentException.ThrowIfNullOrWhiteSpace(anthropicApiKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(modelName);
 
         _toolsLogger = toolsLogger ?? NullLogger<SupervisorSubagentTools>.Instance;
         _runner = new AnthropicChatSubagent(
             agentName: nameof(SupervisorSubagent),
-            anthropicApiKeyResolver,
+            anthropicApiKey,
             modelName,
             logger ?? NullLogger<SupervisorSubagent>.Instance,
             loggerFactory);
@@ -49,9 +45,6 @@ public sealed class SupervisorSubagent
         if (string.IsNullOrWhiteSpace(context.Message.Text))
             return "I didn't receive any message. Please send a message.";
 
-        if (IsRulesSetupRequest(context.Message.Text))
-            return RulesOptimizerRedirect;
-
         var instructions = await GetSystemPromptAsync().ConfigureAwait(false);
         var tools = new SupervisorSubagentTools(context, _toolsLogger);
 
@@ -63,40 +56,6 @@ public sealed class SupervisorSubagent
                 gate: null,
                 cancellationToken)
             .ConfigureAwait(false);
-    }
-
-    internal static bool IsRulesSetupRequest(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-            return false;
-
-        if (text.Contains("rules optimizer", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("rules.json", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        if (Regex.IsMatch(
-                text,
-                @"\b(set\s*up|setup|stup|configur\w*|install\w*|enable\w*)\b.{0,80}\b("
-                + @"ai\s+agents?|agents?|automations?|pr\s+reviews?|issue\s+analysis|"
-                + @"xianix)\b",
-                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline))
-        {
-            return true;
-        }
-
-        var hasSetupAction = Regex.IsMatch(
-            text,
-            @"\b(set\s*up|setup|stup|configur\w*|install\w*|uninstall\w*|edit\w*|updat\w*|modif\w*|chang\w*|remov\w*)\b",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        if (!hasSetupAction)
-            return false;
-
-        return Regex.IsMatch(
-            text,
-            @"\b(rules?\.json|rules|plugins?|webhooks?|secrets?|env(?:ironment)?\s+var(?:iable)?s?|trigger\s+(?:labels?|tags?)|rules?\s+optimizer)\b",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
     private static IList<AITool> CreateTools(SupervisorSubagentTools tools) =>

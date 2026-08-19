@@ -88,9 +88,8 @@ public static class RulesKnowledge
     /// Parses raw <c>rules.json</c> text into webhook rule sets using the canonical
     /// <see cref="RulesJsonOptions"/> and the same "keep only entries with a webhook name"
     /// filter as <see cref="LoadAsync"/>. Exposed so callers that already hold the document
-    /// content (e.g. the chat's system-seed plugin catalog, which fetches the system-scoped
-    /// Rules via the Admin API rather than the activation-resolved knowledge channel) can
-    /// build the same models without going through <see cref="XiansContext"/>.
+    /// content (e.g. an already-fetched Rules document string) can build the same models
+    /// without going through <see cref="XiansContext"/>.
     /// Returns an empty list for blank or unparseable content.
     /// </summary>
     public static List<WebhookRuleSet> ParseWebhookRuleSets(string? content, ILogger? logger = null)

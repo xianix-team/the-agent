@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Anthropic;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -22,9 +21,9 @@ internal readonly record struct ChatTurnGateResult(
     string? NextInstructionsOverride = null);
 
 /// <summary>
-/// Shared Microsoft Agent Framework runner: one cached <see cref="AIAgent"/> per tenant,
-/// empty-reply retries, and conversation metrics. Supervisor and onboarding each construct
-/// their own instance with a distinct agent name and tool set.
+/// Shared Microsoft Agent Framework runner with empty-reply retries and conversation
+/// metrics. Supervisor and onboarding each construct their own instance with a distinct
+/// agent name and tool set.
 /// </summary>
 internal sealed class AnthropicChatSubagent
 {
@@ -45,32 +44,35 @@ internal sealed class AnthropicChatSubagent
         "sentence of text. Empty output is not acceptable.";
 
     private readonly string _agentName;
-    private readonly Func<Task<string>> _apiKeyResolver;
+    private readonly AIAgent _agent;
     private readonly XiansChatHistoryProvider _historyProvider;
     private readonly ILogger _logger;
     private readonly string _modelName;
-    private readonly ConcurrentDictionary<string, AIAgent> _agentsByTenant =
-        new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _initLocksByTenant =
-        new(StringComparer.Ordinal);
 
     public AnthropicChatSubagent(
         string agentName,
-        Func<Task<string>> anthropicApiKeyResolver,
+        string anthropicApiKey,
         string modelName,
         ILogger logger,
         ILoggerFactory? loggerFactory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentName);
-        ArgumentNullException.ThrowIfNull(anthropicApiKeyResolver);
+        ArgumentException.ThrowIfNullOrWhiteSpace(anthropicApiKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(modelName);
 
         _agentName = agentName;
-        _apiKeyResolver = anthropicApiKeyResolver;
         _logger = logger ?? NullLogger.Instance;
         _modelName = modelName;
         _historyProvider = new XiansChatHistoryProvider(
             loggerFactory?.CreateLogger<XiansChatHistoryProvider>());
+
+        var client = new AnthropicClient { ApiKey = anthropicApiKey };
+        _agent = client.AsAIAgent(new ChatClientAgentOptions
+        {
+            Name = _agentName,
+            ChatOptions = new ChatOptions { ModelId = _modelName },
+            ChatHistoryProvider = _historyProvider,
+        });
     }
 
     public async Task<string> RunTurnAsync(
@@ -80,9 +82,6 @@ internal sealed class AnthropicChatSubagent
         Func<string, int, int, ChatTurnGateResult>? gate,
         CancellationToken cancellationToken)
     {
-        var agent = await EnsureAgentForTenantAsync(context.Message.TenantId, cancellationToken)
-            .ConfigureAwait(false);
-
         var attempts = new[]
         {
             new RunAttempt(baseInstructions, IncludeHistory: true, Label: "normal"),
@@ -100,7 +99,7 @@ internal sealed class AnthropicChatSubagent
             var attempt = attempts[i];
             var instructions = stickyInstructions ?? attempt.Instructions;
 
-            var session = await agent.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
+            var session = await _agent.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
             if (attempt.IncludeHistory)
                 _historyProvider.PrimeSession(session, context);
 
@@ -110,7 +109,7 @@ internal sealed class AnthropicChatSubagent
                 Tools = tools,
             });
 
-            lastResponse = await agent
+            lastResponse = await _agent
                 .RunAsync(context.Message.Text, session, runOptions, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -207,49 +206,6 @@ internal sealed class AnthropicChatSubagent
                     "participant '{ParticipantId}'. Metrics are non-critical.",
                     context.Message.TenantId, context.Message.ParticipantId);
             }
-        }
-    }
-
-    private async Task<AIAgent> EnsureAgentForTenantAsync(string tenantId, CancellationToken cancellationToken)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
-
-        if (_agentsByTenant.TryGetValue(tenantId, out var cached))
-            return cached;
-
-        var initLock = _initLocksByTenant.GetOrAdd(tenantId, _ => new SemaphoreSlim(1, 1));
-        await initLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            if (_agentsByTenant.TryGetValue(tenantId, out cached))
-                return cached;
-
-            var apiKey = await _apiKeyResolver().ConfigureAwait(false);
-            if (string.IsNullOrWhiteSpace(apiKey))
-                throw new InvalidOperationException(
-                    $"Anthropic API key resolver returned an empty value for tenant " +
-                    $"'{tenantId}'. {_agentName} cannot reach Claude without an API key — " +
-                    "check the rule-set-level 'ANTHROPIC-API-KEY' entry in rules.json " +
-                    "(constant / host.VAR / secrets.KEY) and, for secrets.*, the tenant's " +
-                    "Xians Secret Vault, then a host env fallback.");
-
-            var client = new AnthropicClient { ApiKey = apiKey };
-            var agent = client.AsAIAgent(new ChatClientAgentOptions
-            {
-                Name = _agentName,
-                ChatOptions = new ChatOptions { ModelId = _modelName },
-                ChatHistoryProvider = _historyProvider,
-            });
-            _agentsByTenant[tenantId] = agent;
-            _logger.LogInformation(
-                "Constructed {Agent} AIAgent for tenant '{TenantId}' (model={Model}). " +
-                "Cached for subsequent messages.",
-                _agentName, tenantId, _modelName);
-            return agent;
-        }
-        finally
-        {
-            initLock.Release();
         }
     }
 

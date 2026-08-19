@@ -1,162 +1,49 @@
-using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using TheAgent;
 using Xians.Lib.Agents.Core;
-using Xians.Lib.Agents.Messaging;
+using Xians.Lib.Agents.Knowledge;
+using Xianix;
 
 namespace Xianix.Agent;
 
 /// <summary>
-/// Resolves agent/activation identity from the supervisor workflow context.
+/// Resolves agent/activation identity from the current Xians agent context.
 /// </summary>
 internal static class OnboardingMessageContext
 {
-    public static Task<(string? AgentName, string? ActivationName)> ResolveAsync(
-        UserMessageContext context,
-        OnboardingPlatformClient? platform = null,
-        CancellationToken cancellationToken = default)
-        => ResolveAsync(context, platform, agentNameOverride: null, activationNameOverride: null, cancellationToken);
-
-    public static async Task<(string? AgentName, string? ActivationName)> ResolveAsync(
-        UserMessageContext context,
-        OnboardingPlatformClient? platform,
-        string? agentNameOverride,
-        string? activationNameOverride,
-        CancellationToken cancellationToken = default)
+    public static (string? AgentName, string? ActivationName) Resolve()
     {
-        ArgumentNullException.ThrowIfNull(context);
-
-        var fromWorkflow = ParseWorkflowId(SafeGet(() => XiansContext.WorkflowId));
-        var fromSafeWorkflow = ParseWorkflowId(SafeGet(() => XiansContext.SafeWorkflowId));
-
-        // Prefer workflow / platform identity over LLM-supplied tool overrides so a prompt
-        // injection cannot redirect Admin-key writes to another activation.
-        var agentName = FirstNonEmpty(
-            SafeGet(() => XiansContext.SafeAgentName),
-            fromWorkflow.AgentName,
-            fromSafeWorkflow.AgentName,
-            ReadFromMessageData(context.Message.Data, "agentName"),
-            XiansContext.CurrentAgent?.Name,
-            EnvConfig.AgentName);
-
-        var activationName = FirstNonEmpty(
-            SafeGet(() => XiansContext.SafeIdPostfix),
-            SafeGet(() => XiansContext.GetIdPostfix()),
-            fromWorkflow.ActivationName,
-            fromSafeWorkflow.ActivationName,
-            ReadFromMessageData(context.Message.Data, "activationName"));
-
-        if (string.IsNullOrWhiteSpace(activationName))
-        {
-            try
-            {
-                activationName = await XiansContext.TryGetIdPostfixAsync().ConfigureAwait(false);
-            }
-            catch
-            {
-                // Not available in this workflow context.
-            }
-        }
-
-        if (!string.IsNullOrWhiteSpace(agentName) && !string.IsNullOrWhiteSpace(activationName))
-            return (agentName, activationName);
-
-        // Overrides fill gaps only when workflow context did not resolve both names.
+        string? agentName = null;
+        string? activationName = null;
+        try { agentName = XiansContext.CurrentAgent?.Name; } catch { /* no agent bound */ }
         if (string.IsNullOrWhiteSpace(agentName))
-            agentName = FirstNonEmpty(agentNameOverride);
+        {
+            try { agentName = XiansContext.SafeAgentName; } catch { /* ignore */ }
+        }
+        if (string.IsNullOrWhiteSpace(agentName))
+            agentName = TheAgent.EnvConfig.AgentName;
+
+        try { activationName = XiansContext.GetIdPostfix(); } catch { /* ignore */ }
         if (string.IsNullOrWhiteSpace(activationName))
-            activationName = FirstNonEmpty(activationNameOverride);
-
-        if (!string.IsNullOrWhiteSpace(agentName) && !string.IsNullOrWhiteSpace(activationName))
-            return (agentName, activationName);
-
-        if (platform is not null && !string.IsNullOrWhiteSpace(agentName))
         {
-            var fromAdmin = await platform
-                .ResolveActiveActivationAsync(context.Message.TenantId, agentName, cancellationToken)
-                .ConfigureAwait(false);
-            if (!string.IsNullOrWhiteSpace(fromAdmin))
-                return (agentName, fromAdmin);
+            try { activationName = XiansContext.SafeIdPostfix; } catch { /* ignore */ }
         }
 
-        return (agentName, activationName);
-    }
-
-    private static string? SafeGet(Func<string?> getter)
-    {
-        try
-        {
-            return getter();
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static (string? AgentName, string? ActivationName) ParseWorkflowId(string? workflowId)
-    {
-        if (string.IsNullOrWhiteSpace(workflowId))
-            return (null, null);
-
-        var parts = workflowId.Split(':', 4, StringSplitOptions.TrimEntries);
-        if (parts.Length < 4)
-            return (null, null);
-
-        return (parts[1], parts[3]);
-    }
-
-    private static string? ReadFromMessageData(object? data, string key)
-    {
-        if (data is null)
-            return null;
-
-        if (data is JsonElement element)
-        {
-            if (element.ValueKind == JsonValueKind.Object &&
-                element.TryGetProperty(key, out var prop))
-            {
-                return prop.GetString();
-            }
-
-            return null;
-        }
-
-        if (data is IDictionary<string, object> dict && dict.TryGetValue(key, out var value))
-            return value?.ToString();
-
-        return null;
-    }
-
-    private static string? FirstNonEmpty(params string?[] values)
-    {
-        foreach (var value in values)
-        {
-            if (!string.IsNullOrWhiteSpace(value))
-                return value.Trim();
-        }
-
-        return null;
+        return (
+            string.IsNullOrWhiteSpace(agentName) ? null : agentName.Trim(),
+            string.IsNullOrWhiteSpace(activationName) ? null : activationName.Trim());
     }
 }
 
 /// <summary>
-/// Admin API client for onboarding setup: tenant secrets and builtin webhooks.
-/// Uses <see cref="EnvConfig.XiansAdminApiKey"/> (sk-Xnai-...) and
-/// <see cref="EnvConfig.XiansWebhookPublicUrl"/> for public webhook links.
+/// Xians.Lib SDK client for onboarding setup (secrets, webhooks, Rules knowledge).
+/// Uses <see cref="HttpClient"/> only for outbound GitHub API calls.
 /// </summary>
 internal sealed class OnboardingPlatformClient
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
-
     private static readonly HttpClient SharedHttp = new()
     {
         Timeout = TimeSpan.FromSeconds(30),
@@ -167,18 +54,11 @@ internal sealed class OnboardingPlatformClient
     public OnboardingPlatformClient(HttpClient? httpClient = null)
     {
         _http = httpClient ?? SharedHttp;
-        if (_http.BaseAddress is null)
-            _http.BaseAddress = new Uri(EnvConfig.XiansServerUrl.TrimEnd('/') + "/");
         // Honor caller-provided clients that already set a timeout; only fill the default when
         // InfiniteTimeSpan (HttpClient's default) would hang the onboarding turn indefinitely.
         if (_http.Timeout == Timeout.InfiniteTimeSpan)
             _http.Timeout = TimeSpan.FromSeconds(30);
     }
-
-    private readonly ConcurrentDictionary<string, string> _rulesKnowledgeIdCache = new(StringComparer.Ordinal);
-
-    private static string RulesKnowledgeCacheKey(string tenantId, string agentName, string? activationName)
-        => $"{tenantId}\u001f{agentName}\u001f{activationName ?? ""}";
 
     /// <summary>
     /// Truncates / redacts HTTP response bodies before returning them to the model or logs.
@@ -208,160 +88,77 @@ internal sealed class OnboardingPlatformClient
     /// it in rules.json — the agent never asks the user to paste the value into chat.
     /// </summary>
     public async Task<bool> SecretExistsAsync(
-        string tenantId,
         string key,
         CancellationToken cancellationToken = default)
     {
-        var adminKey = EnvConfig.XiansAdminApiKey;
-        if (string.IsNullOrWhiteSpace(adminKey) || string.IsNullOrWhiteSpace(key))
+        if (string.IsNullOrWhiteSpace(key))
             return false;
 
-        var metadata = await FetchSecretMetadataAsync(tenantId, key.Trim(), adminKey, cancellationToken)
-            .ConfigureAwait(false);
-        return metadata?.Id is not null;
-    }
+        var agent = XiansContext.CurrentAgent;
+        if (agent is null)
+            return false;
 
-    public async Task<string?> ResolveActiveActivationAsync(
-        string tenantId,
-        string agentName,
-        CancellationToken cancellationToken = default)
-    {
-        var adminKey = EnvConfig.XiansAdminApiKey;
-        if (string.IsNullOrWhiteSpace(adminKey))
-            return null;
-
-        var path =
-            $"/api/v1/admin/tenants/{Uri.EscapeDataString(tenantId)}/agentActivations" +
-            $"?agentName={Uri.EscapeDataString(agentName)}";
-
-        using var request = BuildAdminRequest(HttpMethod.Get, path, tenantId, adminKey);
-        using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
-            return null;
-
-        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        using var doc = JsonDocument.Parse(body);
-        var root = doc.RootElement;
-
-        if (root.ValueKind != JsonValueKind.Array)
-            return null;
-
-        foreach (var item in root.EnumerateArray())
-        {
-            var name = item.TryGetProperty("name", out var nameProp) ? nameProp.GetString() : null;
-            if (string.IsNullOrWhiteSpace(name))
-                continue;
-
-            var isActive = true;
-            if (item.TryGetProperty("isActive", out var activeProp) && activeProp.ValueKind == JsonValueKind.False)
-                isActive = false;
-            else if (item.TryGetProperty("active", out var activeField) && activeField.ValueKind == JsonValueKind.False)
-                isActive = false;
-
-            if (isActive)
-                return name;
-        }
-
-        return null;
+        var items = await agent.Secrets.TenantScope().ListAsync(cancellationToken).ConfigureAwait(false);
+        return items.Any(s => string.Equals(s.Key, key.Trim(), StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
-    /// Lists builtin webhook integrations for an activation (public URL rewritten).
-    /// Empty when admin key is missing or the API call fails.
+    /// Lists builtin webhook integrations for the current activation (public URL rewritten).
     /// </summary>
-    public async Task<IReadOnlyList<BuiltinWebhookInfo>> ListBuiltinWebhooksForActivationAsync(
-        string tenantId,
-        string agentName,
-        string activationName,
+    public async Task<IReadOnlyList<BuiltinWebhookInfo>> ListBuiltinWebhooksAsync(
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(agentName) || string.IsNullOrWhiteSpace(activationName))
+        var agent = XiansContext.CurrentAgent;
+        if (agent is null)
             return [];
 
-        var adminKey = EnvConfig.XiansAdminApiKey;
-        if (string.IsNullOrWhiteSpace(adminKey))
-            return [];
-
-        var existing = await ListBuiltinWebhooksAsync(
-                tenantId, agentName, activationName, adminKey, cancellationToken)
-            .ConfigureAwait(false);
-
+        var existing = await agent.Webhooks.ListAsync(cancellationToken).ConfigureAwait(false);
         return existing
             .Select(w => new BuiltinWebhookInfo(
-                w.IntegrationId,
-                w.WebhookName,
+                w.Id,
+                w.WebhookName ?? "Default",
                 ToPublicWebhookUrl(w.WebhookUrl) ?? w.WebhookUrl))
             .ToArray();
     }
 
     public async Task<WebhookCreateResult> EnsureBuiltinWebhookAsync(
-        string tenantId,
-        string agentName,
-        string activationName,
         string webhookName = "Default",
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(agentName))
-            return WebhookCreateResult.Failed("Agent name is required.");
-        if (string.IsNullOrWhiteSpace(activationName))
-            return WebhookCreateResult.Failed("Activation name is required.");
-
-        var adminKey = EnvConfig.XiansAdminApiKey;
-        if (string.IsNullOrWhiteSpace(adminKey))
-        {
-            return WebhookCreateResult.Failed(
-                "XIANS-ADMIN-API-KEY is not configured on the agent host — cannot create webhooks.");
-        }
+        var agent = XiansContext.CurrentAgent;
+        if (agent is null)
+            return WebhookCreateResult.Failed("No current agent bound — cannot create webhooks.");
 
         var normalizedWebhookName = string.IsNullOrWhiteSpace(webhookName) ? "Default" : webhookName.Trim();
 
-        var existing = await ListBuiltinWebhooksAsync(
-                tenantId, agentName, activationName, adminKey, cancellationToken)
-            .ConfigureAwait(false);
+        var existing = await agent.Webhooks.ListAsync(cancellationToken).ConfigureAwait(false);
         var matched = existing.FirstOrDefault(w =>
             string.Equals(w.WebhookName, normalizedWebhookName, StringComparison.OrdinalIgnoreCase));
         if (matched is not null)
         {
             return WebhookCreateResult.Succeeded(
-                matched.IntegrationId,
+                matched.Id,
                 ToPublicWebhookUrl(matched.WebhookUrl),
                 created: false,
                 webhookName: normalizedWebhookName);
         }
 
-        using var createRequest = BuildAdminRequest(
-            HttpMethod.Post,
-            $"/api/v1/admin/tenants/{Uri.EscapeDataString(tenantId)}/webhooks",
-            tenantId,
-            adminKey);
-        createRequest.Content = JsonContent.Create(new
+        try
         {
-            agentName,
-            activationName,
-            webhookName = normalizedWebhookName,
-        });
+            var created = await agent.Webhooks
+                .CreateAsync(webhookName: normalizedWebhookName, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
 
-        using var createResponse = await _http.SendAsync(createRequest, cancellationToken)
-            .ConfigureAwait(false);
-        var createBody = await createResponse.Content.ReadAsStringAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        if (!createResponse.IsSuccessStatusCode)
-        {
-            return WebhookCreateResult.Failed(
-                $"Failed to create webhook: HTTP {(int)createResponse.StatusCode} {SanitizeHttpErrorBody(createBody)}");
+            return WebhookCreateResult.Succeeded(
+                created.Id,
+                ToPublicWebhookUrl(created.WebhookUrl),
+                created: true,
+                webhookName: normalizedWebhookName);
         }
-
-        using var doc = JsonDocument.Parse(createBody);
-        var root = doc.RootElement;
-        var integrationId = root.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
-        var webhookUrl = root.TryGetProperty("webhookUrl", out var urlProp) ? urlProp.GetString() : null;
-
-        return WebhookCreateResult.Succeeded(
-            integrationId,
-            ToPublicWebhookUrl(webhookUrl),
-            created: true,
-            webhookName: normalizedWebhookName);
+        catch (Exception ex)
+        {
+            return WebhookCreateResult.Failed($"Failed to create webhook: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -370,25 +167,17 @@ internal sealed class OnboardingPlatformClient
     /// LLM-supplied URLs that do not match are rejected (prevents PAT-backed hook hijack).
     /// </summary>
     public async Task<string?> ResolveAllowedWebhookPayloadUrlAsync(
-        string tenantId,
-        string agentName,
-        string activationName,
         string? requestedUrl,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(agentName) || string.IsNullOrWhiteSpace(activationName))
-            return null;
         if (string.IsNullOrWhiteSpace(requestedUrl))
             return null;
 
-        var adminKey = EnvConfig.XiansAdminApiKey;
-        if (string.IsNullOrWhiteSpace(adminKey))
+        var agent = XiansContext.CurrentAgent;
+        if (agent is null)
             return null;
 
-        var existing = await ListBuiltinWebhooksAsync(
-                tenantId, agentName, activationName, adminKey, cancellationToken)
-            .ConfigureAwait(false);
-
+        var existing = await agent.Webhooks.ListAsync(cancellationToken).ConfigureAwait(false);
         var requested = requestedUrl.Trim();
         foreach (var webhook in existing)
         {
@@ -409,119 +198,86 @@ internal sealed class OnboardingPlatformClient
     }
 
     /// <summary>
-    /// Saves the Rules knowledge document at <b>agent scope</b> (Studio Knowledge label
-    /// "Agent" = activation-scoped) via the Admin API create endpoint
-    /// (<c>POST /tenants/{tenantId}/knowledge?agentName=..&amp;activationName=..&amp;systemScoped=false</c>).
-    /// System-scoped seed prompts/rules uploaded at agent startup stay untouched. Rules resolve
-    /// agent (activation) → organization (tenant) → system, so the agent-scoped version wins for
-    /// that activation. Each call creates a new version.
+    /// Effective Rules content for the current agent context, with scope label.
+    /// Scope is "agent" when not system-scoped, "system" when system-scoped, or "missing".
     /// </summary>
-    public async Task<RulesSaveResult> SaveActivationScopedRulesAsync(
-        string tenantId,
-        string agentName,
-        string activationName,
+    public async Task<(string? Content, string Scope)> GetEffectiveRulesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var agent = XiansContext.CurrentAgent;
+        if (agent is null)
+            return (null, "missing");
+
+        try
+        {
+            var doc = await agent.Knowledge
+                .GetAsync(Constants.RulesKnowledgeName, cancellationToken)
+                .ConfigureAwait(false);
+            if (doc is null || string.IsNullOrWhiteSpace(doc.Content))
+                return (null, "missing");
+
+            var scope = doc.SystemScoped ? "system" : "agent";
+            return (doc.Content, scope);
+        }
+        catch
+        {
+            return (null, "missing");
+        }
+    }
+
+    /// <summary>
+    /// Raw Rules content for verify/read paths (content only).
+    /// </summary>
+    public async Task<string?> GetRulesContentAsync(CancellationToken cancellationToken = default)
+    {
+        var (content, _) = await GetEffectiveRulesAsync(cancellationToken).ConfigureAwait(false);
+        return content;
+    }
+
+    /// <summary>
+    /// Saves Rules via the SDK knowledge upload (agent/activation scope from context).
+    /// </summary>
+    public async Task<RulesSaveResult> SaveRulesAsync(
         string content,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(agentName))
-            return RulesSaveResult.Failed("Agent name is required.");
-        if (string.IsNullOrWhiteSpace(activationName))
-            return RulesSaveResult.Failed("Activation name is required.");
+        var agent = XiansContext.CurrentAgent;
+        if (agent is null)
+            return RulesSaveResult.Failed("No current agent bound — cannot save Rules.");
 
-        var adminKey = EnvConfig.XiansAdminApiKey;
-        if (string.IsNullOrWhiteSpace(adminKey))
+        try
         {
-            return RulesSaveResult.Failed(
-                "XIANS-ADMIN-API-KEY is not configured on the agent host — cannot save Rules.");
+            var uploaded = await agent.Knowledge.UploadTextResourceAsync(
+                    knowledgeName: Constants.RulesKnowledgeName,
+                    content: content,
+                    knowledgeType: "json",
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!uploaded)
+                return RulesSaveResult.Failed("SDK rejected Rules knowledge upload.");
         }
-
-        var path =
-            $"/api/v1/admin/tenants/{Uri.EscapeDataString(tenantId)}/knowledge" +
-            $"?agentName={Uri.EscapeDataString(agentName)}" +
-            $"&activationName={Uri.EscapeDataString(activationName)}" +
-            "&systemScoped=false";
-
-        using var request = BuildAdminRequest(HttpMethod.Post, path, tenantId, adminKey);
-        request.Content = JsonContent.Create(new
+        catch (Exception ex)
         {
-            name = Constants.RulesKnowledgeName,
-            content,
-            type = "json",
-        });
-
-        using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            return RulesSaveResult.Failed(
-                $"Admin API rejected activation-scoped Rules save for {agentName} / {activationName}: " +
-                $"HTTP {(int)response.StatusCode} {SanitizeHttpErrorBody(body)}");
+            return RulesSaveResult.Failed($"Failed to save Rules: {ex.Message}");
         }
 
         string? id = null;
         try
         {
-            using var doc = JsonDocument.Parse(body);
-            if (doc.RootElement.TryGetProperty("id", out var idProp))
-                id = idProp.GetString();
+            var doc = await agent.Knowledge
+                .GetAsync(Constants.RulesKnowledgeName, cancellationToken)
+                .ConfigureAwait(false);
+            id = doc?.Id;
         }
-        catch (JsonException)
+        catch
         {
-            // Non-fatal: the write succeeded, we just couldn't parse the id out of the response.
+            // Non-fatal: the write succeeded, we just couldn't re-read the id.
         }
 
-        if (!string.IsNullOrWhiteSpace(id))
-            RememberRulesKnowledgeId(tenantId, agentName, activationName, id);
-
+        var (_, activationName) = OnboardingMessageContext.Resolve();
         return RulesSaveResult.Succeeded(id, activationName);
     }
-
-    /// <summary>
-    /// Remembers a Rules knowledge document id after a successful save so subsequent
-    /// reads in the same client lifetime skip the list-knowledge hop.
-    /// </summary>
-    public void RememberRulesKnowledgeId(string tenantId, string agentName, string activationName, string? knowledgeId)
-    {
-        if (string.IsNullOrWhiteSpace(knowledgeId)
-            || string.IsNullOrWhiteSpace(tenantId)
-            || string.IsNullOrWhiteSpace(agentName)
-            || string.IsNullOrWhiteSpace(activationName))
-        {
-            return;
-        }
-
-        _rulesKnowledgeIdCache[RulesKnowledgeCacheKey(tenantId, agentName, activationName)] = knowledgeId;
-    }
-
-    /// <summary>
-    /// Fetches the raw content of the <b>system-scoped</b> Rules knowledge document for
-    /// <paramref name="agentName"/>. The Admin list endpoint excludes <c>content</c> for size,
-    /// so this resolves the system-scoped document id from the tree, then loads the full
-    /// document via <c>GET /tenants/{tenantId}/knowledge/{id}</c>.
-    /// Returns <c>null</c> when the admin key is missing, the request fails,
-    /// or no system-scoped Rules document exists.
-    /// </summary>
-    public Task<string?> GetSystemScopedRulesContentAsync(
-        string tenantId,
-        string agentName,
-        CancellationToken cancellationToken = default)
-        => GetRulesContentByScopeAsync(tenantId, agentName, activationName: null, cancellationToken);
-
-    /// <summary>
-    /// Fetches the raw content of the <b>activation-scoped</b> Rules knowledge document for
-    /// <paramref name="agentName"/> / <paramref name="activationName"/>. Used by
-    /// <c>GetCurrentRules</c> and by <c>SaveRules</c> merge-on-save so the chat always merges
-    /// against the previously saved activation copy (not the system seed).
-    /// Returns <c>null</c> when missing or unreachable. Does <b>not</b> fall back to
-    /// tenant-default or system-scoped Rules — activation isolation is intentional.
-    /// </summary>
-    public Task<string?> GetActivationScopedRulesContentAsync(
-        string tenantId,
-        string agentName,
-        string activationName,
-        CancellationToken cancellationToken = default)
-        => GetRulesContentByScopeAsync(tenantId, agentName, activationName, cancellationToken);
 
     /// <summary>
     /// Merges <paramref name="incomingRulesJson"/> into <paramref name="existingRulesJson"/> so
@@ -577,180 +333,6 @@ internal sealed class OnboardingPlatformClient
         {
             return incomingRulesJson;
         }
-    }
-
-    /// <summary>
-    /// Resolves Rules content for a scope. The Admin grouped list endpoint projects
-    /// <c>Content</c> out of every document (see <c>KnowledgeRepository</c>), so reading
-    /// <c>content</c> from that tree always looks empty even when Mongo has a full
-    /// rules.json. We only use the tree to find the knowledge <c>id</c>, then load the
-    /// full document by id.
-    /// </summary>
-    private async Task<string?> GetRulesContentByScopeAsync(
-        string tenantId,
-        string agentName,
-        string? activationName,
-        CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(agentName))
-            return null;
-
-        var adminKey = EnvConfig.XiansAdminApiKey;
-        if (string.IsNullOrWhiteSpace(adminKey))
-            return null;
-
-        var cacheKey = RulesKnowledgeCacheKey(tenantId, agentName, activationName);
-        if (_rulesKnowledgeIdCache.TryGetValue(cacheKey, out var cachedId)
-            && !string.IsNullOrWhiteSpace(cachedId))
-        {
-            var cachedContent = await GetKnowledgeContentByIdAsync(
-                    tenantId, cachedId, adminKey, cancellationToken)
-                .ConfigureAwait(false);
-            if (cachedContent is not null)
-                return cachedContent;
-
-            // Stale id — drop and resolve again.
-            _rulesKnowledgeIdCache.TryRemove(cacheKey, out _);
-        }
-
-        var knowledgeId = await FindRulesKnowledgeIdAsync(
-                tenantId, agentName, activationName, adminKey, cancellationToken)
-            .ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(knowledgeId))
-            return null;
-
-        _rulesKnowledgeIdCache[cacheKey] = knowledgeId;
-
-        return await GetKnowledgeContentByIdAsync(
-                tenantId, knowledgeId, adminKey, cancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    private async Task<string?> FindRulesKnowledgeIdAsync(
-        string tenantId,
-        string agentName,
-        string? activationName,
-        string adminKey,
-        CancellationToken cancellationToken)
-    {
-        var path =
-            $"/api/v1/admin/tenants/{Uri.EscapeDataString(tenantId)}/knowledge" +
-            $"?agentName={Uri.EscapeDataString(agentName)}";
-        if (!string.IsNullOrWhiteSpace(activationName))
-            path += $"&activationName={Uri.EscapeDataString(activationName)}";
-
-        using var request = BuildAdminRequest(HttpMethod.Get, path, tenantId, adminKey);
-        using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
-            return null;
-
-        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            using var doc = JsonDocument.Parse(body);
-            if (!doc.RootElement.TryGetProperty("groups", out var groups)
-                || groups.ValueKind != JsonValueKind.Array)
-            {
-                return null;
-            }
-
-            foreach (var group in groups.EnumerateArray())
-            {
-                if (!group.TryGetProperty("name", out var nameProp)
-                    || !string.Equals(nameProp.GetString(), Constants.RulesKnowledgeName, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                if (!string.IsNullOrWhiteSpace(activationName))
-                {
-                    if (!group.TryGetProperty("activations", out var activations)
-                        || activations.ValueKind != JsonValueKind.Array)
-                    {
-                        return null;
-                    }
-
-                    foreach (var act in activations.EnumerateArray())
-                    {
-                        if (act.ValueKind != JsonValueKind.Object)
-                            continue;
-                        if (!act.TryGetProperty("activationName", out var actNameProp)
-                            && !act.TryGetProperty("activation_name", out actNameProp))
-                        {
-                            continue;
-                        }
-
-                        if (!string.Equals(actNameProp.GetString(), activationName, StringComparison.Ordinal))
-                            continue;
-
-                        return TryGetKnowledgeId(act);
-                    }
-
-                    return null;
-                }
-
-                if (group.TryGetProperty("system_scoped", out var sys)
-                    && sys.ValueKind == JsonValueKind.Object)
-                {
-                    return TryGetKnowledgeId(sys);
-                }
-
-                return null;
-            }
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-
-        return null;
-    }
-
-    private async Task<string?> GetKnowledgeContentByIdAsync(
-        string tenantId,
-        string knowledgeId,
-        string adminKey,
-        CancellationToken cancellationToken)
-    {
-        var path =
-            $"/api/v1/admin/tenants/{Uri.EscapeDataString(tenantId)}/knowledge/" +
-            Uri.EscapeDataString(knowledgeId);
-
-        using var request = BuildAdminRequest(HttpMethod.Get, path, tenantId, adminKey);
-        using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
-            return null;
-
-        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            using var doc = JsonDocument.Parse(body);
-            return doc.RootElement.TryGetProperty("content", out var contentProp)
-                ? contentProp.GetString()
-                : null;
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    private static string? TryGetKnowledgeId(JsonElement knowledge)
-    {
-        if (knowledge.TryGetProperty("id", out var idProp)
-            && !string.IsNullOrWhiteSpace(idProp.GetString()))
-        {
-            return idProp.GetString();
-        }
-
-        // Some serializers emit Mongo ObjectId under _id.
-        if (knowledge.TryGetProperty("_id", out var underscoreId)
-            && !string.IsNullOrWhiteSpace(underscoreId.GetString()))
-        {
-            return underscoreId.GetString();
-        }
-
-        return null;
     }
 
     private static string? GetRuleSetKey(JsonElement set)
@@ -1311,90 +893,9 @@ internal sealed class OnboardingPlatformClient
         return null;
     }
 
-    private async Task<SecretMetadata?> FetchSecretMetadataAsync(
-        string tenantId,
-        string key,
-        string adminKey,
-        CancellationToken cancellationToken)
-    {
-        var path =
-            $"/api/v1/admin/secrets/fetch?key={Uri.EscapeDataString(key)}&tenantId={Uri.EscapeDataString(tenantId)}";
-        using var request = BuildAdminRequest(HttpMethod.Get, path, tenantId, adminKey);
-        using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
-            return null;
-
-        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        return JsonSerializer.Deserialize<SecretMetadata>(body, JsonOptions);
-    }
-
-    private async Task<IReadOnlyList<BuiltinWebhookSummary>> ListBuiltinWebhooksAsync(
-        string tenantId,
-        string agentName,
-        string activationName,
-        string adminKey,
-        CancellationToken cancellationToken)
-    {
-        var path =
-            $"/api/v1/admin/tenants/{Uri.EscapeDataString(tenantId)}/webhooks" +
-            $"?agentName={Uri.EscapeDataString(agentName)}" +
-            $"&activationName={Uri.EscapeDataString(activationName)}";
-
-        using var request = BuildAdminRequest(HttpMethod.Get, path, tenantId, adminKey);
-        using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
-            return Array.Empty<BuiltinWebhookSummary>();
-
-        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        using var doc = JsonDocument.Parse(body);
-        if (!doc.RootElement.TryGetProperty("webhooks", out var webhooksProp) ||
-            webhooksProp.ValueKind != JsonValueKind.Array)
-        {
-            return Array.Empty<BuiltinWebhookSummary>();
-        }
-
-        var results = new List<BuiltinWebhookSummary>();
-        foreach (var item in webhooksProp.EnumerateArray())
-        {
-            var id = item.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
-            var webhookUrl = item.TryGetProperty("webhookUrl", out var urlProp) ? urlProp.GetString() : null;
-            var webhookName = ExtractWebhookName(item);
-            if (id is null || webhookUrl is null)
-                continue;
-            results.Add(new BuiltinWebhookSummary(id, webhookName, webhookUrl));
-        }
-
-        return results;
-    }
-
-    private static string ExtractWebhookName(JsonElement item)
-    {
-        if (item.TryGetProperty("configuration", out var config) &&
-            config.TryGetProperty("webhookName", out var nameProp))
-        {
-            return nameProp.GetString() ?? "Default";
-        }
-
-        return "Default";
-    }
-
-    private static HttpRequestMessage BuildAdminRequest(
-        HttpMethod method,
-        string path,
-        string tenantId,
-        string adminKey)
-    {
-        var request = new HttpRequestMessage(method, path.TrimStart('/'));
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", adminKey);
-        request.Headers.TryAddWithoutValidation("X-Tenant-Id", tenantId);
-        return request;
-    }
-
     /// <summary>
-    /// Builds a user/GitHub-facing webhook URL. The server often returns absolute
-    /// <c>http://localhost:5000/...</c> links; those are rewritten onto
-    /// <see cref="EnvConfig.XiansWebhookPublicUrl"/> (e.g. Cloudflare tunnel) so
-    /// external SCM can reach the local server. Already-public absolute URLs pass through.
+    /// Builds a user/GitHub-facing webhook URL. SDK-provided URLs pass through unchanged.
+    /// An explicit base URL can still be supplied by tests or local development callers.
     /// </summary>
     internal static string? ToPublicWebhookUrl(
         string? relativeOrAbsoluteUrl,
@@ -1403,7 +904,7 @@ internal sealed class OnboardingPlatformClient
         if (string.IsNullOrWhiteSpace(relativeOrAbsoluteUrl))
             return null;
 
-        var baseUrl = (publicBaseUrl ?? EnvConfig.XiansWebhookPublicUrl)?.Trim().TrimEnd('/');
+        var baseUrl = publicBaseUrl?.Trim().TrimEnd('/');
 
         if (Uri.TryCreate(relativeOrAbsoluteUrl, UriKind.Absolute, out var absolute))
         {
@@ -1426,13 +927,6 @@ internal sealed class OnboardingPlatformClient
         || string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase)
         || string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase)
         || string.Equals(host, "[::1]", StringComparison.OrdinalIgnoreCase);
-
-    private sealed record SecretMetadata(string? Id, string? Key);
-
-    private sealed record BuiltinWebhookSummary(
-        string IntegrationId,
-        string WebhookName,
-        string WebhookUrl);
 
     /// <summary>Public webhook listing row for Rules Optimizer tenant-state snapshots.</summary>
     public sealed record BuiltinWebhookInfo(

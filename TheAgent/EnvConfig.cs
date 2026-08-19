@@ -67,18 +67,6 @@ public static class EnvConfig
     public static string XiansApiKey    => GetRequired("XIANS-API-KEY");
 
     /// <summary>
-    /// Admin API key (sk-Xnai-...) used by Project Onboarding tools to save tenant
-    /// secrets and create builtin webhook integrations.
-    /// </summary>
-    public static string XiansAdminApiKey => Get("XIANS-ADMIN-API-KEY");
-
-    /// <summary>
-    /// Public base URL prepended to relative webhook paths when showing links to users
-    /// (e.g. a Cloudflare tunnel URL pointing at the Xians server).
-    /// </summary>
-    public static string XiansWebhookPublicUrl => Get("XIANS-WEBHOOK-PUBLIC-URL");
-
-    /// <summary>
     /// Legacy env override for a marketplace.json URL. Rules Optimizer
     /// <c>ListAvailablePlugins</c> always loads the hard-coded official
     /// plugins-official marketplace (live only) and ignores this value.
