@@ -6,20 +6,8 @@ using Xians.Lib.Agents.Core;
 
 namespace Xianix.AiHub;
 
-/// <summary>
-/// Single canonical reader for the <see cref="Constants.AiHubMappingKnowledgeName"/>
-/// knowledge document (the platform-hosted <c>ai-hub.json</c>). Same pattern as
-/// <see cref="Xianix.Rules.RulesKnowledge"/> for <c>rules.json</c>: fetch via
-/// <see cref="XiansContext"/>.<c>CurrentAgent.Knowledge</c>, then parse.
-/// Only callable from a workflow / activity context where the current agent is bound.
-/// </summary>
 public static class AiHubMappingKnowledge
 {
-    /// <summary>
-    /// Loads and parses the AI Hub mapping knowledge document.
-    /// Returns <c>null</c> when the document is missing, an empty catalog when content
-    /// is blank or unparseable, and a populated catalog on success.
-    /// </summary>
     public static async Task<AiHubMappingCatalog?> LoadAsync(ILogger? logger = null)
     {
         logger ??= NullLogger.Instance;

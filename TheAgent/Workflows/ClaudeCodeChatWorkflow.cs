@@ -223,10 +223,6 @@ public class ClaudeCodeChatWorkflow
         }
     }
 
-    /// <summary>
-    /// Best-effort AI Hub post when chat-driven plugins match a mapping. Chat runs usually
-    /// have no execution block name, so most will no-op unless a block name is present later.
-    /// </summary>
     private static async Task ReportAiHubMetricsAsync(
         ClaudeCodeChatRequest req,
         ContainerExecutionResult result,

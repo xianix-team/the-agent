@@ -1,39 +1,42 @@
 using System.Net.Http.Headers;
 using System.Text;
 using Microsoft.Extensions.Logging;
-using TheAgent;
 
 namespace Xianix.AiHub;
 
-/// <summary>
-/// Posts a single metrics event to AI Hub. Failures are logged; callers should treat
-/// reporting as non-critical. Does not retry 4xx responses (to avoid duplicate events).
-/// </summary>
 internal sealed class AiHubEventReporter
 {
+    internal const string DefaultApiBaseUrl = "https://ai-hub-api.99x.io";
+
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(15);
 
     private readonly HttpClient _http;
     private readonly ILogger _logger;
-    private readonly string _apiUrl;
     private readonly string _apiKey;
+    private readonly string _apiBaseUrl;
 
-    public AiHubEventReporter(HttpClient http, ILogger logger, string? apiUrl = null, string? apiKey = null)
+    public AiHubEventReporter(
+        HttpClient http,
+        ILogger logger,
+        string? apiKey = null,
+        string? apiBaseUrl = null)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _apiUrl = string.IsNullOrWhiteSpace(apiUrl) ? EnvConfig.AiHubApiUrl : apiUrl.TrimEnd('/');
-        _apiKey = apiKey ?? EnvConfig.AiHubApiKey;
+        _apiKey = apiKey ?? string.Empty;
+        _apiBaseUrl = string.IsNullOrWhiteSpace(apiBaseUrl)
+            ? DefaultApiBaseUrl
+            : apiBaseUrl.TrimEnd('/');
     }
 
-    /// <summary>
-    /// Returns <see langword="true"/> when an API key is configured. Actor defaults to
-    /// <c>xianix-agent</c> and is not required to post.
-    /// </summary>
-    public static bool IsConfigured(string? apiKey = null)
+    public static bool IsConfigured(string? apiKey) => !string.IsNullOrWhiteSpace(apiKey);
+
+    internal static string EventsUrl(string nodeId, string? apiBaseUrl = null)
     {
-        var key = string.IsNullOrWhiteSpace(apiKey) ? EnvConfig.AiHubApiKey : apiKey;
-        return !string.IsNullOrWhiteSpace(key);
+        var baseUrl = string.IsNullOrWhiteSpace(apiBaseUrl)
+            ? DefaultApiBaseUrl
+            : apiBaseUrl.TrimEnd('/');
+        return $"{baseUrl}/metrics/nodes/{Uri.EscapeDataString(nodeId)}/events";
     }
 
     public async Task<bool> PostEventAsync(
@@ -44,13 +47,13 @@ internal sealed class AiHubEventReporter
         ArgumentException.ThrowIfNullOrWhiteSpace(nodeId);
         ArgumentException.ThrowIfNullOrWhiteSpace(payloadJson);
 
+        var url = EventsUrl(nodeId, _apiBaseUrl);
+
         if (string.IsNullOrWhiteSpace(_apiKey))
         {
             _logger.LogDebug("AI Hub API key is empty; skipping event post for node {NodeId}.", nodeId);
             return false;
         }
-
-        var url = $"{_apiUrl}/metrics/nodes/{Uri.EscapeDataString(nodeId)}/events";
 
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Headers.TryAddWithoutValidation("X-Api-Key", _apiKey);

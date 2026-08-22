@@ -312,10 +312,6 @@ public class ProcessingWorkflow
         }
     }
 
-    /// <summary>
-    /// Best-effort AI Hub post for mapped execution blocks. Failures are swallowed —
-    /// AI Hub metrics must never fail a user-facing run.
-    /// </summary>
     private static async Task ReportAiHubMetricsAsync(
         ProcessingRequest orchestrationResult,
         ContainerExecutionResult executionResult,

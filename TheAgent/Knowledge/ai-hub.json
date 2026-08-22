@@ -1,6 +1,5 @@
 [
   {
-    "aihub-workflow-name": "Main development Flow",
     "aihub-node-id": "4",
     "aihub-activity": "ai-code-review",
     "xianix-execution-plugin": {
@@ -9,7 +8,6 @@
     }
   },
   {
-    "aihub-workflow-name": "Main development Flow",
     "aihub-node-id": "3",
     "aihub-activity": "performance-refactoring",
     "xianix-execution-plugin": {

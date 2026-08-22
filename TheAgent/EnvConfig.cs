@@ -160,22 +160,4 @@ public static class EnvConfig
     /// Defaults to the cheapest tier so building context never becomes a meaningful cost line.
     /// </summary>
     public static string ExecutorContextLlmModel => Get("EXECUTOR-CONTEXT-LLM-MODEL", "claude-haiku-4-5");
-
-    // AI Hub (optional post-execution metrics)
-    /// <summary>
-    /// Base URL for the AI Hub metrics API. Defaults to <c>https://ai-hub-api.99x.io</c>.
-    /// Events are posted to <c>{url}/metrics/nodes/{nodeId}/events</c> when a mapping matches.
-    /// </summary>
-    public static string AiHubApiUrl => Get("AIHUB-API-URL", "https://ai-hub-api.99x.io").TrimEnd('/');
-
-    /// <summary>
-    /// Personal or team API key sent as <c>X-Api-Key</c>. When empty, AI Hub posting is skipped.
-    /// </summary>
-    public static string AiHubApiKey => Get("AIHUB-API-KEY");
-
-    /// <summary>
-    /// Actor string written into each event's <c>actors</c> array. Defaults to
-    /// <c>xianix-agent</c>. Override with <c>AIHUB-ACTOR-ID</c> if needed.
-    /// </summary>
-    public static string AiHubActorId => Get("AIHUB-ACTOR-ID", "xianix-agent");
 }

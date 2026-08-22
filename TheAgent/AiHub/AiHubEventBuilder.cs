@@ -5,9 +5,6 @@ using Xianix.Workflows;
 
 namespace Xianix.AiHub;
 
-/// <summary>
-/// Builds the AI Hub metrics event payload for one completed container execution.
-/// </summary>
 internal static class AiHubEventBuilder
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -16,19 +13,13 @@ internal static class AiHubEventBuilder
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    /// <summary>
-    /// Builds a single-element JSON array body for
-    /// <c>POST /metrics/nodes/{nodeId}/events</c>.
-    /// </summary>
     public static string BuildPayloadJson(
         AiHubMappingEntry mapping,
         ContainerExecutionResult result,
-        string actorId,
         string? correlationId)
     {
         ArgumentNullException.ThrowIfNull(mapping);
         ArgumentNullException.ThrowIfNull(result);
-        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
 
         var (costUsd, _) = ResolveCost(result);
         var tokens = (result.InputTokens ?? 0) + (result.OutputTokens ?? 0);
@@ -47,7 +38,7 @@ internal static class AiHubEventBuilder
             {
                 CorrelationId = id,
                 Activity = mapping.Activity,
-                Actors = [actorId.Trim()],
+                Actors = [mapping.PluginName],
                 Dimensions = new AiHubDimensionsDto
                 {
                     Tokens = tokens,
