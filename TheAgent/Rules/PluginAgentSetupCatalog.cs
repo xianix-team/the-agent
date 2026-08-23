@@ -21,15 +21,11 @@ internal static class PluginAgentSetupCatalog
 {
     /// <summary>User-facing GitHub blob URL for the plugin README.</summary>
     public const string DefaultReadmeGithubBlobUrlTemplate =
-        "https://github.com/xianix-team/plugins-official/blob/main/plugins/{0}/README.md";
+        MarketplaceCatalog.DefaultReadmeGithubBlobUrlTemplate;
 
     /// <summary>Raw URL used for HTTP presence checks (blob pages are HTML).</summary>
     public const string DefaultReadmeRawUrlTemplate =
-        "https://raw.githubusercontent.com/xianix-team/plugins-official/main/plugins/{0}/README.md";
-
-    [Obsolete("Installability uses plugin README.md, not agent-setup.json.")]
-    public const string DefaultAgentSetupUrlTemplate =
-        "https://raw.githubusercontent.com/xianix-team/plugins-official/main/plugins/{0}/.xianix/agent-setup.json";
+        MarketplaceCatalog.DefaultReadmeRawUrlTemplate;
 
     private const string GitHubRepoPlaceholder = "https://github.com/org/repo.git";
     private const string AzureDevOpsRepoPlaceholder = "https://dev.azure.com/org/project/_git/repo";
@@ -67,10 +63,6 @@ internal static class PluginAgentSetupCatalog
 
     public static string BuildReadmeRawUrl(string pluginFolder) =>
         string.Format(DefaultReadmeRawUrlTemplate, pluginFolder.Trim().Trim('/'));
-
-    [Obsolete("Use BuildReadmeGithubBlobUrl / BuildReadmeRawUrl.")]
-    public static string BuildUrl(string pluginShortName) =>
-        string.Format(DefaultAgentSetupUrlTemplate, pluginShortName.Trim());
 
     public static bool IsInstallableSetup(PluginAgentSetup? setup) =>
         setup is not null
@@ -254,11 +246,6 @@ internal static class PluginAgentSetupCatalog
         return IsInstallableSetup(TryLoadLocalRecipe(name, NullLogger.Instance));
     }
 
-    /// <inheritdoc cref="IsInstallableCached"/>
-    [Obsolete("Use IsInstallableCached or IsInstallableAsync.")]
-    public static bool IsInstallableCachedOrEmbedded(string pluginShortName) =>
-        IsInstallableCached(pluginShortName);
-
     public static bool TryGetSetupCached(string pluginShortName, out PluginAgentSetup setup)
     {
         setup = null!;
@@ -284,11 +271,6 @@ internal static class PluginAgentSetupCatalog
         setup = loaded;
         return true;
     }
-
-    /// <inheritdoc cref="TryGetSetupCached"/>
-    [Obsolete("Use TryGetSetupCached or TryGetSetupAsync.")]
-    public static bool TryGetSetupCachedOrEmbedded(string pluginShortName, out PluginAgentSetup setup) =>
-        TryGetSetupCached(pluginShortName, out setup);
 
     public static IReadOnlyList<JsonElement> MaterializeExecutions(
         PluginAgentSetup setup,

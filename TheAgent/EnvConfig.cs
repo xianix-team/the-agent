@@ -59,16 +59,8 @@ public static class EnvConfig
     public static string XiansApiKey    => GetRequired("XIANS-API-KEY");
 
     /// <summary>
-    /// Legacy env override for a marketplace.json URL. Rules Optimizer
-    /// <c>ListAvailablePlugins</c> always loads the hard-coded official
-    /// plugins-official marketplace (live only) and ignores this value.
-    /// </summary>
-    public static string MarketplaceJsonUrl => Get(
-        "MARKETPLACE-JSON-URL",
-        "https://raw.githubusercontent.com/xianix-team/plugins-official/main/.claude-plugin/marketplace.json");
-
-    /// <summary>
     /// In-memory TTL (seconds) for a successful live marketplace fetch. Defaults to 1 hour.
+    /// The marketplace URL itself lives on <c>MarketplaceCatalog</c> (not an env override).
     /// </summary>
     public static int MarketplaceJsonCacheTtlSeconds =>
         int.TryParse(Get("MARKETPLACE-JSON-CACHE-TTL-SECONDS", "3600"), out var v) && v > 0 ? v : 3600;

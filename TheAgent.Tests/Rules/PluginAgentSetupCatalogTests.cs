@@ -47,6 +47,8 @@ public class PluginAgentSetupCatalogTests : IDisposable
             Assert.Contains(name, names);
 
         Assert.Equal(expected.Length, names.Count);
+        foreach (var name in expected)
+            Assert.True(PluginAgentSetupCatalog.IsInstallableCached(name), name);
     }
 
     [Fact]
@@ -225,12 +227,21 @@ public class PluginAgentSetupCatalogTests : IDisposable
     }
 
     [Fact]
-    public void TryGetRecipe_Facade_PrReviewer_HasGithubAndAzureDevOps()
+    public void PrReviewer_HasGithubAndAzureDevOpsRecipes()
     {
-        Assert.True(PluginExecutionRecipeCatalog.TryGetRecipe("pr-reviewer", out var recipe));
-        Assert.Equal("/pr-review", recipe.SlashCommand);
-        Assert.Contains("GITHUB-TOKEN", recipe.Platforms["github"].RequiredEnvs);
-        Assert.True(recipe.Platforms["github"].Executions.Count >= 2);
-        Assert.True(recipe.Platforms["azuredevops"].Executions.Count >= 2);
+        Assert.True(PluginAgentSetupCatalog.TryGetSetupCached("pr-reviewer", out var setup));
+        Assert.Equal("/pr-review", setup.SlashCommand);
+        Assert.Contains("GITHUB-TOKEN", setup.Platforms["github"].RequiredEnvs);
+        Assert.True(setup.Platforms["github"].Executions.Count >= 2);
+        Assert.True(setup.Platforms["azuredevops"].Executions.Count >= 2);
+    }
+
+    [Fact]
+    public void TestStrategist_HasGithubTriggerAndEnvs()
+    {
+        Assert.True(PluginAgentSetupCatalog.TryGetSetupCached("test-strategist", out var setup));
+        Assert.Contains("PR label ai-dlc/pr/test-strategy", setup.Platforms["github"].SuggestedTriggers);
+        Assert.Contains("GITHUB-TOKEN", setup.Platforms["github"].RequiredEnvs);
+        Assert.Contains("AZURE-DEVOPS-TOKEN", setup.Platforms["azuredevops"].RequiredEnvs);
     }
 }

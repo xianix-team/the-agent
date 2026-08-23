@@ -716,7 +716,7 @@ public sealed class OnboardingSubagentTools(
 
     [Description(
         "List plugins from the official live marketplace only: " +
-        "https://github.com/xianix-team/plugins-official/blob/main/.claude-plugin/marketplace.json " +
+        MarketplaceCatalog.MarketplaceGithubBlobUrl + " " +
         "(no embedded snapshot or other catalogs). Annotated with installed " +
         "(activation rules.json use-plugins) and installable (live plugin README.md under plugins/<folder>/). " +
         "Call after the user provides a repository URL (platform is inferred from the URL). Always fetch at tool runtime.")]

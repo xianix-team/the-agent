@@ -18,15 +18,24 @@ internal static class MarketplaceCatalog
     public const string DefaultMarketplaceName = "xianix-plugins-official";
     public const string DefaultMarketplaceRepo = "xianix-team/plugins-official";
 
-    /// <summary>
-    /// Canonical marketplace catalog. Same content as
-    /// https://github.com/xianix-team/plugins-official/blob/main/.claude-plugin/marketplace.json
-    /// </summary>
+    /// <summary>Live raw marketplace.json used by Rules Optimizer fetches.</summary>
     public const string DefaultMarketplaceUrl =
-        "https://raw.githubusercontent.com/xianix-team/plugins-official/main/.claude-plugin/marketplace.json";
+        "https://raw.githubusercontent.com/" + DefaultMarketplaceRepo
+        + "/main/.claude-plugin/marketplace.json";
 
+    /// <summary>User-facing GitHub blob URL for the same marketplace.json.</summary>
     public const string MarketplaceGithubBlobUrl =
-        "https://github.com/xianix-team/plugins-official/blob/main/.claude-plugin/marketplace.json";
+        "https://github.com/" + DefaultMarketplaceRepo
+        + "/blob/main/.claude-plugin/marketplace.json";
+
+    /// <summary>User-facing GitHub blob URL for a plugin README (<c>{0}</c> = folder).</summary>
+    public const string DefaultReadmeGithubBlobUrlTemplate =
+        "https://github.com/" + DefaultMarketplaceRepo + "/blob/main/plugins/{0}/README.md";
+
+    /// <summary>Raw URL used for HTTP README presence checks (blob pages are HTML).</summary>
+    public const string DefaultReadmeRawUrlTemplate =
+        "https://raw.githubusercontent.com/" + DefaultMarketplaceRepo
+        + "/main/plugins/{0}/README.md";
 
     // Live raw.githubusercontent.com fetches from some networks commonly take 15–25s.
     // A 10s timeout made the catalog look "unreachable" while the same URL worked in a browser.

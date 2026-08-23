@@ -60,6 +60,12 @@ public class MarketplaceCatalogTests
         Assert.Equal(
             "https://github.com/xianix-team/plugins-official/blob/main/.claude-plugin/marketplace.json",
             MarketplaceCatalog.MarketplaceGithubBlobUrl);
+        Assert.Equal(
+            "https://github.com/xianix-team/plugins-official/blob/main/plugins/{0}/README.md",
+            MarketplaceCatalog.DefaultReadmeGithubBlobUrlTemplate);
+        Assert.Equal(
+            "https://raw.githubusercontent.com/xianix-team/plugins-official/main/plugins/{0}/README.md",
+            MarketplaceCatalog.DefaultReadmeRawUrlTemplate);
     }
 
     [Fact]
