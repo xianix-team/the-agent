@@ -45,6 +45,13 @@ public sealed class WebhookRuleSet
     [JsonPropertyName("with-envs")]
     public List<EnvEntry> WithEnvs { get; init; } = [];
 
+    /// <summary>
+    /// Shared API-key reference for a dedicated outbound webhook rule set such as
+    /// <c>{ "webhook": "metrics" }</c>. Individual mapping entries provide their URLs.
+    /// </summary>
+    [JsonPropertyName("webhook-api-key")]
+    public string OutboundWebhookApiKey { get; init; } = "";
+
     [JsonPropertyName("executions")]
     public List<WebhookExecution> Executions { get; init; } = [];
 }
@@ -177,6 +184,27 @@ public sealed class WebhookExecution
     /// </summary>
     [JsonPropertyName("with-envs")]
     public List<EnvEntry> WithEnvs { get; init; } = [];
+
+    /// <summary>
+    /// Optional post-execution webhook ability. The value identifies the payload builder
+    /// (currently <c>metrics</c>); the destination and credential remain data in rules.json.
+    /// </summary>
+    [JsonPropertyName("webhook")]
+    public string OutboundWebhook { get; init; } = "";
+
+    /// <summary>
+    /// Full destination URL for the post-execution webhook. Supports the same
+    /// <c>{{input-name}}</c> placeholders as <see cref="Prompt"/>.
+    /// </summary>
+    [JsonPropertyName("webhook-url")]
+    public string OutboundWebhookUrl { get; init; } = "";
+
+    /// <summary>
+    /// Tenant secret reference used as the outbound <c>X-Api-Key</c>, for example
+    /// <c>secrets.AI_HUB_KEY</c>. The secret value is never placed in execution inputs.
+    /// </summary>
+    [JsonPropertyName("webhook-api-key")]
+    public string OutboundWebhookApiKey { get; init; } = "";
 
     /// <summary>
     /// Optional Claude model the executor should run this block on (e.g.

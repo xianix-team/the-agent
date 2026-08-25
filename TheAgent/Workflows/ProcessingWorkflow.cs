@@ -3,7 +3,7 @@ using Microsoft.Extensions.Logging;
 using Temporalio.Exceptions;
 using Temporalio.Workflows;
 using Xianix.Activities;
-using Xianix.AiHub;
+using Xianix.Webhooks;
 using Xianix.Containers;
 using Xianix.Orchestrator;
 using Xianix.Rules;
@@ -104,7 +104,8 @@ public class ProcessingWorkflow
             ContainerOutputParser.Parse(executionResult);
             LogOutcome(executionResult, executionLabel, executionId, orchestrationResult.TenantId, repoLabel, keyInputs);
             await ReportExecutionMetricsAsync(orchestrationResult, executionResult);
-            await ReportAiHubMetricsAsync(orchestrationResult, executionResult, executionId);
+            if (orchestrationResult.OutboundWebhook is not null)
+                await ReportOutboundWebhookAsync(orchestrationResult, executionResult, executionId);
         }
         finally
         {
@@ -312,34 +313,33 @@ public class ProcessingWorkflow
         }
     }
 
-    private static async Task ReportAiHubMetricsAsync(
+    private static async Task ReportOutboundWebhookAsync(
         ProcessingRequest orchestrationResult,
         ContainerExecutionResult executionResult,
         string executionId)
     {
         try
         {
-            var execution = orchestrationResult.Execution;
-            IReadOnlyList<PluginEntry> plugins = execution?.Plugins is { Count: > 0 } p
-                ? p
-                : Array.Empty<PluginEntry>();
-
-            var request = new AiHubReportRequest
+            var webhook = orchestrationResult.OutboundWebhook!;
+            var request = new OutboundWebhookRequest
             {
-                BlockName = orchestrationResult.ExecutionBlockName,
-                Plugins = plugins,
+                Webhook = webhook.Name,
+                Url = webhook.Url,
+                ApiKeyReference = webhook.ApiKeyReference,
+                ExecutionName = orchestrationResult.ExecutionBlockName,
                 CorrelationId = executionId,
+                UrlVariables = WebhookUrlVariables.From(orchestrationResult.Inputs, executionId),
                 Result = executionResult,
             };
 
             await Workflow.ExecuteActivityAsync(
-                (AiHubActivities a) => a.ReportExecutionAsync(request),
-                ContainerWorkflowOptions.AiHub);
+                (OutboundWebhookActivities a) => a.CallWebhookAsync(request),
+                ContainerWorkflowOptions.OutboundWebhook);
         }
         catch (Exception ex)
         {
             Workflow.Logger.LogWarning(ex,
-                "Failed to report AI Hub metrics for '{Name}', block '{Block}'. Metrics are non-critical.",
+                "Failed to call metrics webhook for '{Name}', block '{Block}'. Metrics are non-critical.",
                 orchestrationResult.Name,
                 orchestrationResult.ExecutionBlockName ?? "—");
         }

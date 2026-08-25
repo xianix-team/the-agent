@@ -50,7 +50,7 @@ public static class ContainerWorkflowOptions
         RetryPolicy = new() { MaximumAttempts = 1 },
     };
 
-    public static readonly ActivityOptions AiHub = new()
+    public static readonly ActivityOptions OutboundWebhook = new()
     {
         StartToCloseTimeout = TimeSpan.FromSeconds(30),
         RetryPolicy = new() { MaximumAttempts = 1 },

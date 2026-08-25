@@ -162,7 +162,11 @@ public class EventOrchestratorTests
             WithEnvs: null,
             Platform: "github",
             RepositoryUrl: "https://github.com/acme/app.git",
-            RepositoryName: "acme/app");
+            RepositoryName: "acme/app",
+            OutboundWebhook: new OutboundWebhookSpec(
+                "metrics",
+                "https://example.test/metrics",
+                "secrets.AI_HUB_KEY"));
 
         _evaluator.EvaluateAsync("Default", Arg.Any<object?>())
                   .Returns(Task.FromResult(EvaluationOutcome.Match(evaluation)));
@@ -175,6 +179,7 @@ public class EventOrchestratorTests
         Assert.Equal("github", execution!.Platform);
         Assert.Equal("https://github.com/acme/app.git", execution.RepositoryUrl);
         Assert.Equal("acme/app", execution.RepositoryName);
+        Assert.Equal("metrics", batch.Matches[0].OutboundWebhook?.Name);
     }
 
     [Fact]

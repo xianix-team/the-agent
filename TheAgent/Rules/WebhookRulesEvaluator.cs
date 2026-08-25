@@ -209,6 +209,7 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             var prompt = InterpolatePrompt(execution.Prompt, dict);
             var hasPrompt = !string.IsNullOrWhiteSpace(prompt);
             var blockName = string.IsNullOrWhiteSpace(execution.Name) ? null : execution.Name.Trim();
+            var outboundWebhook = BuildOutboundWebhook(ruleSets, execution, dict);
 
             // Merge rule-set common envs with the execution's own envs. Execution-level
             // entries win on name collisions — same "common defaults, executions may
@@ -241,7 +242,8 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
                 AllowedTools:         execution.AllowedTools,
                 DisallowedTools:      execution.DisallowedTools,
                 MaxBudgetUsd:         execution.MaxBudgetUsd,
-                ResumeSessions:       execution.ResumeSessions));
+                ResumeSessions:       execution.ResumeSessions,
+                OutboundWebhook:      outboundWebhook));
         }
 
         if (matches.Count > 0)
@@ -632,6 +634,65 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
         }
 
         return merged;
+    }
+
+    private static OutboundWebhookSpec? BuildOutboundWebhook(
+        IReadOnlyList<WebhookRuleSet> ruleSets,
+        WebhookExecution execution,
+        Dictionary<string, object?> inputs)
+    {
+        // Backward-compatible inline form.
+        if (!string.IsNullOrWhiteSpace(execution.OutboundWebhook))
+        {
+            return new OutboundWebhookSpec(
+                execution.OutboundWebhook.Trim(),
+                execution.OutboundWebhookUrl.Trim(),
+                execution.OutboundWebhookApiKey.Trim());
+        }
+
+        if (string.IsNullOrWhiteSpace(execution.Name))
+            return null;
+
+        var metricsSet = ruleSets.FirstOrDefault(set =>
+            string.Equals(set.WebhookName, "metrics", StringComparison.OrdinalIgnoreCase));
+        var mapping = metricsSet?.Executions.FirstOrDefault(candidate =>
+            string.Equals(candidate.Name, execution.Name, StringComparison.OrdinalIgnoreCase)
+            && MappingPluginsMatch(candidate.Plugins, execution.Plugins));
+
+        if (metricsSet is null || mapping is null || string.IsNullOrWhiteSpace(mapping.OutboundWebhookUrl))
+            return null;
+
+        // Mapping inputs are configuration constants (node-id, activity, actor, etc.),
+        // not paths into the original inbound payload.
+        foreach (var input in mapping.InputRules.Where(input => input.Constant))
+        {
+            if (!string.IsNullOrWhiteSpace(input.Name))
+                inputs[input.Name] = input.Value;
+        }
+
+        var apiKey = string.IsNullOrWhiteSpace(mapping.OutboundWebhookApiKey)
+            ? metricsSet.OutboundWebhookApiKey
+            : mapping.OutboundWebhookApiKey;
+
+        return new OutboundWebhookSpec(
+            metricsSet.WebhookName.Trim(),
+            mapping.OutboundWebhookUrl.Trim(),
+            apiKey.Trim());
+    }
+
+    private static bool MappingPluginsMatch(
+        IReadOnlyList<PluginEntry> mappingPlugins,
+        IReadOnlyList<PluginEntry> executionPlugins)
+    {
+        if (mappingPlugins.Count == 0)
+            return true;
+
+        return mappingPlugins.Any(mapping =>
+            executionPlugins.Any(execution =>
+                string.Equals(
+                    mapping.PluginName,
+                    execution.PluginName,
+                    StringComparison.OrdinalIgnoreCase)));
     }
 
     /// <summary>

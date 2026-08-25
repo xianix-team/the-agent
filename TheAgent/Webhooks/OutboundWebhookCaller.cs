@@ -2,56 +2,40 @@ using System.Net.Http.Headers;
 using System.Text;
 using Microsoft.Extensions.Logging;
 
-namespace Xianix.AiHub;
+namespace Xianix.Webhooks;
 
-internal sealed class AiHubEventReporter
+/// <summary>
+/// Generic HTTP POST of a JSON body to a caller-supplied URL. Does not know
+/// which vendor owns the URL.
+/// </summary>
+internal sealed class OutboundWebhookCaller
 {
-    internal const string DefaultApiBaseUrl = "https://ai-hub-api.99x.io";
-
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(15);
 
     private readonly HttpClient _http;
     private readonly ILogger _logger;
     private readonly string _apiKey;
-    private readonly string _apiBaseUrl;
 
-    public AiHubEventReporter(
-        HttpClient http,
-        ILogger logger,
-        string? apiKey = null,
-        string? apiBaseUrl = null)
+    public OutboundWebhookCaller(HttpClient http, ILogger logger, string? apiKey = null)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _apiKey = apiKey ?? string.Empty;
-        _apiBaseUrl = string.IsNullOrWhiteSpace(apiBaseUrl)
-            ? DefaultApiBaseUrl
-            : apiBaseUrl.TrimEnd('/');
     }
 
     public static bool IsConfigured(string? apiKey) => !string.IsNullOrWhiteSpace(apiKey);
 
-    internal static string EventsUrl(string nodeId, string? apiBaseUrl = null)
-    {
-        var baseUrl = string.IsNullOrWhiteSpace(apiBaseUrl)
-            ? DefaultApiBaseUrl
-            : apiBaseUrl.TrimEnd('/');
-        return $"{baseUrl}/metrics/nodes/{Uri.EscapeDataString(nodeId)}/events";
-    }
-
-    public async Task<bool> PostEventAsync(
-        string nodeId,
+    public async Task<bool> PostAsync(
+        string url,
         string payloadJson,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(nodeId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(url);
         ArgumentException.ThrowIfNullOrWhiteSpace(payloadJson);
-
-        var url = EventsUrl(nodeId, _apiBaseUrl);
 
         if (string.IsNullOrWhiteSpace(_apiKey))
         {
-            _logger.LogDebug("AI Hub API key is empty; skipping event post for node {NodeId}.", nodeId);
+            _logger.LogDebug("Outbound webhook API key is empty; skipping POST to {Url}.", url);
             return false;
         }
 
@@ -71,24 +55,24 @@ internal sealed class AiHubEventReporter
             if (response.IsSuccessStatusCode)
             {
                 _logger.LogInformation(
-                    "AI Hub event accepted for node {NodeId}: {StatusCode} {Body}",
-                    nodeId, (int)response.StatusCode, Truncate(body));
+                    "Outbound webhook accepted: {StatusCode} {Url} {Body}",
+                    (int)response.StatusCode, url, Truncate(body));
                 return true;
             }
 
             _logger.LogWarning(
-                "AI Hub event rejected for node {NodeId}: {StatusCode} {Body}",
-                nodeId, (int)response.StatusCode, Truncate(body));
+                "Outbound webhook rejected: {StatusCode} {Url} {Body}",
+                (int)response.StatusCode, url, Truncate(body));
             return false;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            _logger.LogWarning("AI Hub event post timed out for node {NodeId}.", nodeId);
+            _logger.LogWarning("Outbound webhook POST timed out: {Url}.", url);
             return false;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning(ex, "AI Hub event post failed for node {NodeId}.", nodeId);
+            _logger.LogWarning(ex, "Outbound webhook POST failed: {Url}.", url);
             return false;
         }
     }

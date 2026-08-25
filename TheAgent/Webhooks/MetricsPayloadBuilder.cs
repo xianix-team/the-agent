@@ -3,9 +3,9 @@ using System.Text.Json.Serialization;
 using Xianix.Activities;
 using Xianix.Workflows;
 
-namespace Xianix.AiHub;
+namespace Xianix.Webhooks;
 
-internal static class AiHubEventBuilder
+internal static class MetricsPayloadBuilder
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -13,12 +13,8 @@ internal static class AiHubEventBuilder
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    public static string BuildPayloadJson(
-        AiHubMappingEntry mapping,
-        ContainerExecutionResult result,
-        string? correlationId)
+    public static string BuildPayloadJson(ContainerExecutionResult result, string? correlationId)
     {
-        ArgumentNullException.ThrowIfNull(mapping);
         ArgumentNullException.ThrowIfNull(result);
 
         var (costUsd, _) = ResolveCost(result);
@@ -34,28 +30,19 @@ internal static class AiHubEventBuilder
 
         var payload = new[]
         {
-            new AiHubEventDto
+            new MetricsEventDto
             {
                 CorrelationId = id,
-                Activity = mapping.Activity,
-                Actors = [mapping.PluginName],
-                Dimensions = new AiHubDimensionsDto
-                {
-                    Tokens = tokens,
-                    CostUsd = costUsd ?? 0,
-                    Model = model,
-                    Status = result.Succeeded ? "success" : "error",
-                },
+                Tokens = tokens,
+                CostUsd = costUsd ?? 0,
+                Model = model,
+                Status = result.Succeeded ? "success" : "error",
             },
         };
 
         return JsonSerializer.Serialize(payload, JsonOptions);
     }
 
-    /// <summary>
-    /// Same cost resolution as <see cref="ExecutionMetrics"/>: prefer authoritative
-    /// <c>cost_usd</c>, else estimate from per-model token usage.
-    /// </summary>
     internal static (double? cost, bool estimated) ResolveCost(ContainerExecutionResult result)
     {
         if (result.CostUsd.HasValue)
@@ -81,16 +68,9 @@ internal static class AiHubEventBuilder
         return any ? (total, true) : (null, false);
     }
 
-    private sealed class AiHubEventDto
+    private sealed class MetricsEventDto
     {
         public required string CorrelationId { get; init; }
-        public required string Activity { get; init; }
-        public required string[] Actors { get; init; }
-        public required AiHubDimensionsDto Dimensions { get; init; }
-    }
-
-    private sealed class AiHubDimensionsDto
-    {
         public long Tokens { get; init; }
         public double CostUsd { get; init; }
         public required string Model { get; init; }

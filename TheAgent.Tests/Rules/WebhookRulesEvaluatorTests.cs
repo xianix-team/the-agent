@@ -403,6 +403,68 @@ public class WebhookRulesEvaluatorTests
     }
 
     [Fact]
+    public void EvaluateWithRules_CarriesMetricsWebhookFromExecution()
+    {
+        using var doc = JsonDocument.Parse("""{ "number": 42 }""");
+        var ruleSets = _sut.ParseRules(
+            """
+            [
+              {
+                "webhook": "Default",
+                "executions": [
+                  {
+                    "name": "github-pr-review",
+                    "match-any": [],
+                    "use-inputs": [
+                      { "name": "pr-number", "value": "number" }
+                    ],
+                    "use-plugins": [
+                      { "plugin-name": "pr-reviewer@xianix-plugins-official" }
+                    ],
+                    "execute-prompt": "review"
+                  }
+                ]
+              },
+              {
+                "webhook": "metrics",
+                "webhook-api-key": "secrets.AI_HUB_KEY",
+                "executions": [
+                  {
+                    "name": "github-pr-review",
+                    "use-inputs": [
+                      { "name": "node-id", "value": "nd_123", "constant": true },
+                      { "name": "activity", "value": "pr-review", "constant": true }
+                    ],
+                    "use-plugins": [
+                      { "plugin-name": "pr-reviewer@xianix-plugins-official" }
+                    ],
+                    "webhook-url": "https://example.test/nodes/{{node-id}}/activity/{{activity}}/{{pr-number}}"
+                  },
+                  {
+                    "name": "other-execution",
+                    "use-inputs": [
+                      { "name": "node-id", "value": "nd_456", "constant": true }
+                    ],
+                    "webhook-url": "https://example.test/nodes/{{node-id}}"
+                  }
+                ]
+              }
+            ]
+            """);
+
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        var result = Assert.Single(outcome.Results!);
+        Assert.Equal("nd_123", result.Inputs["node-id"]);
+        Assert.Equal("pr-review", result.Inputs["activity"]);
+        Assert.Equal("metrics", result.OutboundWebhook?.Name);
+        Assert.Equal(
+            "https://example.test/nodes/{{node-id}}/activity/{{activity}}/{{pr-number}}",
+            result.OutboundWebhook?.Url);
+        Assert.Equal("secrets.AI_HUB_KEY", result.OutboundWebhook?.ApiKeyReference);
+    }
+
+    [Fact]
     public void EvaluateWithRules_MandatoryInput_SkipsBlockWhenPathMissing()
     {
         using var doc = JsonDocument.Parse("""{ "action": "opened" }""");

@@ -3,7 +3,6 @@ using Microsoft.Extensions.Logging;
 using Temporalio.Exceptions;
 using Temporalio.Workflows;
 using Xianix.Activities;
-using Xianix.AiHub;
 using Xianix.Containers;
 using Xians.Lib.Agents.Core;
 
@@ -113,7 +112,6 @@ public class ClaudeCodeChatWorkflow
 
             ContainerOutputParser.Parse(result);
             await ReportChatExecutionMetricsAsync(req, result);
-            await ReportAiHubMetricsAsync(req, result, executionId);
 
             string summary;
             if (result.Succeeded)
@@ -219,33 +217,6 @@ public class ClaudeCodeChatWorkflow
         {
             Workflow.Logger.LogWarning(ex,
                 "Failed to report chat execution metrics for tenant '{TenantId}', repo '{Repo}'. Metrics are non-critical.",
-                req.TenantId, req.RepositoryName);
-        }
-    }
-
-    private static async Task ReportAiHubMetricsAsync(
-        ClaudeCodeChatRequest req,
-        ContainerExecutionResult result,
-        string executionId)
-    {
-        try
-        {
-            var request = new AiHubReportRequest
-            {
-                BlockName = null,
-                Plugins = req.Plugins,
-                CorrelationId = executionId,
-                Result = result,
-            };
-
-            await Workflow.ExecuteActivityAsync(
-                (AiHubActivities a) => a.ReportExecutionAsync(request),
-                ContainerWorkflowOptions.AiHub);
-        }
-        catch (Exception ex)
-        {
-            Workflow.Logger.LogWarning(ex,
-                "Failed to report AI Hub metrics for tenant '{TenantId}', repo '{Repo}'. Metrics are non-critical.",
                 req.TenantId, req.RepositoryName);
         }
     }

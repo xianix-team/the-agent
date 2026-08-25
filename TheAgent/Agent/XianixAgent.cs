@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Logging;
 using TheAgent;
 using Xianix.Activities;
-using Xianix.AiHub;
+using Xianix.Webhooks;
 using Xianix.Orchestrator;
 using Xianix.Rules;
 using Xianix.Workflows;
@@ -128,13 +128,12 @@ public class XianixAgent(
                 new WorkflowOptions { Activable = false },
                 typeName: EnvConfig.AgentName + ":Processing Workflow")
             .AddActivity<ContainerActivities>()
-            .AddActivity<AiHubActivities>();
+            .AddActivity<OutboundWebhookActivities>();
 
         xiansAgent.Workflows
             .DefineCustom<ClaudeCodeChatWorkflow>(new WorkflowOptions { Activable = false },
             typeName: EnvConfig.AgentName + ":ClaudeCodeChat Workflow")
-            .AddActivity<ContainerActivities>()
-            .AddActivity<AiHubActivities>();
+            .AddActivity<ContainerActivities>();
 
         xiansAgent.Workflows
             .DefineCustom<OnboardRepositoryWorkflow>(new WorkflowOptions { Activable = false },
@@ -279,11 +278,6 @@ public class XianixAgent(
             knowledgeType: "markdown"
         );
 
-        await xiansAgent.Knowledge.UploadEmbeddedResourceAsync(
-            resourcePath: "Knowledge/ai-hub.json",
-            knowledgeName: Constants.AiHubMappingKnowledgeName,
-            knowledgeType: "json"
-        );
     }
 
     private void LogWebhookVerificationFailure(
