@@ -427,7 +427,7 @@ public class WebhookRulesEvaluatorTests
               },
               {
                 "webhook": "metrics",
-                "webhook-api-key": "secrets.AI_HUB_KEY",
+                "webhook-api-key": "secrets.AIHUB-API-KEY",
                 "executions": [
                   {
                     "name": "github-pr-review",
@@ -461,7 +461,7 @@ public class WebhookRulesEvaluatorTests
         Assert.Equal(
             "https://example.test/nodes/{{node-id}}/activity/{{activity}}/{{pr-number}}",
             result.OutboundWebhook?.Url);
-        Assert.Equal("secrets.AI_HUB_KEY", result.OutboundWebhook?.ApiKeyReference);
+        Assert.Equal("secrets.AIHUB-API-KEY", result.OutboundWebhook?.ApiKeyReference);
     }
 
     [Fact]

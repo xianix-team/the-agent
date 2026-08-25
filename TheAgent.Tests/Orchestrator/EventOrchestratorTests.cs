@@ -166,7 +166,7 @@ public class EventOrchestratorTests
             OutboundWebhook: new OutboundWebhookSpec(
                 "metrics",
                 "https://example.test/metrics",
-                "secrets.AI_HUB_KEY"));
+                "secrets.AIHUB-API-KEY"));
 
         _evaluator.EvaluateAsync("Default", Arg.Any<object?>())
                   .Returns(Task.FromResult(EvaluationOutcome.Match(evaluation)));

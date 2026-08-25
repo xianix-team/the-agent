@@ -9,8 +9,8 @@ namespace TheAgent.Tests.Webhooks;
 public class WebhookApiKeyTests
 {
     [Theory]
-    [InlineData("secrets.AI_HUB_KEY", "AI_HUB_KEY")]
-    [InlineData("secret.AI_HUB_KEY", "AI_HUB_KEY")]
+    [InlineData("secrets.AIHUB-API-KEY", "AIHUB-API-KEY")]
+    [InlineData("secret.AIHUB-API-KEY", "AIHUB-API-KEY")]
     [InlineData(" SECRETS.team-key ", "team-key")]
     public void ParseSecretName_AcceptsExplicitSecretReferences(string reference, string expected)
     {
@@ -20,8 +20,8 @@ public class WebhookApiKeyTests
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    [InlineData("AI_HUB_KEY")]
-    [InlineData("host.AI_HUB_KEY")]
+    [InlineData("AIHUB-API-KEY")]
+    [InlineData("host.AIHUB-API-KEY")]
     public void ParseSecretName_RejectsImplicitOrNonSecretReferences(string? reference) =>
         Assert.Null(WebhookApiKey.ParseSecretName(reference));
 }
@@ -232,7 +232,7 @@ public class OutboundWebhookActivitiesTests
         {
             Webhook = "metrics",
             Url = "https://example.test/nodes/nd_blscMVsoz0/activity/sample-activity/corelationid/{{pr-number}}?actors=hasith&pr-review",
-            ApiKeyReference = "secrets.AI_HUB_KEY",
+            ApiKeyReference = "secrets.AIHUB-API-KEY",
             ExecutionName = "github-pull-request-review",
             CorrelationId = "abc123",
             UrlVariables = new Dictionary<string, string> { ["pr-number"] = "9" },
@@ -264,7 +264,7 @@ public class OutboundWebhookActivitiesTests
         {
             Webhook = "unknown",
             Url = "https://example.test/metrics",
-            ApiKeyReference = "secrets.AI_HUB_KEY",
+            ApiKeyReference = "secrets.AIHUB-API-KEY",
             ExecutionName = "other-execution",
             CorrelationId = "abc123",
             Result = OkResult(),
@@ -285,7 +285,7 @@ public class OutboundWebhookActivitiesTests
         {
             Webhook = "metrics",
             Url = "https://example.test/metrics",
-            ApiKeyReference = "secrets.AI_HUB_KEY",
+            ApiKeyReference = "secrets.AIHUB-API-KEY",
             ExecutionName = "github-pull-request-review",
             CorrelationId = "abc123",
             UrlVariables = new Dictionary<string, string> { ["pr-number"] = "9" },
@@ -307,7 +307,7 @@ public class OutboundWebhookActivitiesTests
         {
             Webhook = "metrics",
             Url = "https://example.test/{{pr-number}}",
-            ApiKeyReference = "secrets.AI_HUB_KEY",
+            ApiKeyReference = "secrets.AIHUB-API-KEY",
             ExecutionName = "github-pull-request-review",
             CorrelationId = "abc123",
             UrlVariables = new Dictionary<string, string>(),

@@ -201,7 +201,7 @@ public sealed class WebhookExecution
 
     /// <summary>
     /// Tenant secret reference used as the outbound <c>X-Api-Key</c>, for example
-    /// <c>secrets.AI_HUB_KEY</c>. The secret value is never placed in execution inputs.
+    /// <c>secrets.AIHUB-API-KEY</c>. The secret value is never placed in execution inputs.
     /// </summary>
     [JsonPropertyName("webhook-api-key")]
     public string OutboundWebhookApiKey { get; init; } = "";

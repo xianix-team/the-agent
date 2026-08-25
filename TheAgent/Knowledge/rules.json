@@ -424,7 +424,7 @@
     },
     {
       "webhook": "metrics",
-      "webhook-api-key": "secrets.AI_HUB_KEY",
+      "webhook-api-key": "secrets.AIHUB-API-KEY",
       "executions": [
         {
           "name": "github-pull-request-review",
