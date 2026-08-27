@@ -6,7 +6,50 @@ The rules file is the single configuration surface that controls **what the agen
 rules.json  →  WebhookRulesEvaluator  →  EventOrchestrator  →  ProcessingWorkflow  →  Executor Container
 ```
 
-In **this repository**, the default rules are embedded from [`TheAgent/Knowledge/rules.json`](../TheAgent/Knowledge/rules.json) and uploaded as Xians knowledge document **`Rules`** (`Constants.RulesKnowledgeName`).
+In **this repository**, the default rules are embedded from [`TheAgent/Knowledge/rules.json`](../TheAgent/Knowledge/rules.json) and uploaded as Xians knowledge document **`Rules`** (`Constants.RulesKnowledgeName`) at **system scope** on agent startup (Studio: System).
+
+**Scope rules for Rules Optimizer:**
+
+| When | Where Rules live | Studio label |
+|------|------------------|--------------|
+| Initial seed (prompts + empty `rules.json`) | `systemScoped=true` | System |
+| After `InstallPlugins` / `SaveRules` | `systemScoped=false` + `activationName` | Agent |
+
+Do not write plugin installs back to system or organization scope.
+
+---
+
+## Three sources of truth (Rules Optimizer)
+
+Rules Optimizer no longer treats `rules.json` as both the plugin catalog and the installed configuration. Keep these separate:
+
+| Concern | Source | Notes |
+| --------- | -------- | ------- |
+| **Available plugins** | Official marketplace only ([`marketplace.json`](https://github.com/xianix-team/plugins-official/blob/main/.claude-plugin/marketplace.json)), fetched live — no alternate catalog fallback | Full listing shown to the user. Test copies live under `TheAgent.Tests/Fixtures/marketplace.json` only. |
+| **Ready to install** | Marketplace entry **and** a live plugin [`README.md`](https://github.com/xianix-team/plugins-official/blob/main/plugins/pr-reviewer/README.md) at `plugins/<folder>/README.md` (folder from marketplace `source`) **and** a local execution recipe | Secrets, triggers, webhook events, and execution templates come from `TheAgent.Tests/Fixtures/agent-setup/<name>/agent-setup.json` (copied to the agent as `PluginRecipes/`). Do **not** fetch remote `.xianix/agent-setup.json`. |
+| **Coming soon** | Marketplace entry without a fetchable README, or without a local execution recipe | Listed but not installable |
+| **Installed plugins** | Agent-scoped `rules.json` `use-plugins` entries (Studio: Agent = activation override; webhook root + executions + chat rule sets) | Deduplicated union; system seed stays empty until first save |
+
+A **fresh activation** starts from this skeleton (no installed plugins):
+
+```json
+[
+  {
+    "webhook": "Default",
+    "with-envs": [],
+    "use-plugins": [],
+    "executions": []
+  },
+  {
+    "chat": "chat",
+    "use-plugins": [],
+    "model": "claude-sonnet-4-5",
+    "max-budget-usd": 5.0
+  }
+]
+```
+
+Rules Optimizer loads phase-specific **skills** (under `Knowledge/skills/rules-optimizer/`) via `LoadRulesOptimizerSkill`; low-level C# tools remain the implementation layer.
 
 ---
 
@@ -15,7 +58,7 @@ In **this repository**, the default rules are embedded from [`TheAgent/Knowledge
 `rules.json` is a JSON array of **rule set** objects. The *kind* of each rule set is chosen by its discriminator key at the **root level** of the object — mutually exclusive:
 
 | Root key | Kind | Consumed by | Section |
-|----------|------|-------------|---------|
+| ---------- | ------ | ------------- | --------- |
 | `"webhook"` | Webhook rule set — reacts to an inbound event | `WebhookRulesEvaluator` | below |
 | `"chat"` | Chat rule set — the plugin invocations the chat tool may offer | `AvailablePluginsCatalog` | [1a](#1a-chat--root-level-chat-rule-sets) |
 | `"schedule"` (+ `"cron"`) | Schedule rule set — cron-driven runs | `ScheduleEvaluator` | (see schedule docs) |
@@ -36,7 +79,8 @@ Every kind carries an **executions** array (each execution is an independent pip
         "use-inputs": [ ... ],
         "use-plugins": [ ... ],
         "with-envs":   [ ... ],
-        "execute-prompt": "..."
+        "execute-prompt": "...",
+        "raise-events": [ ... ]
       }
     ]
   }
@@ -44,7 +88,7 @@ Every kind carries an **executions** array (each execution is an independent pip
 ```
 
 | Field | Description |
-|-------|-------------|
+| ------- | ------------- |
 | `webhook` | Webhook name from Xians Agent Studio (must match incoming events) |
 | `with-envs` (optional, on the rule set) | Rule-set-wide [common environment variables](#5-with-envs--container-environment-variables) injected into every execution in this rule set. Per-execution `with-envs` entries override these by env name. |
 | `executions` | One or more execution blocks |
@@ -128,7 +172,7 @@ Unlike a webhook rule set, **a chat rule set has no `executions` array.** A chat
 ```
 
 | Root key | Consumed by | Notes |
-|----------|-------------|-------|
+| ---------- | ------------- | ------- |
 | `"webhook"` | `WebhookRulesEvaluator` against inbound webhook payloads | Matches on the webhook name; has `executions`. |
 | `"chat"` | `AvailablePluginsCatalog` (feeds the chat tool's `ListAvailablePlugins`) | Has no webhook name, so the webhook evaluator **never** selects it. No `executions` — `use-plugins` + tuning at the root. |
 | `"schedule"` (+ `"cron"`) | `ScheduleEvaluator` | Cron-driven; parsed independently from the same document. |
@@ -138,7 +182,7 @@ Unlike a webhook rule set, **a chat rule set has no `executions` array.** A chat
 ### Root-level fields
 
 | Field | Description |
-|-------|-------------|
+| ------- | ------------- |
 | `chat` | Discriminator + label. Any non-empty value marks the object as a chat rule set (the value is only used in logs — there's no external event to match). |
 | `use-plugins` | The plugins this rule set makes available to the chat tool. Same `plugin-name@marketplace` shape as a webhook execution's `use-plugins`, plus a required **`slash-command`** (e.g. `/pr-review`) so the supervisor composes `{slash-command} {user-target}` without inventing a command name. |
 | `model` / `max-turns` / `allowed-tools` / `disallowed-tools` / `max-budget-usd` / `resume-sessions` | Cost/control tuning applied to every chat dispatch that uses one of `use-plugins`. Same meaning as the identically-named per-execution knobs on a webhook block. |
@@ -362,7 +406,7 @@ Given:
 ```
 
 | Input `value` | Resolved value |
-|---------------|----------------|
+| --------------- | ---------------- |
 | `number` | `42` |
 | `repository.clone_url` | `https://github.com/acme/app.git` |
 | `pull_request.head.ref` | `fix/auth` |
@@ -510,6 +554,71 @@ Placeholders are replaced case-insensitively. Any `{{name}}` with no matching in
 
 ---
 
+## 7. `raise-events` — Outbound execution notifications
+
+After an execution finishes, `raise-events` notifies **external listeners** that the run happened and what it cost — an AI Hub node, a billing pipeline, a Slack relay. Each entry is one HTTP `POST`.
+
+It is declared **per execution**, alongside `execute-prompt`. That keeps the scope unambiguous — an entry covers exactly the block it sits on, so there's no separate trigger list or `match-any` filter deciding which runs are in scope — and it means the placeholders resolve against the same values the prompt already used. When several execution blocks match one payload, each one raises its own events, exactly as each starts its own container.
+
+```jsonc
+"raise-events": [
+  {
+    "name": "ai-hub-metrics",
+    "url": "https://app-ai-hub-api-h3c5cwascnetb2cj.northeurope-01.azurewebsites.net/nodes/nd_blscMVsoz0?activity=pr-review&corelationid={{pr-number}}&actors=xianix-pr-reviewer",
+    "with-headers": [
+      { "name": "Authorization", "value": "secrets.AIHUB-API-KEY", "mandatory": true }
+    ],
+    "payload": {
+      "dimensions": {
+        "tokens":  "{{metrics.tokens.total}}",
+        "costUsd": "{{metrics.cost-usd}}",
+        "model":   "{{metrics.model}}",
+        "status":  "{{metrics.status}}"
+      }
+    }
+  }
+]
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | No | Label for logs and delivery-failure reasons, like the `name` on `match-any` / `use-inputs` / `with-envs` entries. |
+| `url` | Yes | Listener endpoint. Interpolated (see below), so run data can be carried in the path or query string. |
+| `with-headers` | No | Request headers, using the **same entry shape as [`with-envs`](#5-with-envs--container-environment-variables)** (`name` / `value` / `constant` / `mandatory`) — so `secrets.*`, `host.*`, and `constant` literals resolve identically. This is how authorization is declared: name the header explicitly rather than leaving the scheme implicit. |
+| `payload` | No | JSON body, sent as-is apart from interpolation. Arbitrarily nested — the listener's own schema dictates the shape. Omit for endpoints that take everything in the URL. |
+
+Several entries mean several independent listeners: each is delivered on its own, and one failing endpoint doesn't suppress the others.
+
+### Interpolation
+
+`{{...}}` means the same thing it does in `execute-prompt` — resolved `use-inputs` names, plus the auto-injected structural keys `platform`, `repository-url`, and `repository-name`. Nothing new to learn: if the prompt can reference `{{pr-number}}`, so can an event.
+
+The one addition is the `metrics.*` namespace, which carries what the run *produced* rather than what triggered it (cost, tokens, model, status). Inputs are known before the container starts; metrics only exist once it has finished — which is why events are raised **after** the execution completes.
+
+> **`metrics.*` is not implemented yet.** The names above are the intended shape, not a live contract. Until it lands, keep events on `use-inputs` and structural values.
+
+Two rules keep the JSON unambiguous:
+
+- **In `payload`, a bare string is a literal; only `{{...}}` is a reference.** So `"activity": "pr-review"` sends that text and needs no `constant: true` flag (unlike `use-inputs` and `with-envs`, where the `value` slot is a path by default). Mixed content works too: `"summary": "{{repository-name}} #{{pr-number}}"`.
+- **A value that is a single `{{...}}` reference keeps its native JSON type**; mixed content is always a string. This is what lets `costUsd` arrive as the number `0.42` rather than `"0.42"`.
+
+Values interpolated into `url` are **percent-encoded**, since a title or branch name containing `&` or `=` would otherwise corrupt the query string. Values in `payload` are JSON-escaped only.
+
+When a reference doesn't resolve, the key is **omitted** from `payload` and interpolates as an empty string in `url` — a `null` cost can't be sent into a numeric field, and an absent dimension is easier for a listener to handle than an empty one.
+
+### Delivery
+
+Notifications are **best-effort and never affect the run**: the execution's success, its metrics, and its logs are already final by the time an event is raised, so a slow or broken listener cannot fail or delay the work. Delivery is bounded by a timeout with limited retries, and a permanent failure is logged against the entry's `name` and dropped.
+
+Only the fields declared here are transmitted. Be deliberate about that — a listener is a third-party endpoint, and interpolating repository content or prompt text sends tenant data off-platform.
+
+### Known gaps
+
+- **Chat runs.** A chat rule set has no `executions`, so chat-initiated runs have nowhere to declare an event. Webhook and schedule rule sets both carry executions, so both work unchanged.
+- **Repetition across blocks.** An entry is per execution, so several blocks reporting to one listener repeat the `url` and headers. If that becomes a burden, the natural fix is the two-level merge `with-envs` already uses (rule-set-level defaults, execution-level overrides by `name`) rather than a separate root-level event rule set.
+
+---
+
 ## Complete example (GitHub PR opened)
 
 ```json
@@ -539,7 +648,24 @@ Placeholders are replaced case-insensitively. Any `{{name}}` with no matching in
             "marketplace": "xianix-team/plugins-official"
           }
         ],
-        "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}}.\n\nRun /pr-review {{pr-number}} to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."
+        "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}}.\n\nRun /pr-review {{pr-number}} to perform the automated review. The `gh` CLI is authenticated and available if you need it directly.",
+        "raise-events": [
+          {
+            "name": "ai-hub-metrics",
+            "url": "https://app-ai-hub-api-h3c5cwascnetb2cj.northeurope-01.azurewebsites.net/nodes/nd_blscMVsoz0?activity=pr-review&corelationid={{pr-number}}&actors=xianix-pr-reviewer",
+            "with-headers": [
+              { "name": "Authorization", "value": "secrets.AIHUB-API-KEY", "mandatory": true }
+            ],
+            "payload": {
+              "dimensions": {
+                "tokens": "{{metrics.tokens.total}}",
+                "costUsd": "{{metrics.cost-usd}}",
+                "model": "{{metrics.model}}",
+                "status": "{{metrics.status}}"
+              }
+            }
+          }
+        ]
       }
     ]
   }
@@ -588,3 +714,4 @@ When the run doesn't operate on a specific repo, just omit the `repository` bloc
 5. `execute-prompt` is interpolated against the merged inputs dict.
 6. The agent merges rule-set-level common `with-envs` with the matched execution's own `with-envs` (execution-level entries override rule-set entries by env name), resolves each entry (literals, `host.*`, `secrets.*`), and injects them into the executor container alongside the runtime values it manages itself.
 7. The executor uses `platform` to pick the right credential helper, `git clone`s `repository-url` into the per-tenant workspace volume, checks out the default-branch HEAD into the per-run worktree, installs `use-plugins`, and runs the prompt. Plugins perform any further task-specific checkout themselves.
+8. Once the run has finished and its metrics are recorded, each `raise-events` entry on the matched block is delivered to its listener — best-effort, so a failed notification is logged and dropped without touching the run's outcome.
