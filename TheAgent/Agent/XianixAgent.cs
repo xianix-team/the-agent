@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using TheAgent;
 using Xianix.Activities;
+using Xianix.Webhooks;
 using Xianix.Orchestrator;
 using Xianix.Rules;
 using Xianix.Workflows;
@@ -126,7 +127,8 @@ public class XianixAgent(
             .DefineCustom<ProcessingWorkflow>(
                 new WorkflowOptions { Activable = false },
                 typeName: EnvConfig.AgentName + ":Processing Workflow")
-            .AddActivity<ContainerActivities>();
+            .AddActivity<ContainerActivities>()
+            .AddActivity<RaiseEventActivities>();
 
         xiansAgent.Workflows
             .DefineCustom<ClaudeCodeChatWorkflow>(new WorkflowOptions { Activable = false },
@@ -275,6 +277,7 @@ public class XianixAgent(
             knowledgeName: Constants.SystemPromptKnowledgeName,
             knowledgeType: "markdown"
         );
+
     }
 
     private void LogWebhookVerificationFailure(

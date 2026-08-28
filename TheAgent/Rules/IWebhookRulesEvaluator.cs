@@ -31,7 +31,14 @@ public sealed record EvaluationResult(
     IReadOnlyList<string>? AllowedTools = null,
     IReadOnlyList<string>? DisallowedTools = null,
     double? MaxBudgetUsd = null,
-    bool ResumeSessions = false);
+    bool ResumeSessions = false,
+    IReadOnlyList<RaiseEventSpec>? RaiseEvents = null);
+
+public sealed record RaiseEventSpec(
+    string Name,
+    string Url,
+    IReadOnlyList<EnvEntry> WithHeaders,
+    string? PayloadJson);
 
 /// <summary>
 /// Outcome of a rules evaluation: zero or more matching execution blocks, or a skip reason.

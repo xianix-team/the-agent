@@ -73,10 +73,11 @@ public class ClaudeCodeChatWorkflow
     private static async Task ExecutePipelineAsync(
         ClaudeCodeChatRequest req, string volumeName, string runtimeVolumeName)
     {
+        var executionId = Workflow.NewGuid().ToString("N")[..8];
         var input = new ContainerExecutionInput
         {
             TenantId          = req.TenantId,
-            ExecutionId       = Workflow.NewGuid().ToString("N")[..8],
+            ExecutionId       = executionId,
             InputsJson        = JsonSerializer.Serialize(req.Inputs),
             ClaudeCodePlugins = ContainerPluginSerialization.Serialize(req.Plugins),
             WithEnvsJson      = ContainerEnvSerialization.Serialize(req.WithEnvs),

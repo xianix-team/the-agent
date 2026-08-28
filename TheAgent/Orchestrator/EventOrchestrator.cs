@@ -93,7 +93,8 @@ public sealed class EventOrchestrator : IEventOrchestrator
                 TenantId = tenantId,
                 Inputs = evaluation.Inputs,
                 Execution = execution,
-                ExecutionBlockName = evaluation.ExecutionBlockName
+                ExecutionBlockName = evaluation.ExecutionBlockName,
+                RaiseEvents = evaluation.RaiseEvents
             });
         }
 

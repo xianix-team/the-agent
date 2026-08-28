@@ -49,4 +49,10 @@ public static class ContainerWorkflowOptions
         StartToCloseTimeout = TimeSpan.FromMinutes(2),
         RetryPolicy = new() { MaximumAttempts = 1 },
     };
+
+    public static readonly ActivityOptions RaiseEvents = new()
+    {
+        StartToCloseTimeout = TimeSpan.FromSeconds(30),
+        RetryPolicy = new() { MaximumAttempts = 1 },
+    };
 }

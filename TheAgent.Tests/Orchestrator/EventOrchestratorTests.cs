@@ -162,7 +162,15 @@ public class EventOrchestratorTests
             WithEnvs: null,
             Platform: "github",
             RepositoryUrl: "https://github.com/acme/app.git",
-            RepositoryName: "acme/app");
+            RepositoryName: "acme/app",
+            RaiseEvents:
+            [
+                new RaiseEventSpec(
+                    "ai-hub-metrics",
+                    "https://example.test/metrics",
+                    [new EnvEntry { Name = "X-Api-Key", Value = "secrets.AIHUB-API-KEY", Mandatory = true }],
+                    null)
+            ]);
 
         _evaluator.EvaluateAsync("Default", Arg.Any<object?>())
                   .Returns(Task.FromResult(EvaluationOutcome.Match(evaluation)));
@@ -175,6 +183,7 @@ public class EventOrchestratorTests
         Assert.Equal("github", execution!.Platform);
         Assert.Equal("https://github.com/acme/app.git", execution.RepositoryUrl);
         Assert.Equal("acme/app", execution.RepositoryName);
+        Assert.Equal("ai-hub-metrics", batch.Matches[0].RaiseEvents?[0].Name);
     }
 
     [Fact]

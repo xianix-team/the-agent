@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace Xianix.Rules;
@@ -179,6 +180,14 @@ public sealed class WebhookExecution
     public List<EnvEntry> WithEnvs { get; init; } = [];
 
     /// <summary>
+    /// Best-effort HTTP events raised after the execution completes. Each entry
+    /// declares its own URL, optional headers (same <c>with-headers</c> shape as
+    /// <see cref="WithEnvs"/>), and optional JSON <c>payload</c> template.
+    /// </summary>
+    [JsonPropertyName("raise-events")]
+    public List<RaiseEventEntry> RaiseEvents { get; init; } = [];
+
+    /// <summary>
     /// Optional Claude model the executor should run this block on (e.g.
     /// <c>claude-haiku-4-5</c> for mechanical tasks, <c>claude-sonnet-4-5</c> for deep
     /// reasoning). Empty means "let the executor use its configured default". Surfaced to the
@@ -331,6 +340,34 @@ public sealed class EnvEntry
     /// </summary>
     [JsonPropertyName("mandatory")]
     public bool Mandatory { get; init; }
+}
+
+/// <summary>
+/// Post-execution HTTP event declared on a <see cref="WebhookExecution"/>. Delivered
+/// best-effort after the container run completes.
+/// </summary>
+public sealed class RaiseEventEntry
+{
+    [JsonPropertyName("name")]
+    public string Name { get; init; } = "";
+
+    [JsonPropertyName("url")]
+    public string Url { get; init; } = "";
+
+    /// <summary>
+    /// Request headers resolved the same way as <see cref="EnvEntry"/> values
+    /// (<c>host.*</c>, <c>secrets.*</c>, or <c>constant: true</c>).
+    /// </summary>
+    [JsonPropertyName("with-headers")]
+    public List<EnvEntry> WithHeaders { get; init; } = [];
+
+    /// <summary>
+    /// Optional JSON body template. Placeholders use <c>{{name}}</c> with optional
+    /// <c>:number</c>, <c>:array</c>, or <c>:boolean</c> suffixes. Unresolved keys
+    /// are omitted from the rendered payload.
+    /// </summary>
+    [JsonPropertyName("payload")]
+    public JsonNode? Payload { get; init; }
 }
 
 public sealed class MatchEntry
