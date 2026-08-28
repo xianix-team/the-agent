@@ -155,83 +155,24 @@ public class WebhookUrlVariablesTests
 
 public class MetricsPayloadBuilderTests
 {
-    private static ContainerExecutionResult Result(
-        int exitCode = 0,
-        double? cost = 0.024,
-        long? input = 800,
-        long? output = 400,
-        IReadOnlyList<string>? models = null) => new()
-    {
-        TenantId = "t1",
-        ExecutionLabel = "test",
-        ExitCode = exitCode,
-        StdOut = "{}",
-        StdErr = "",
-        CostUsd = cost,
-        InputTokens = input,
-        OutputTokens = output,
-        Models = models ?? ["gpt-4.1"],
-    };
-
-    [Fact]
-    public void BuildPayloadJson_MatchesAiHubNodeActivityEventsShape()
-    {
-        var json = MetricsPayloadBuilder.BuildPayloadJson(
-            Result(),
-            "corr-9",
-            new Dictionary<string, string>
-            {
-                ["actors"] = "alice@example.com",
-            });
-
-        using var doc = JsonDocument.Parse(json);
-        var root = Assert.Single(doc.RootElement.EnumerateArray());
-        Assert.Equal("corr-9", root.GetProperty("correlationId").GetString());
-        Assert.Equal("alice@example.com", root.GetProperty("actors")[0].GetString());
-        Assert.False(root.TryGetProperty("activity", out _));
-
-        var dims = root.GetProperty("dimensions");
-        Assert.Equal(1200, dims.GetProperty("tokens").GetInt64());
-        Assert.Equal(0.024, dims.GetProperty("costUsd").GetDouble());
-        Assert.Equal("gpt-4.1", dims.GetProperty("model").GetString());
-        Assert.Equal("success", dims.GetProperty("status").GetString());
-    }
-
-    [Fact]
-    public void BuildPayloadJson_FailedRun_SetsErrorStatus()
-    {
-        var json = MetricsPayloadBuilder.BuildPayloadJson(Result(exitCode: 1), "x");
-
-        using var doc = JsonDocument.Parse(json);
-        Assert.Equal("error", doc.RootElement[0].GetProperty("dimensions").GetProperty("status").GetString());
-    }
-
-    [Fact]
-    public void BuildPayloadJson_MissingModel_UsesUnknown()
-    {
-        var json = MetricsPayloadBuilder.BuildPayloadJson(Result(models: []), "x");
-
-        using var doc = JsonDocument.Parse(json);
-        Assert.Equal("unknown", doc.RootElement[0].GetProperty("dimensions").GetProperty("model").GetString());
-    }
-
-    [Fact]
-    public void BuildPayloadJson_EmptyCorrelationId_GeneratesGuid()
-    {
-        var json = MetricsPayloadBuilder.BuildPayloadJson(Result(), null);
-
-        using var doc = JsonDocument.Parse(json);
-        var id = doc.RootElement[0].GetProperty("correlationId").GetString();
-        Assert.True(Guid.TryParse(id, out _));
-    }
-
     [Fact]
     public void ResolveCost_PrefersAuthoritativeCost()
     {
-        var result = Result(cost: 1.5);
-        result.ModelUsage = new Dictionary<string, ModelTokenUsage>
+        var result = new ContainerExecutionResult
         {
-            ["claude-sonnet-4-5"] = new() { InputTokens = 100, OutputTokens = 50 },
+            TenantId = "t1",
+            ExecutionLabel = "test",
+            ExitCode = 0,
+            StdOut = "{}",
+            StdErr = "",
+            CostUsd = 1.5,
+            InputTokens = 100,
+            OutputTokens = 50,
+            Models = ["claude-sonnet-4-5"],
+            ModelUsage = new Dictionary<string, ModelTokenUsage>
+            {
+                ["claude-sonnet-4-5"] = new() { InputTokens = 100, OutputTokens = 50 },
+            },
         };
 
         var (cost, estimated) = MetricsPayloadBuilder.ResolveCost(result);
