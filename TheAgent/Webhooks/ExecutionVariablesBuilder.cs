@@ -2,9 +2,12 @@ using Xianix.Activities;
 
 namespace Xianix.Webhooks;
 
-internal static class WebhookRuntimeVariables
+/// <summary>
+/// Builds template variables for raise-event URLs and payloads from a completed execution.
+/// </summary>
+internal static class ExecutionVariablesBuilder
 {
-    public static Dictionary<string, string> Merge(
+    internal static Dictionary<string, string> Merge(
         IReadOnlyDictionary<string, string>? variables,
         ContainerExecutionResult result,
         string? correlationId)
@@ -21,7 +24,7 @@ internal static class WebhookRuntimeVariables
             }
         }
 
-        var (costUsd, _) = MetricsPayloadBuilder.ResolveCost(result);
+        var (costUsd, _) = ExecutionCostResolver.Resolve(result);
         var tokens = (result.InputTokens ?? 0) + (result.OutputTokens ?? 0);
         var model = result.Models is { Count: > 0 } models
                     && !string.IsNullOrWhiteSpace(models[0])

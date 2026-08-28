@@ -72,7 +72,7 @@ internal static class ExecutionMetrics
         // a budget cap before the SDK emitted a final cost — fall back to estimating from the
         // per-model token usage so cost metrics aren't lost. Estimates are flagged so they're
         // distinguishable from authoritative figures (mirrors the chat-conversation path).
-        var (costUsd, costEstimated) = ResolveCost(result);
+        var (costUsd, costEstimated) = ExecutionCostResolver.Resolve(result);
 
         var metadata = BuildMetadata(ctx, result);
         metadata["cost_estimated"] = costEstimated ? "true" : "false";
@@ -168,7 +168,7 @@ internal static class ExecutionMetrics
         {
             foreach (var (model, usage) in modelUsage)
             {
-                if (EstimateModelCost(model, usage) is { } modelCost)
+                if (ExecutionCostResolver.EstimateModelCost(model, usage) is { } modelCost)
                     builder = builder.WithMetric(ModelCostCategory, model, modelCost, "usd");
             }
         }
@@ -190,38 +190,6 @@ internal static class ExecutionMetrics
 
         return builder.ReportAsync();
     }
-
-    /// <summary>
-    /// Resolves the cost to report: the executor's authoritative <c>cost_usd</c> when present,
-    /// otherwise a best-effort estimate from per-model token usage (so a budget-aborted run,
-    /// which never reports an authoritative cost, still contributes a cost figure). The bool is
-    /// <see langword="true"/> when the returned cost is an estimate.
-    /// </summary>
-    private static (double? cost, bool estimated) ResolveCost(ContainerExecutionResult result)
-    {
-        if (result.CostUsd.HasValue)
-            return (result.CostUsd.Value, false);
-
-        if (result.ModelUsage is not { Count: > 0 } modelUsage)
-            return (null, false);
-
-        double total = 0;
-        var any = false;
-        foreach (var (model, usage) in modelUsage)
-        {
-            if (EstimateModelCost(model, usage) is { } cost)
-            {
-                total += cost;
-                any = true;
-            }
-        }
-
-        return any ? (total, true) : (null, false);
-    }
-
-    private static double? EstimateModelCost(string model, ModelTokenUsage usage) =>
-        ModelPricing.EstimateCostUsd(
-            model, usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheCreationTokens);
 
     /// <summary>
     /// Reports a single conversational supervisor turn — the Claude call that runs for

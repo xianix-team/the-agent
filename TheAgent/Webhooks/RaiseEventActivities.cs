@@ -32,7 +32,7 @@ public sealed class RaiseEventActivities
             return;
 
         var logger = GetLogger();
-        var variables = WebhookRuntimeVariables.Merge(
+        var variables = ExecutionVariablesBuilder.Merge(
             request.UrlVariables,
             request.Result,
             request.CorrelationId);

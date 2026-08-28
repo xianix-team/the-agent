@@ -153,10 +153,10 @@ public class WebhookUrlVariablesTests
     }
 }
 
-public class MetricsPayloadBuilderTests
+public class ExecutionCostResolverTests
 {
     [Fact]
-    public void ResolveCost_PrefersAuthoritativeCost()
+    public void Resolve_PrefersAuthoritativeCost()
     {
         var result = new ContainerExecutionResult
         {
@@ -175,7 +175,7 @@ public class MetricsPayloadBuilderTests
             },
         };
 
-        var (cost, estimated) = MetricsPayloadBuilder.ResolveCost(result);
+        var (cost, estimated) = ExecutionCostResolver.Resolve(result);
         Assert.Equal(1.5, cost);
         Assert.False(estimated);
     }
