@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using Xianix.Activities;
+using Xianix.Rules;
 using Xianix.Webhooks;
 
 namespace TheAgent.Tests.Webhooks;
@@ -67,6 +68,91 @@ public class WebhookUrlRendererTests
     }
 }
 
+public class WebhookPayloadRendererTests
+{
+    [Fact]
+    public void TryRender_SubstitutesTypedPlaceholders()
+    {
+        var json = WebhookPayloadRenderer.TryRender(
+            """
+            [
+              {
+                "correlationId": "{{correlationId}}",
+                "actors": "{{actors:array}}",
+                "ok": "{{succeeded:boolean}}",
+                "dimensions": {
+                  "tokens": "{{tokens:number}}",
+                  "costUsd": "{{costUsd:number}}",
+                  "model": "{{model}}"
+                }
+              }
+            ]
+            """,
+            new Dictionary<string, string>
+            {
+                ["correlationId"] = "corr-9",
+                ["actors"] = "alice@example.com, bob",
+                ["succeeded"] = "true",
+                ["tokens"] = "1200",
+                ["costUsd"] = "0.024",
+                ["model"] = "gpt-4.1",
+            },
+            out var missing);
+
+        Assert.Null(missing);
+        using var doc = JsonDocument.Parse(json!);
+        var root = Assert.Single(doc.RootElement.EnumerateArray());
+        Assert.Equal("corr-9", root.GetProperty("correlationId").GetString());
+        Assert.Equal("alice@example.com", root.GetProperty("actors")[0].GetString());
+        Assert.Equal("bob", root.GetProperty("actors")[1].GetString());
+        Assert.True(root.GetProperty("ok").GetBoolean());
+        var dims = root.GetProperty("dimensions");
+        Assert.Equal(JsonValueKind.Number, dims.GetProperty("tokens").ValueKind);
+        Assert.Equal(1200, dims.GetProperty("tokens").GetInt64());
+        Assert.Equal(0.024, dims.GetProperty("costUsd").GetDouble());
+        Assert.Equal("gpt-4.1", dims.GetProperty("model").GetString());
+    }
+
+    [Fact]
+    public void TryRender_ReportsMissingPlaceholders()
+    {
+        var json = WebhookPayloadRenderer.TryRender(
+            """{ "model": "{{model}}" }""",
+            new Dictionary<string, string>(),
+            out var missing);
+
+        Assert.Null(json);
+        Assert.Equal("model", missing);
+    }
+
+    [Fact]
+    public void TryRenderOmitMissing_OmitsUnresolvedKeys()
+    {
+        var json = WebhookPayloadRenderer.TryRenderOmitMissing(
+            """{ "model": "{{model}}", "status": "{{status}}" }""",
+            new Dictionary<string, string> { ["status"] = "success" });
+
+        using var doc = JsonDocument.Parse(json!);
+        Assert.False(doc.RootElement.TryGetProperty("model", out _));
+        Assert.Equal("success", doc.RootElement.GetProperty("status").GetString());
+    }
+}
+
+public class WebhookUrlVariablesTests
+{
+    [Fact]
+    public void From_AddsPluginNameForActors()
+    {
+        var vars = WebhookUrlVariables.From(
+            new Dictionary<string, object?>(),
+            "corr-1",
+            [new PluginEntry { PluginName = "pr-reviewer@xianix-plugins-official" }]);
+
+        Assert.Equal("pr-reviewer@xianix-plugins-official", vars["plugin-name"]);
+        Assert.Equal("pr-reviewer@xianix-plugins-official", vars["actors"]);
+    }
+}
+
 public class MetricsPayloadBuilderTests
 {
     private static ContainerExecutionResult Result(
@@ -88,19 +174,27 @@ public class MetricsPayloadBuilderTests
     };
 
     [Fact]
-    public void BuildPayloadJson_IsFlatMetricsArray()
+    public void BuildPayloadJson_MatchesAiHubNodeActivityEventsShape()
     {
-        var json = MetricsPayloadBuilder.BuildPayloadJson(Result(), "corr-9");
+        var json = MetricsPayloadBuilder.BuildPayloadJson(
+            Result(),
+            "corr-9",
+            new Dictionary<string, string>
+            {
+                ["actors"] = "alice@example.com",
+            });
 
         using var doc = JsonDocument.Parse(json);
         var root = Assert.Single(doc.RootElement.EnumerateArray());
         Assert.Equal("corr-9", root.GetProperty("correlationId").GetString());
-        Assert.Equal(1200, root.GetProperty("tokens").GetInt64());
-        Assert.Equal(0.024, root.GetProperty("costUsd").GetDouble());
-        Assert.Equal("gpt-4.1", root.GetProperty("model").GetString());
-        Assert.Equal("success", root.GetProperty("status").GetString());
+        Assert.Equal("alice@example.com", root.GetProperty("actors")[0].GetString());
         Assert.False(root.TryGetProperty("activity", out _));
-        Assert.False(root.TryGetProperty("dimensions", out _));
+
+        var dims = root.GetProperty("dimensions");
+        Assert.Equal(1200, dims.GetProperty("tokens").GetInt64());
+        Assert.Equal(0.024, dims.GetProperty("costUsd").GetDouble());
+        Assert.Equal("gpt-4.1", dims.GetProperty("model").GetString());
+        Assert.Equal("success", dims.GetProperty("status").GetString());
     }
 
     [Fact]
@@ -109,7 +203,7 @@ public class MetricsPayloadBuilderTests
         var json = MetricsPayloadBuilder.BuildPayloadJson(Result(exitCode: 1), "x");
 
         using var doc = JsonDocument.Parse(json);
-        Assert.Equal("error", doc.RootElement[0].GetProperty("status").GetString());
+        Assert.Equal("error", doc.RootElement[0].GetProperty("dimensions").GetProperty("status").GetString());
     }
 
     [Fact]
@@ -118,7 +212,7 @@ public class MetricsPayloadBuilderTests
         var json = MetricsPayloadBuilder.BuildPayloadJson(Result(models: []), "x");
 
         using var doc = JsonDocument.Parse(json);
-        Assert.Equal("unknown", doc.RootElement[0].GetProperty("model").GetString());
+        Assert.Equal("unknown", doc.RootElement[0].GetProperty("dimensions").GetProperty("model").GetString());
     }
 
     [Fact]
@@ -146,28 +240,22 @@ public class MetricsPayloadBuilderTests
     }
 }
 
-public class OutboundWebhookCallerTests
+public class RaiseEventCallerTests
 {
     [Fact]
-    public void IsConfigured_RequiresApiKey()
-    {
-        Assert.False(OutboundWebhookCaller.IsConfigured(""));
-        Assert.False(OutboundWebhookCaller.IsConfigured(null));
-        Assert.True(OutboundWebhookCaller.IsConfigured("key"));
-    }
-
-    [Fact]
-    public async Task PostAsync_UsesConfiguredUrlAsIs()
+    public async Task PostAsync_UsesConfiguredUrlAndHeaders()
     {
         var handler = new StubHttpHandler(HttpStatusCode.Accepted, """{"accepted":1}""");
         using var http = new HttpClient(handler);
-        var caller = new OutboundWebhookCaller(
+        var caller = new RaiseEventCaller(
             http,
-            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
-            "test-key");
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
 
         var url = "https://example.test/nodes/nd_blscMVsoz0/activity/sample-activity?actors=hasith";
-        var ok = await caller.PostAsync(url, """[{"correlationId":"1"}]""");
+        var ok = await caller.PostAsync(
+            url,
+            """[{"correlationId":"1"}]""",
+            new Dictionary<string, string> { ["X-Api-Key"] = "test-key" });
 
         Assert.True(ok);
         Assert.Equal(HttpMethod.Post, handler.LastMethod);
@@ -180,32 +268,36 @@ public class OutboundWebhookCallerTests
     {
         var handler = new StubHttpHandler(HttpStatusCode.NotFound, """{"error":"no user"}""");
         using var http = new HttpClient(handler);
-        var caller = new OutboundWebhookCaller(
+        var caller = new RaiseEventCaller(
             http,
-            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
-            "test-key");
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
 
-        var ok = await caller.PostAsync("https://example.test/nodes/x", """[{"correlationId":"1"}]""");
+        var ok = await caller.PostAsync(
+            "https://example.test/nodes/x",
+            """[{"correlationId":"1"}]""",
+            new Dictionary<string, string> { ["X-Api-Key"] = "test-key" });
         Assert.False(ok);
     }
 
     [Fact]
-    public async Task PostAsync_EmptyApiKey_Skips()
+    public async Task PostAsync_EmptyHeaders_Skips()
     {
         var handler = new StubHttpHandler(HttpStatusCode.OK, "{}");
         using var http = new HttpClient(handler);
-        var caller = new OutboundWebhookCaller(
+        var caller = new RaiseEventCaller(
             http,
-            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
-            "");
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
 
-        var ok = await caller.PostAsync("https://example.test/nodes/x", """[{"correlationId":"1"}]""");
+        var ok = await caller.PostAsync(
+            "https://example.test/nodes/x",
+            """[{"correlationId":"1"}]""",
+            new Dictionary<string, string>());
         Assert.False(ok);
         Assert.Equal(0, handler.CallCount);
     }
 }
 
-public class OutboundWebhookActivitiesTests
+public class RaiseEventActivitiesTests
 {
     private static ContainerExecutionResult OkResult() => new()
     {
@@ -220,72 +312,130 @@ public class OutboundWebhookActivitiesTests
         Models = ["claude-sonnet-4-5"],
     };
 
+    private static RaiseEventSpec AiHubSpec(string? payloadJson = null) => new(
+        "ai-hub-metrics",
+        "https://ai-hub-api.99x.io/metrics/nodes/{{node-id}}/node-activities/{{node-activity-id}}/events",
+        [new EnvEntry { Name = "X-Api-Key", Value = "secrets.AIHUB-API-KEY", Mandatory = true, Constant = true }],
+        payloadJson);
+
     [Fact]
-    public async Task CallWebhookAsync_PostsToConfiguredUrl()
+    public async Task DeliverRaiseEventsAsync_PostsToConfiguredUrl()
     {
         var handler = new StubHttpHandler(HttpStatusCode.Accepted, """{"accepted":1}""");
-        var activities = new OutboundWebhookActivities(
-            () => new HttpClient(handler),
-            _ => "api-key");
+        var activities = new RaiseEventActivities(() => new HttpClient(handler));
 
-        await activities.CallWebhookAsync(new OutboundWebhookRequest
+        await activities.DeliverRaiseEventsAsync(new RaiseEventsRequest
         {
-            Webhook = "metrics",
-            Url = "https://example.test/nodes/nd_blscMVsoz0/activity/sample-activity/corelationid/{{pr-number}}?actors=hasith&pr-review",
-            ApiKeyReference = "secrets.AIHUB-API-KEY",
+            Events = [AiHubSpec()],
             ExecutionName = "github-pull-request-review",
             CorrelationId = "abc123",
-            UrlVariables = new Dictionary<string, string> { ["pr-number"] = "9" },
+            UrlVariables = new Dictionary<string, string>
+            {
+                ["node-id"] = "nd_9lcgvLaCAP",
+                ["node-activity-id"] = "na_qODqx_zINf",
+            },
             Result = OkResult(),
         });
 
         Assert.Equal(1, handler.CallCount);
         Assert.Equal(
-            "https://example.test/nodes/nd_blscMVsoz0/activity/sample-activity/corelationid/9?actors=hasith&pr-review",
+            "https://ai-hub-api.99x.io/metrics/nodes/nd_9lcgvLaCAP/node-activities/na_qODqx_zINf/events",
             handler.LastUrl);
-        using var doc = JsonDocument.Parse(handler.LastBody!);
-        var root = Assert.Single(doc.RootElement.EnumerateArray());
-        Assert.Equal("abc123", root.GetProperty("correlationId").GetString());
-        Assert.Equal(15, root.GetProperty("tokens").GetInt64());
-        Assert.Equal(0.01, root.GetProperty("costUsd").GetDouble());
-        Assert.Equal("claude-sonnet-4-5", root.GetProperty("model").GetString());
-        Assert.Equal("success", root.GetProperty("status").GetString());
+        Assert.Equal("secrets.AIHUB-API-KEY", handler.LastApiKey);
     }
 
     [Fact]
-    public async Task CallWebhookAsync_SkipsUnsupportedAbility()
+    public async Task DeliverRaiseEventsAsync_PostsTemplatedPayload()
+    {
+        var handler = new StubHttpHandler(HttpStatusCode.Accepted, """{"accepted":1}""");
+        var activities = new RaiseEventActivities(() => new HttpClient(handler));
+
+        await activities.DeliverRaiseEventsAsync(new RaiseEventsRequest
+        {
+            Events =
+            [
+                AiHubSpec("""
+                    [{
+                      "correlationId": "{{correlationId}}",
+                      "actors": "{{actors:array}}",
+                      "dimensions": {
+                        "tokens": "{{metrics.tokens.total:number}}",
+                        "costUsd": "{{metrics.cost-usd:number}}",
+                        "model": "{{metrics.model}}",
+                        "status": "{{metrics.status}}"
+                      }
+                    }]
+                    """)
+            ],
+            ExecutionName = "github-pull-request-review",
+            CorrelationId = "abc123",
+            UrlVariables = new Dictionary<string, string>
+            {
+                ["node-id"] = "nd_9lcgvLaCAP",
+                ["node-activity-id"] = "na_qODqx_zINf",
+                ["actors"] = "alice@example.com",
+            },
+            Result = OkResult(),
+        });
+
+        Assert.Equal(1, handler.CallCount);
+        Assert.Equal(
+            "https://ai-hub-api.99x.io/metrics/nodes/nd_9lcgvLaCAP/node-activities/na_qODqx_zINf/events",
+            handler.LastUrl);
+        Assert.Equal("secrets.AIHUB-API-KEY", handler.LastApiKey);
+        using var doc = JsonDocument.Parse(handler.LastBody!);
+        var root = Assert.Single(doc.RootElement.EnumerateArray());
+        Assert.Equal("abc123", root.GetProperty("correlationId").GetString());
+        Assert.False(root.TryGetProperty("activity", out _));
+        Assert.Equal("alice@example.com", root.GetProperty("actors")[0].GetString());
+        var dims = root.GetProperty("dimensions");
+        Assert.Equal(15, dims.GetProperty("tokens").GetInt64());
+        Assert.Equal(0.01, dims.GetProperty("costUsd").GetDouble());
+        Assert.Equal("claude-sonnet-4-5", dims.GetProperty("model").GetString());
+        Assert.Equal("success", dims.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task DeliverRaiseEventsAsync_PostsAnyNamedEvent()
     {
         var handler = new StubHttpHandler(HttpStatusCode.Accepted, "{}");
-        var activities = new OutboundWebhookActivities(
-            () => new HttpClient(handler),
-            _ => "api-key");
+        var activities = new RaiseEventActivities(() => new HttpClient(handler));
 
-        await activities.CallWebhookAsync(new OutboundWebhookRequest
+        await activities.DeliverRaiseEventsAsync(new RaiseEventsRequest
         {
-            Webhook = "unknown",
-            Url = "https://example.test/metrics",
-            ApiKeyReference = "secrets.AIHUB-API-KEY",
+            Events =
+            [
+                new RaiseEventSpec(
+                    "custom-event",
+                    "https://example.test/metrics",
+                    [new EnvEntry { Name = "X-Api-Key", Value = "api-key", Constant = true }],
+                    null)
+            ],
             ExecutionName = "other-execution",
             CorrelationId = "abc123",
             Result = OkResult(),
         });
 
-        Assert.Equal(0, handler.CallCount);
+        Assert.Equal(1, handler.CallCount);
+        Assert.Equal("https://example.test/metrics", handler.LastUrl);
     }
 
     [Fact]
-    public async Task CallWebhookAsync_SkipsWhenNotConfigured()
+    public async Task DeliverRaiseEventsAsync_SkipsWhenMandatoryHeaderMissing()
     {
         var handler = new StubHttpHandler(HttpStatusCode.Accepted, "{}");
-        var activities = new OutboundWebhookActivities(
-            () => new HttpClient(handler),
-            _ => "");
+        var activities = new RaiseEventActivities(() => new HttpClient(handler));
 
-        await activities.CallWebhookAsync(new OutboundWebhookRequest
+        await activities.DeliverRaiseEventsAsync(new RaiseEventsRequest
         {
-            Webhook = "metrics",
-            Url = "https://example.test/metrics",
-            ApiKeyReference = "secrets.AIHUB-API-KEY",
+            Events =
+            [
+                new RaiseEventSpec(
+                    "ai-hub-metrics",
+                    "https://example.test/metrics",
+                    [new EnvEntry { Name = "X-Api-Key", Value = "secrets.AIHUB-API-KEY", Mandatory = true }],
+                    null)
+            ],
             ExecutionName = "github-pull-request-review",
             CorrelationId = "abc123",
             UrlVariables = new Dictionary<string, string> { ["pr-number"] = "9" },
@@ -296,18 +446,21 @@ public class OutboundWebhookActivitiesTests
     }
 
     [Fact]
-    public async Task CallWebhookAsync_SkipsWhenPlaceholderMissing()
+    public async Task DeliverRaiseEventsAsync_SkipsWhenPlaceholderMissing()
     {
         var handler = new StubHttpHandler(HttpStatusCode.Accepted, "{}");
-        var activities = new OutboundWebhookActivities(
-            () => new HttpClient(handler),
-            _ => "api-key");
+        var activities = new RaiseEventActivities(() => new HttpClient(handler));
 
-        await activities.CallWebhookAsync(new OutboundWebhookRequest
+        await activities.DeliverRaiseEventsAsync(new RaiseEventsRequest
         {
-            Webhook = "metrics",
-            Url = "https://example.test/{{pr-number}}",
-            ApiKeyReference = "secrets.AIHUB-API-KEY",
+            Events =
+            [
+                new RaiseEventSpec(
+                    "ai-hub-metrics",
+                    "https://example.test/{{pr-number}}",
+                    [new EnvEntry { Name = "X-Api-Key", Value = "api-key", Constant = true }],
+                    null)
+            ],
             ExecutionName = "github-pull-request-review",
             CorrelationId = "abc123",
             UrlVariables = new Dictionary<string, string>(),

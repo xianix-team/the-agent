@@ -104,8 +104,8 @@ public class ProcessingWorkflow
             ContainerOutputParser.Parse(executionResult);
             LogOutcome(executionResult, executionLabel, executionId, orchestrationResult.TenantId, repoLabel, keyInputs);
             await ReportExecutionMetricsAsync(orchestrationResult, executionResult);
-            if (orchestrationResult.OutboundWebhook is not null)
-                await ReportOutboundWebhookAsync(orchestrationResult, executionResult, executionId);
+            if (orchestrationResult.RaiseEvents is { Count: > 0 })
+                await ReportRaiseEventsAsync(orchestrationResult, executionResult, executionId);
         }
         finally
         {
@@ -313,33 +313,33 @@ public class ProcessingWorkflow
         }
     }
 
-    private static async Task ReportOutboundWebhookAsync(
+    private static async Task ReportRaiseEventsAsync(
         ProcessingRequest orchestrationResult,
         ContainerExecutionResult executionResult,
         string executionId)
     {
         try
         {
-            var webhook = orchestrationResult.OutboundWebhook!;
-            var request = new OutboundWebhookRequest
+            var request = new RaiseEventsRequest
             {
-                Webhook = webhook.Name,
-                Url = webhook.Url,
-                ApiKeyReference = webhook.ApiKeyReference,
+                Events = orchestrationResult.RaiseEvents!,
                 ExecutionName = orchestrationResult.ExecutionBlockName,
                 CorrelationId = executionId,
-                UrlVariables = WebhookUrlVariables.From(orchestrationResult.Inputs, executionId),
+                UrlVariables = WebhookUrlVariables.From(
+                    orchestrationResult.Inputs,
+                    executionId,
+                    orchestrationResult.Execution?.Plugins),
                 Result = executionResult,
             };
 
             await Workflow.ExecuteActivityAsync(
-                (OutboundWebhookActivities a) => a.CallWebhookAsync(request),
-                ContainerWorkflowOptions.OutboundWebhook);
+                (RaiseEventActivities a) => a.DeliverRaiseEventsAsync(request),
+                ContainerWorkflowOptions.RaiseEvents);
         }
         catch (Exception ex)
         {
             Workflow.Logger.LogWarning(ex,
-                "Failed to call metrics webhook for '{Name}', block '{Block}'. Metrics are non-critical.",
+                "Failed to deliver raise-events for '{Name}', block '{Block}'. The calls are non-critical.",
                 orchestrationResult.Name,
                 orchestrationResult.ExecutionBlockName ?? "—");
         }

@@ -94,7 +94,7 @@ public sealed class EventOrchestrator : IEventOrchestrator
                 Inputs = evaluation.Inputs,
                 Execution = execution,
                 ExecutionBlockName = evaluation.ExecutionBlockName,
-                OutboundWebhook = evaluation.OutboundWebhook
+                RaiseEvents = evaluation.RaiseEvents
             });
         }
 

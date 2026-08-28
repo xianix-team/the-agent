@@ -5,44 +5,45 @@ using Microsoft.Extensions.Logging;
 namespace Xianix.Webhooks;
 
 /// <summary>
-/// Generic HTTP POST of a JSON body to a caller-supplied URL. Does not know
-/// which vendor owns the URL.
+/// Best-effort HTTP POST for <c>raise-events</c> entries.
 /// </summary>
-internal sealed class OutboundWebhookCaller
+internal sealed class RaiseEventCaller
 {
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(15);
 
     private readonly HttpClient _http;
     private readonly ILogger _logger;
-    private readonly string _apiKey;
 
-    public OutboundWebhookCaller(HttpClient http, ILogger logger, string? apiKey = null)
+    public RaiseEventCaller(HttpClient http, ILogger logger)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _apiKey = apiKey ?? string.Empty;
     }
-
-    public static bool IsConfigured(string? apiKey) => !string.IsNullOrWhiteSpace(apiKey);
 
     public async Task<bool> PostAsync(
         string url,
-        string payloadJson,
+        string? payloadJson,
+        IReadOnlyDictionary<string, string> headers,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(url);
-        ArgumentException.ThrowIfNullOrWhiteSpace(payloadJson);
+        ArgumentNullException.ThrowIfNull(headers);
 
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        if (headers.Count == 0)
         {
-            _logger.LogDebug("Outbound webhook API key is empty; skipping POST to {Url}.", url);
+            _logger.LogDebug("raise-events POST has no resolved headers; skipping {Url}.", url);
             return false;
         }
 
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
-        request.Headers.TryAddWithoutValidation("X-Api-Key", _apiKey);
-        request.Content = new StringContent(payloadJson, Encoding.UTF8, "application/json");
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        foreach (var (name, value) in headers)
+            request.Headers.TryAddWithoutValidation(name, value);
+
+        if (!string.IsNullOrWhiteSpace(payloadJson))
+        {
+            request.Content = new StringContent(payloadJson, Encoding.UTF8, "application/json");
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        }
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(RequestTimeout);
@@ -55,24 +56,24 @@ internal sealed class OutboundWebhookCaller
             if (response.IsSuccessStatusCode)
             {
                 _logger.LogInformation(
-                    "Outbound webhook accepted: {StatusCode} {Url} {Body}",
+                    "raise-events accepted: {StatusCode} {Url} {Body}",
                     (int)response.StatusCode, url, Truncate(body));
                 return true;
             }
 
             _logger.LogWarning(
-                "Outbound webhook rejected: {StatusCode} {Url} {Body}",
+                "raise-events rejected: {StatusCode} {Url} {Body}",
                 (int)response.StatusCode, url, Truncate(body));
             return false;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            _logger.LogWarning("Outbound webhook POST timed out: {Url}.", url);
+            _logger.LogWarning("raise-events POST timed out: {Url}.", url);
             return false;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning(ex, "Outbound webhook POST failed: {Url}.", url);
+            _logger.LogWarning(ex, "raise-events POST failed: {Url}.", url);
             return false;
         }
     }

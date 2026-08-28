@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 
 namespace Xianix.Rules;
@@ -209,7 +210,7 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             var prompt = InterpolatePrompt(execution.Prompt, dict);
             var hasPrompt = !string.IsNullOrWhiteSpace(prompt);
             var blockName = string.IsNullOrWhiteSpace(execution.Name) ? null : execution.Name.Trim();
-            var outboundWebhook = BuildOutboundWebhook(ruleSets, execution, dict);
+            var raiseEvents = BuildRaiseEvents(execution);
 
             // Merge rule-set common envs with the execution's own envs. Execution-level
             // entries win on name collisions — same "common defaults, executions may
@@ -243,7 +244,7 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
                 DisallowedTools:      execution.DisallowedTools,
                 MaxBudgetUsd:         execution.MaxBudgetUsd,
                 ResumeSessions:       execution.ResumeSessions,
-                OutboundWebhook:      outboundWebhook));
+                RaiseEvents:          raiseEvents.Count > 0 ? raiseEvents : null));
         }
 
         if (matches.Count > 0)
@@ -279,7 +280,7 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
         {
             rulesDump = JsonSerializer.Serialize(ruleSets, RulesDumpJsonOptions);
         }
-        catch (NotSupportedException ex)
+        catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException)
         {
             rulesDump = $"<failed to serialize rule sets: {ex.Message}>";
         }
@@ -636,63 +637,25 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
         return merged;
     }
 
-    private static OutboundWebhookSpec? BuildOutboundWebhook(
-        IReadOnlyList<WebhookRuleSet> ruleSets,
-        WebhookExecution execution,
-        Dictionary<string, object?> inputs)
+    private static List<RaiseEventSpec> BuildRaiseEvents(WebhookExecution execution)
     {
-        // Backward-compatible inline form.
-        if (!string.IsNullOrWhiteSpace(execution.OutboundWebhook))
+        if (execution.RaiseEvents.Count == 0)
+            return [];
+
+        var specs = new List<RaiseEventSpec>(execution.RaiseEvents.Count);
+        foreach (var entry in execution.RaiseEvents)
         {
-            return new OutboundWebhookSpec(
-                execution.OutboundWebhook.Trim(),
-                execution.OutboundWebhookUrl.Trim(),
-                execution.OutboundWebhookApiKey.Trim());
+            if (string.IsNullOrWhiteSpace(entry.Url))
+                continue;
+
+            specs.Add(new RaiseEventSpec(
+                string.IsNullOrWhiteSpace(entry.Name) ? "raise-event" : entry.Name.Trim(),
+                entry.Url.Trim(),
+                entry.WithHeaders,
+                entry.Payload?.ToJsonString()));
         }
 
-        if (string.IsNullOrWhiteSpace(execution.Name))
-            return null;
-
-        var metricsSet = ruleSets.FirstOrDefault(set =>
-            string.Equals(set.WebhookName, "metrics", StringComparison.OrdinalIgnoreCase));
-        var mapping = metricsSet?.Executions.FirstOrDefault(candidate =>
-            string.Equals(candidate.Name, execution.Name, StringComparison.OrdinalIgnoreCase)
-            && MappingPluginsMatch(candidate.Plugins, execution.Plugins));
-
-        if (metricsSet is null || mapping is null || string.IsNullOrWhiteSpace(mapping.OutboundWebhookUrl))
-            return null;
-
-        // Mapping inputs are configuration constants (node-id, activity, actor, etc.),
-        // not paths into the original inbound payload.
-        foreach (var input in mapping.InputRules.Where(input => input.Constant))
-        {
-            if (!string.IsNullOrWhiteSpace(input.Name))
-                inputs[input.Name] = input.Value;
-        }
-
-        var apiKey = string.IsNullOrWhiteSpace(mapping.OutboundWebhookApiKey)
-            ? metricsSet.OutboundWebhookApiKey
-            : mapping.OutboundWebhookApiKey;
-
-        return new OutboundWebhookSpec(
-            metricsSet.WebhookName.Trim(),
-            mapping.OutboundWebhookUrl.Trim(),
-            apiKey.Trim());
-    }
-
-    private static bool MappingPluginsMatch(
-        IReadOnlyList<PluginEntry> mappingPlugins,
-        IReadOnlyList<PluginEntry> executionPlugins)
-    {
-        if (mappingPlugins.Count == 0)
-            return true;
-
-        return mappingPlugins.Any(mapping =>
-            executionPlugins.Any(execution =>
-                string.Equals(
-                    mapping.PluginName,
-                    execution.PluginName,
-                    StringComparison.OrdinalIgnoreCase)));
+        return specs;
     }
 
     /// <summary>

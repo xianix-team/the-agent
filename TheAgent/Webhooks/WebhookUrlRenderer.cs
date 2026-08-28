@@ -1,5 +1,3 @@
-using System.Text.RegularExpressions;
-
 namespace Xianix.Webhooks;
 
 /// <summary>
@@ -8,10 +6,6 @@ namespace Xianix.Webhooks;
 /// </summary>
 internal static class WebhookUrlRenderer
 {
-    private static readonly Regex Placeholder = new(
-        @"\{\{([^}]+)\}\}",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
     public static string? TryRender(
         string template,
         IReadOnlyDictionary<string, string>? variables,
@@ -27,10 +21,10 @@ internal static class WebhookUrlRenderer
         var vars = variables ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var missingKeys = new List<string>();
 
-        var rendered = Placeholder.Replace(template, match =>
+        var rendered = WebhookPlaceholders.Pattern.Replace(template, match =>
         {
-            var key = match.Groups[1].Value.Trim();
-            if (TryGet(vars, key, out var value))
+            var key = WebhookPlaceholders.Parse(match.Groups[1].Value).Name;
+            if (WebhookPlaceholders.TryGet(vars, key, out var value))
                 return Uri.EscapeDataString(value);
 
             missingKeys.Add(key);
@@ -45,34 +39,4 @@ internal static class WebhookUrlRenderer
 
         return rendered;
     }
-
-    private static bool TryGet(
-        IReadOnlyDictionary<string, string> variables,
-        string key,
-        out string value)
-    {
-        if (variables.TryGetValue(key, out var found) && found is not null)
-        {
-            value = found;
-            return true;
-        }
-
-        foreach (var (candidate, candidateValue) in variables)
-        {
-            if (!string.Equals(Normalize(candidate), Normalize(key), StringComparison.Ordinal)
-                || candidateValue is null)
-            {
-                continue;
-            }
-
-            value = candidateValue;
-            return true;
-        }
-
-        value = string.Empty;
-        return false;
-    }
-
-    private static string Normalize(string key) =>
-        key.Trim().ToLowerInvariant().Replace("_", "-");
 }

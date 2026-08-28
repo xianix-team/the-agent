@@ -45,6 +45,38 @@ public static class WebhookApiKey
         }
     }
 
+    internal static async Task<string?> LoadSecretByKeyAsync(string secretKey, ILogger logger)
+    {
+        if (string.IsNullOrWhiteSpace(secretKey))
+            return null;
+
+        try
+        {
+            var vault = XiansContext.CurrentAgent.Secrets.TenantScope();
+            var fetched = await vault
+                .FetchByKeyAsync(secretKey.Trim())
+                .ConfigureAwait(false);
+
+            if (fetched is null || string.IsNullOrWhiteSpace(fetched.Value))
+            {
+                logger.LogDebug(
+                    "Tenant secret '{Name}' is missing; skipping raise-event header.",
+                    secretKey);
+                return null;
+            }
+
+            return fetched.Value;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(
+                ex,
+                "Failed to read tenant secret '{Name}' for raise-event header.",
+                secretKey);
+            return null;
+        }
+    }
+
     internal static string? ParseSecretName(string? reference)
     {
         if (string.IsNullOrWhiteSpace(reference))

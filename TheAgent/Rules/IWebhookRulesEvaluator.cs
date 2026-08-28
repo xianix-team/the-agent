@@ -32,12 +32,13 @@ public sealed record EvaluationResult(
     IReadOnlyList<string>? DisallowedTools = null,
     double? MaxBudgetUsd = null,
     bool ResumeSessions = false,
-    OutboundWebhookSpec? OutboundWebhook = null);
+    IReadOnlyList<RaiseEventSpec>? RaiseEvents = null);
 
-public sealed record OutboundWebhookSpec(
+public sealed record RaiseEventSpec(
     string Name,
     string Url,
-    string ApiKeyReference);
+    IReadOnlyList<EnvEntry> WithHeaders,
+    string? PayloadJson);
 
 /// <summary>
 /// Outcome of a rules evaluation: zero or more matching execution blocks, or a skip reason.

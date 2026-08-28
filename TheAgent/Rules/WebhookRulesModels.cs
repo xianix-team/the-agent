@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace Xianix.Rules;
@@ -44,13 +45,6 @@ public sealed class WebhookRuleSet
     /// </summary>
     [JsonPropertyName("with-envs")]
     public List<EnvEntry> WithEnvs { get; init; } = [];
-
-    /// <summary>
-    /// Shared API-key reference for a dedicated outbound webhook rule set such as
-    /// <c>{ "webhook": "metrics" }</c>. Individual mapping entries provide their URLs.
-    /// </summary>
-    [JsonPropertyName("webhook-api-key")]
-    public string OutboundWebhookApiKey { get; init; } = "";
 
     [JsonPropertyName("executions")]
     public List<WebhookExecution> Executions { get; init; } = [];
@@ -186,25 +180,12 @@ public sealed class WebhookExecution
     public List<EnvEntry> WithEnvs { get; init; } = [];
 
     /// <summary>
-    /// Optional post-execution webhook ability. The value identifies the payload builder
-    /// (currently <c>metrics</c>); the destination and credential remain data in rules.json.
+    /// Best-effort HTTP events raised after the execution completes. Each entry
+    /// declares its own URL, optional headers (same <c>with-headers</c> shape as
+    /// <see cref="WithEnvs"/>), and optional JSON <c>payload</c> template.
     /// </summary>
-    [JsonPropertyName("webhook")]
-    public string OutboundWebhook { get; init; } = "";
-
-    /// <summary>
-    /// Full destination URL for the post-execution webhook. Supports the same
-    /// <c>{{input-name}}</c> placeholders as <see cref="Prompt"/>.
-    /// </summary>
-    [JsonPropertyName("webhook-url")]
-    public string OutboundWebhookUrl { get; init; } = "";
-
-    /// <summary>
-    /// Tenant secret reference used as the outbound <c>X-Api-Key</c>, for example
-    /// <c>secrets.AIHUB-API-KEY</c>. The secret value is never placed in execution inputs.
-    /// </summary>
-    [JsonPropertyName("webhook-api-key")]
-    public string OutboundWebhookApiKey { get; init; } = "";
+    [JsonPropertyName("raise-events")]
+    public List<RaiseEventEntry> RaiseEvents { get; init; } = [];
 
     /// <summary>
     /// Optional Claude model the executor should run this block on (e.g.
@@ -359,6 +340,34 @@ public sealed class EnvEntry
     /// </summary>
     [JsonPropertyName("mandatory")]
     public bool Mandatory { get; init; }
+}
+
+/// <summary>
+/// Post-execution HTTP event declared on a <see cref="WebhookExecution"/>. Delivered
+/// best-effort after the container run completes.
+/// </summary>
+public sealed class RaiseEventEntry
+{
+    [JsonPropertyName("name")]
+    public string Name { get; init; } = "";
+
+    [JsonPropertyName("url")]
+    public string Url { get; init; } = "";
+
+    /// <summary>
+    /// Request headers resolved the same way as <see cref="EnvEntry"/> values
+    /// (<c>host.*</c>, <c>secrets.*</c>, or <c>constant: true</c>).
+    /// </summary>
+    [JsonPropertyName("with-headers")]
+    public List<EnvEntry> WithHeaders { get; init; } = [];
+
+    /// <summary>
+    /// Optional JSON body template. Placeholders use <c>{{name}}</c> with optional
+    /// <c>:number</c>, <c>:array</c>, or <c>:boolean</c> suffixes. Unresolved keys
+    /// are omitted from the rendered payload.
+    /// </summary>
+    [JsonPropertyName("payload")]
+    public JsonNode? Payload { get; init; }
 }
 
 public sealed class MatchEntry

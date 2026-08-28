@@ -13,7 +13,10 @@ internal static class MetricsPayloadBuilder
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    public static string BuildPayloadJson(ContainerExecutionResult result, string? correlationId)
+    public static string BuildPayloadJson(
+        ContainerExecutionResult result,
+        string? correlationId,
+        IReadOnlyDictionary<string, string>? variables = null)
     {
         ArgumentNullException.ThrowIfNull(result);
 
@@ -33,14 +36,47 @@ internal static class MetricsPayloadBuilder
             new MetricsEventDto
             {
                 CorrelationId = id,
-                Tokens = tokens,
-                CostUsd = costUsd ?? 0,
-                Model = model,
-                Status = result.Succeeded ? "success" : "error",
+                Activity = ReadVariable(variables, "activity"),
+                Actors = ParseActors(variables),
+                Dimensions = new MetricsDimensionsDto
+                {
+                    Tokens = tokens,
+                    CostUsd = costUsd ?? 0,
+                    Model = model,
+                    Status = result.Succeeded ? "success" : "error",
+                },
             },
         };
 
         return JsonSerializer.Serialize(payload, JsonOptions);
+    }
+
+    private static string[] ParseActors(IReadOnlyDictionary<string, string>? variables)
+    {
+        var raw = ReadVariable(variables, "actors");
+        if (string.IsNullOrWhiteSpace(raw))
+            return [];
+
+        return raw
+            .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .ToArray();
+    }
+
+    private static string? ReadVariable(IReadOnlyDictionary<string, string>? variables, string key)
+    {
+        if (variables is null)
+            return null;
+
+        foreach (var (name, value) in variables)
+        {
+            if (string.Equals(name, key, StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(value))
+            {
+                return value.Trim();
+            }
+        }
+
+        return null;
     }
 
     internal static (double? cost, bool estimated) ResolveCost(ContainerExecutionResult result)
@@ -71,6 +107,13 @@ internal static class MetricsPayloadBuilder
     private sealed class MetricsEventDto
     {
         public required string CorrelationId { get; init; }
+        public string? Activity { get; init; }
+        public required string[] Actors { get; init; }
+        public required MetricsDimensionsDto Dimensions { get; init; }
+    }
+
+    private sealed class MetricsDimensionsDto
+    {
         public long Tokens { get; init; }
         public double CostUsd { get; init; }
         public required string Model { get; init; }

@@ -403,7 +403,7 @@ public class WebhookRulesEvaluatorTests
     }
 
     [Fact]
-    public void EvaluateWithRules_CarriesMetricsWebhookFromExecution()
+    public void EvaluateWithRules_CarriesRaiseEventsFromExecution()
     {
         using var doc = JsonDocument.Parse("""{ "number": 42 }""");
         var ruleSets = _sut.ParseRules(
@@ -421,31 +421,16 @@ public class WebhookRulesEvaluatorTests
                     "use-plugins": [
                       { "plugin-name": "pr-reviewer@xianix-plugins-official" }
                     ],
-                    "execute-prompt": "review"
-                  }
-                ]
-              },
-              {
-                "webhook": "metrics",
-                "webhook-api-key": "secrets.AIHUB-API-KEY",
-                "executions": [
-                  {
-                    "name": "github-pr-review",
-                    "use-inputs": [
-                      { "name": "node-id", "value": "nd_123", "constant": true },
-                      { "name": "activity", "value": "pr-review", "constant": true }
-                    ],
-                    "use-plugins": [
-                      { "plugin-name": "pr-reviewer@xianix-plugins-official" }
-                    ],
-                    "webhook-url": "https://example.test/nodes/{{node-id}}/activity/{{activity}}/{{pr-number}}"
-                  },
-                  {
-                    "name": "other-execution",
-                    "use-inputs": [
-                      { "name": "node-id", "value": "nd_456", "constant": true }
-                    ],
-                    "webhook-url": "https://example.test/nodes/{{node-id}}"
+                    "execute-prompt": "review",
+                    "raise-events": [
+                      {
+                        "name": "ai-hub-metrics",
+                        "url": "https://example.test/nodes/{{node-id}}/activity/{{activity}}/{{pr-number}}",
+                        "with-headers": [
+                          { "name": "X-Api-Key", "value": "secrets.AIHUB-API-KEY", "mandatory": true }
+                        ]
+                      }
+                    ]
                   }
                 ]
               }
@@ -455,13 +440,50 @@ public class WebhookRulesEvaluatorTests
         var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
 
         var result = Assert.Single(outcome.Results!);
-        Assert.Equal("nd_123", result.Inputs["node-id"]);
-        Assert.Equal("pr-review", result.Inputs["activity"]);
-        Assert.Equal("metrics", result.OutboundWebhook?.Name);
+        var raiseEvent = Assert.Single(result.RaiseEvents!);
+        Assert.Equal("ai-hub-metrics", raiseEvent.Name);
         Assert.Equal(
             "https://example.test/nodes/{{node-id}}/activity/{{activity}}/{{pr-number}}",
-            result.OutboundWebhook?.Url);
-        Assert.Equal("secrets.AIHUB-API-KEY", result.OutboundWebhook?.ApiKeyReference);
+            raiseEvent.Url);
+        Assert.Equal("X-Api-Key", raiseEvent.WithHeaders[0].Name);
+        Assert.Equal("secrets.AIHUB-API-KEY", raiseEvent.WithHeaders[0].Value);
+    }
+
+    [Fact]
+    public void EvaluateWithRules_CarriesRaiseEventsPayload()
+    {
+        using var doc = JsonDocument.Parse("""{ "number": 42 }""");
+        var ruleSets = _sut.ParseRules(
+            """
+            [
+              {
+                "webhook": "Default",
+                "executions": [
+                  {
+                    "name": "github-pr-review",
+                    "match-any": [],
+                    "use-plugins": [
+                      { "plugin-name": "pr-reviewer@xianix-plugins-official" }
+                    ],
+                    "execute-prompt": "review",
+                    "raise-events": [
+                      {
+                        "name": "ai-hub-metrics",
+                        "url": "https://example.test/hooks/{{pr-number}}",
+                        "payload": { "text": "done {{pr-number}}" }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+            """);
+
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        var raiseEvent = Assert.Single(Assert.Single(outcome.Results!).RaiseEvents!);
+        Assert.Equal("ai-hub-metrics", raiseEvent.Name);
+        Assert.Contains("done {{pr-number}}", raiseEvent.PayloadJson);
     }
 
     [Fact]

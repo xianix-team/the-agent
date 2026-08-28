@@ -128,7 +128,7 @@ public class XianixAgent(
                 new WorkflowOptions { Activable = false },
                 typeName: EnvConfig.AgentName + ":Processing Workflow")
             .AddActivity<ContainerActivities>()
-            .AddActivity<OutboundWebhookActivities>();
+            .AddActivity<RaiseEventActivities>();
 
         xiansAgent.Workflows
             .DefineCustom<ClaudeCodeChatWorkflow>(new WorkflowOptions { Activable = false },
