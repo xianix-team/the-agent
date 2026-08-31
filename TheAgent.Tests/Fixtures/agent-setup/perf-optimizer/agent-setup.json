@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "plugin": "perf-optimizer",
+  "slashCommand": "/perf-optimize",
+  "platforms": {
+    "azuredevops": {
+      "requiredEnvs": [
+        "AZURE-DEVOPS-TOKEN",
+        "ANTHROPIC-API-KEY"
+      ],
+      "suggestedTriggers": [
+        "Work item tag ai-dlc/perf/optimize"
+      ],
+      "executions": [
+        {
+          "name": "azuredevops-perf-optimizer",
+          "platform": "azuredevops",
+          "match-any": [
+            {
+              "name": "azuredevops-perf-optimizer-tagged",
+              "rule": "eventType==workitem.updated&&resource.revision.fields.\"System.Tags\"*='ai-dlc/perf/optimize'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "workitem-id",
+              "value": "resource.workItemId"
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "perf-optimizer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official",
+              "slash-command": "/perf-optimize"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "AZURE-DEVOPS-TOKEN",
+              "value": "secrets.AZURE-DEVOPS-TOKEN",
+              "mandatory": true
+            },
+            {
+              "name": "ANTHROPIC-API-KEY",
+              "value": "secrets.ANTHROPIC-API-KEY",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 5.0,
+          "execute-prompt": "Work item #{{workitem-id}} requested performance optimization. Run /perf-optimize {{workitem-id}}."
+        }
+      ]
+    },
+    "github": {
+      "requiredEnvs": [
+        "GITHUB-TOKEN",
+        "ANTHROPIC-API-KEY"
+      ],
+      "suggestedGitHubWebhookEvents": [
+        "issues"
+      ],
+      "suggestedTriggers": [
+        "Issue label ai-dlc/perf/optimize"
+      ],
+      "executions": [
+        {
+          "name": "github-perf-optimizer",
+          "platform": "github",
+          "repository": {
+            "url": {
+              "value": "https://github.com/org/repo.git",
+              "constant": true
+            }
+          },
+          "match-any": [
+            {
+              "name": "github-perf-optimizer-tag-applied",
+              "rule": "action==labeled&&label.name=='ai-dlc/perf/optimize'"
+            },
+            {
+              "name": "github-perf-optimizer-opened-with-tag",
+              "rule": "action==opened&&issue.labels.*.name=='ai-dlc/perf/optimize'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "issue-number",
+              "value": "issue.number",
+              "mandatory": true
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "perf-optimizer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official",
+              "slash-command": "/perf-optimize"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "GITHUB-TOKEN",
+              "value": "secrets.GITHUB-TOKEN",
+              "mandatory": true
+            },
+            {
+              "name": "ANTHROPIC-API-KEY",
+              "value": "secrets.ANTHROPIC-API-KEY",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 5.0,
+          "execute-prompt": "Issue #{{issue-number}} requested performance optimization. Run /perf-optimize {{issue-number}}."
+        }
+      ]
+    }
+  },
+  "chat": {
+    "slashCommand": "/perf-optimize",
+    "model": "claude-sonnet-4-5",
+    "max-budget-usd": 5.0
+  }
+}

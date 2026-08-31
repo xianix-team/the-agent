@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "plugin": "chatbot-tester",
+  "slashCommand": "/test-chatbot",
+  "platforms": {
+    "azuredevops": {
+      "requiredEnvs": [
+        "AZURE-DEVOPS-TOKEN",
+        "ANTHROPIC-API-KEY"
+      ],
+      "suggestedTriggers": [
+        "Work item tag ai-dlc/issue/chatbot-test"
+      ],
+      "executions": [
+        {
+          "name": "azuredevops-chatbot-tester",
+          "platform": "azuredevops",
+          "match-any": [
+            {
+              "name": "azuredevops-chatbot-tester-tagged",
+              "rule": "eventType==workitem.updated&&resource.revision.fields.\"System.Tags\"*='ai-dlc/issue/chatbot-test'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "workitem-id",
+              "value": "resource.workItemId"
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "chatbot-tester@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official",
+              "slash-command": "/test-chatbot"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "AZURE-DEVOPS-TOKEN",
+              "value": "secrets.AZURE-DEVOPS-TOKEN",
+              "mandatory": true
+            },
+            {
+              "name": "ANTHROPIC-API-KEY",
+              "value": "secrets.ANTHROPIC-API-KEY",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 5.0,
+          "execute-prompt": "Work item #{{workitem-id}} requested chatbot testing. Run /test-chatbot {{workitem-id}}."
+        }
+      ]
+    },
+    "github": {
+      "requiredEnvs": [
+        "GITHUB-TOKEN",
+        "ANTHROPIC-API-KEY"
+      ],
+      "suggestedGitHubWebhookEvents": [
+        "issues"
+      ],
+      "suggestedTriggers": [
+        "Issue label ai-dlc/issue/chatbot-test"
+      ],
+      "executions": [
+        {
+          "name": "github-chatbot-tester",
+          "platform": "github",
+          "repository": {
+            "url": {
+              "value": "https://github.com/org/repo.git",
+              "constant": true
+            }
+          },
+          "match-any": [
+            {
+              "name": "github-chatbot-tester-tag-applied",
+              "rule": "action==labeled&&label.name=='ai-dlc/issue/chatbot-test'"
+            },
+            {
+              "name": "github-chatbot-tester-opened-with-tag",
+              "rule": "action==opened&&issue.labels.*.name=='ai-dlc/issue/chatbot-test'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "issue-number",
+              "value": "issue.number",
+              "mandatory": true
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "chatbot-tester@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official",
+              "slash-command": "/test-chatbot"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "GITHUB-TOKEN",
+              "value": "secrets.GITHUB-TOKEN",
+              "mandatory": true
+            },
+            {
+              "name": "ANTHROPIC-API-KEY",
+              "value": "secrets.ANTHROPIC-API-KEY",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 5.0,
+          "execute-prompt": "Issue #{{issue-number}} requested chatbot testing. Run /test-chatbot {{issue-number}}."
+        }
+      ]
+    }
+  },
+  "chat": {
+    "slashCommand": "/test-chatbot",
+    "model": "claude-sonnet-4-5",
+    "max-budget-usd": 5.0
+  }
+}

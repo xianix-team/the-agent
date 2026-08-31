@@ -1,0 +1,419 @@
+{
+  "name": "xianix-plugins-official",
+  "owner": {
+    "name": "99x",
+    "email": "xianix-agent@99x.io"
+  },
+  "metadata": {
+    "description": "Official plugin marketplace for Xianix the-agent — AI-powered AI-DLC automation tools.",
+    "version": "1.0.0",
+    "pluginRoot": "./plugins"
+  },
+  "plugins": [
+    {
+      "name": "pr-reviewer",
+      "source": "./plugins/pr-reviewer",
+      "description": "Comprehensive PR review plugin with specialized agents for code quality, security, test coverage, and performance analysis. Works with GitHub, Azure DevOps, Bitbucket, and any git repository.",
+      "version": "1.9.9",
+      "author": {
+        "name": "99x",
+        "email": "xianix-agent@99x.io"
+      },
+      "homepage": "https://opensource.99x.io/xianix-team/",
+      "repository": "https://github.com/xianix-team/xianix-plugins-official",
+      "category": "code-review",
+      "keywords": [
+        "pr-review",
+        "pull-request",
+        "review",
+        "code-quality",
+        "security",
+        "testing",
+        "azure-devops",
+        "github"
+      ],
+      "license": "MIT"
+    },
+    {
+      "name": "req-analyst",
+      "source": "./plugins/req-analyst",
+      "description": "AI thinking partner for backlog refinement. Enriches GitHub Issues, Azure DevOps Work Items, or plain text with fit-to-existing-requirements analysis, domain knowledge, competitive insight, user journeys, persona impact, usability and adoption considerations, and open questions for the team.",
+      "version": "1.1.0",
+      "author": {
+        "name": "99x",
+        "email": "xianix-agent@99x.io"
+      },
+      "homepage": "https://opensource.99x.io/xianix-team/",
+      "repository": "https://github.com/xianix-team/xianix-plugins-official",
+      "category": "requirements",
+      "keywords": [
+        "requirement-analysis",
+        "requirement-elaboration",
+        "backlog-refinement",
+        "domain-knowledge",
+        "competitive-insights",
+        "user-journey",
+        "personas",
+        "usability",
+        "adoption"
+      ],
+      "license": "MIT"
+    },
+    {
+      "name": "perf-optimizer",
+      "source": "./plugins/perf-optimizer",
+      "description": "Whole-codebase performance bottleneck detection triggered from a GitHub issue or Azure DevOps work item. Analyzes latency, CPU, memory, and I/O patterns across the repository's default branch and opens a single pull request containing focused, low-risk optimizations together with an embedded performance report. Works with GitHub and Azure DevOps.",
+      "version": "2.2.0",
+      "author": {
+        "name": "99x",
+        "email": "xianix-agent@99x.io"
+      },
+      "homepage": "https://opensource.99x.io/xianix-team/",
+      "repository": "https://github.com/xianix-team/xianix-plugins-official",
+      "category": "code-review",
+      "keywords": [
+        "performance",
+        "performance-optimization",
+        "performance-review",
+        "issue-driven",
+        "whole-codebase",
+        "latency",
+        "cpu",
+        "memory",
+        "n-plus-one",
+        "azure-devops",
+        "github"
+      ],
+      "license": "MIT"
+    },
+    {
+      "name": "test-strategist",
+      "source": "./plugins/test-strategist",
+      "description": "Automated impact analysis and risk-based test strategy generation for bug fixes, PBIs, and feature implementations. Gathers work item requirements, code changes across linked pull requests, comments, child items, and referenced documentation — then posts a business-readable Markdown comment series on the PR / issue / work item discussion that serves as the testing guide for QA engineers doing risk-based testing. No HTML files written to the repo.",
+      "version": "1.0.0",
+      "author": {
+        "name": "99x",
+        "email": "xianix-agent@99x.io"
+      },
+      "homepage": "https://opensource.99x.io/xianix-team/",
+      "repository": "https://github.com/xianix-team/xianix-plugins-official",
+      "category": "testing",
+      "keywords": [
+        "testing",
+        "qa",
+        "test-strategy",
+        "risk-based-testing",
+        "impact-analysis",
+        "test-cases",
+        "coverage-map",
+        "github",
+        "azure-devops"
+      ],
+      "license": "MIT"
+    },
+    {
+      "name": "pr-comment-resolver",
+      "source": "./plugins/pr-comment-resolver",
+      "description": "Automated resolution of pull request review threads — classifies each unresolved comment as apply, discuss, or decline, applies actionable ones as commits, replies to the rest, and posts a structured disposition report. Works with GitHub, Azure DevOps, and any git repository.",
+      "version": "1.0.0",
+      "author": {
+        "name": "99x",
+        "email": "xianix-agent@99x.io"
+      },
+      "homepage": "https://opensource.99x.io/xianix-team/",
+      "repository": "https://github.com/xianix-team/xianix-plugins-official",
+      "category": "code-review",
+      "keywords": [
+        "pr-comments",
+        "pull-request",
+        "review-threads",
+        "comment-resolver",
+        "code-changes",
+        "github",
+        "azure-devops"
+      ],
+      "license": "MIT"
+    },
+    {
+      "name": "impact-analyst",
+      "source": "./plugins/impact-analyst",
+      "description": "Unified impact analysis and risk-based test strategy plugin. Combines blast radius analysis, dependency tracing, feature mapping, and structured test case generation into a single HTML report. Works from a PR, GitHub issue, or Azure DevOps work item.",
+      "version": "1.0.0",
+      "author": {
+        "name": "99x",
+        "email": "xianix-agent@99x.io"
+      },
+      "homepage": "https://opensource.99x.io/xianix-team/",
+      "repository": "https://github.com/xianix-team/xianix-plugins-official",
+      "category": "testing",
+      "keywords": [
+        "impact-analysis",
+        "test-strategy",
+        "risk-based-testing",
+        "blast-radius",
+        "qa",
+        "test-cases",
+        "coverage-map",
+        "github",
+        "azure-devops"
+      ],
+      "license": "MIT"
+    },
+    {
+      "name": "web-app-tester",
+      "source": "./plugins/web-app-tester",
+      "description": "Automated web app behaviour verification triggered from a GitHub PR or Issue. Finds a testable URL from comments, runs or auto-generates a test plan using Playwright CLI (headless Chromium), and posts a structured test execution report as a GitHub comment.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Xianix",
+        "email": "hello@xianix.com"
+      },
+      "homepage": "https://xianix.com",
+      "repository": "https://github.com/xianix-team/plugins-official",
+      "category": "testing",
+      "keywords": [
+        "web-testing",
+        "playwright",
+        "e2e",
+        "qa",
+        "browser-testing",
+        "pr-testing",
+        "preview-url",
+        "github",
+        "test-automation"
+      ],
+      "license": "MIT"
+    },
+    {
+      "name": "doc-writer",
+      "source": "./plugins/doc-writer",
+      "description": "Automated documentation updater. Given a pull request number, analyses the modified source files and synchronises the project's documentation — updating existing docs that drifted from the new behaviour, creating new docs for new public surfaces, and removing stale entries — then commits the doc-only changes on a separate docs branch and opens a companion documentation pull request targeting the original PR's head branch, so the docs can be reviewed and merged into the feature branch independently. Works with GitHub, Azure DevOps, and any git repository.",
+      "version": "1.0.1",
+      "author": {
+        "name": "99x",
+        "email": "xianix-agent@99x.io"
+      },
+      "homepage": "https://opensource.99x.io/xianix-team/",
+      "repository": "https://github.com/xianix-team/xianix-plugins-official",
+      "category": "documentation",
+      "keywords": [
+        "documentation",
+        "docs",
+        "doc-sync",
+        "readme",
+        "api-docs",
+        "changelog",
+        "pull-request",
+        "automation",
+        "github",
+        "azure-devops"
+      ],
+      "license": "MIT"
+    },
+    {
+      "name": "dependency-optimizer",
+      "source": "./plugins/dependency-optimizer",
+      "description": "Automated dependency audit and optimization across all major ecosystems (npm, pip, Cargo, Go modules, Maven, .NET, Bundler). Runs four parallel specialized analyses — vulnerability scanning (CVE/CVSS), SemVer version drift, bundle bloat and unused package detection, and license compliance. Automatically creates a pull request with safe fixes applied; flags critical CVEs and major breaking upgrades for manual review. Works with GitHub, Azure DevOps, and any git repository.",
+      "version": "2.3.0",
+      "author": {
+        "name": "99x",
+        "email": "xianix-agent@99x.io"
+      },
+      "homepage": "https://opensource.99x.io/xianix-team/",
+      "repository": "https://github.com/xianix-team/xianix-plugins-official",
+      "category": "security",
+      "keywords": [
+        "dependency-optimizer",
+        "vulnerability-scanner",
+        "license-audit",
+        "bloat-analysis",
+        "semver",
+        "cve",
+        "npm-audit",
+        "cargo-audit",
+        "pip-audit",
+        "govulncheck",
+        "supply-chain",
+        "github",
+        "azure-devops"
+      ],
+      "license": "MIT"
+    },
+    {
+      "name": "chatbot-tester",
+      "source": "./plugins/chatbot-tester",
+      "description": "Automated AI chatbot verification for any web application. Loads widget configuration from a knowledge file, opens the chatbot via Playwright, runs six test categories (UI availability, functional accuracy, fallback handling, response latency, conversation continuity, empty input handling), judges Q&A responses with a batched LLM call, and posts a structured report as a PR/issue comment or local markdown file.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Xianix",
+        "email": "hello@xianix.com"
+      },
+      "homepage": "https://xianix.com",
+      "repository": "https://github.com/xianix-team/plugins-official",
+      "category": "testing",
+      "keywords": [
+        "chatbot-testing",
+        "ai-testing",
+        "playwright",
+        "conversational-ai",
+        "qa",
+        "browser-testing",
+        "llm-judge",
+        "github",
+        "azure-devops"
+      ],
+      "license": "MIT"
+    },
+    {
+      "name": "pr-descriptor",
+      "source": "./plugins/pr-descriptor",
+      "description": "An intelligent, cross-ecosystem PR Description Agent for GitHub and Azure DevOps that automatically generates context-aware summaries via webhook triggers. It uses language-agnostic intelligence to analyze code diffs, completely overwriting the existing description on updates to maintain a single source of truth, while an internal Knowledge Creation loop continuously refines its repository context without static files.",
+      "version": "0.0.1",
+      "author": {
+        "name": "99x",
+        "email": "xianix-agent@99x.io"
+      },
+      "homepage": "https://opensource.99x.io/xianix-team/",
+      "repository": "https://github.com/xianix-team/xianix-plugins-official",
+      "category": "documentation",
+      "keywords": [
+        "pr-description",
+        "pull-request",
+        "automation",
+        "webhook",
+        "documentation",
+        "azure-devops",
+        "github"
+      ],
+      "license": "MIT"
+    },
+    {
+      "name": "release-note-maintainer",
+      "source": "./plugins/release-note-maintainer",
+      "description": "An intelligent, cross-ecosystem Release Note Maintainer Agent for GitHub and Azure DevOps that automatically generates structured release notes when a new git tag is pushed. Language-agnostic — analyzes merged pull requests, commit histories, breaking changes, and linked work items since the previous tag. Publishes to GitHub Releases or an Azure DevOps Wiki page. Dynamically scaffolds universal release note guidelines when no prior release pattern exists.",
+      "version": "0.0.1",
+      "author": {
+        "name": "99x",
+        "email": "xianix-agent@99x.io"
+      },
+      "homepage": "https://opensource.99x.io/xianix-team/",
+      "repository": "https://github.com/xianix-team/xianix-plugins-official",
+      "category": "documentation",
+      "keywords": [
+        "release-notes",
+        "changelog",
+        "git-tag",
+        "automation",
+        "webhook",
+        "documentation",
+        "azure-devops",
+        "github"
+      ],
+      "license": "MIT"
+    },
+    {
+      "name": "pentest-agent",
+      "source": "./plugins/pentest-agent",
+      "description": "Authorized web-application penetration testing with whitebox source-code analysis. Combines OWASP Top 10 dynamic probes (DAST), static code analysis (SAST via semgrep), web-ecosystem dependency CVE scanning, and secrets detection. Source-code recon runs first and drives targeted URL probing — including authenticated routes, real parameter names, and sink locations — instead of blind crawling. Includes a Playwright-driven probe path for SPA targets and DAST+SAST dual-confirmation. Requires explicit --authorized flag.",
+      "version": "3.0.0",
+      "author": {
+        "name": "Xianix",
+        "email": "hello@xianix.com"
+      },
+      "homepage": "https://xianix.com",
+      "repository": "https://github.com/xianix-team/plugins-official",
+      "category": "security",
+      "keywords": [
+        "pentest",
+        "web-security",
+        "owasp",
+        "whitebox",
+        "sast",
+        "dast",
+        "semgrep",
+        "code-analysis",
+        "vulnerability-scanning",
+        "secrets-detection",
+        "penetration-testing"
+      ],
+      "license": "MIT"
+    },
+    {
+      "name": "infra-scanner",
+      "source": "./plugins/infra-scanner",
+      "description": "Authorized infrastructure security scanning plugin. Runs Infrastructure-as-Code misconfiguration detection (Dockerfile, Terraform, Kubernetes, GitHub Actions), CycloneDX SBOM generation, and optional network port + TLS scanning. Companion to pentest-agent for users who want infra coverage alongside web-application pentesting. Requires explicit --authorized flag.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Xianix",
+        "email": "hello@xianix.com"
+      },
+      "homepage": "https://xianix.com",
+      "repository": "https://github.com/xianix-team/plugins-official",
+      "category": "security",
+      "keywords": [
+        "infrastructure",
+        "security",
+        "iac",
+        "terraform",
+        "kubernetes",
+        "docker",
+        "github-actions",
+        "sbom",
+        "network-scan",
+        "nmap",
+        "tls"
+      ],
+      "license": "MIT"
+    },
+    {
+      "name": "ux-mob-process",
+      "source": "./plugins/ux-mob-process-plugin",
+      "description": "AI-native UX mob elaboration workflow for Greenfield and Brownfield projects. Runs structured, human-gated phase processes with artifact guardrails, approval gates, context isolation, and AI readiness checks before any brownfield work begins.",
+      "version": "1.0.0",
+      "author": {
+        "name": "99x",
+        "email": "xianix-agent@99x.io"
+      },
+      "homepage": "https://opensource.99x.io/xianix-team/",
+      "repository": "https://github.com/xianix-team/xianix-plugins-official",
+      "category": "ux-design",
+      "keywords": [
+        "ux",
+        "product",
+        "mob-elaboration",
+        "greenfield",
+        "brownfield",
+        "ai-readiness",
+        "approval-gates",
+        "artifact-guardrails",
+        "human-gated",
+        "ux-design"
+      ],
+      "license": "MIT"
+    },
+    {
+      "name": "arch-fitness",
+      "source": "./plugins/arch-fitness",
+      "description": "Architecture fitness plugin. Discovers or bootstraps architecture-constraint documents in a repository, opens a docs PR when created or updated, then evaluates a requested changeset scope (a PR, a branch, or PRs merged in a date window) against those constraints and reports the few most important improvements. Works with GitHub, Azure DevOps, and any git repository.",
+      "version": "1.0.0",
+      "author": {
+        "name": "99x",
+        "email": "xianix-agent@99x.io"
+      },
+      "homepage": "https://opensource.99x.io/xianix-team/",
+      "repository": "https://github.com/xianix-team/xianix-plugins-official",
+      "category": "architecture",
+      "keywords": [
+        "architecture",
+        "architecture-fitness",
+        "fitness-functions",
+        "constraints",
+        "adr",
+        "code-analysis",
+        "azure-devops",
+        "github"
+      ],
+      "license": "MIT"
+    }
+  ]
+}

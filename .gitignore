@@ -66,3 +66,7 @@ TheAgent/.env.production
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Local tunnel binary (do not commit)
+tools/cloudflared.exe
+

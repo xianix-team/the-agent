@@ -1,0 +1,238 @@
+{
+  "schemaVersion": 1,
+  "plugin": "pr-reviewer",
+  "slashCommand": "/pr-review",
+  "platforms": {
+    "azuredevops": {
+      "requiredEnvs": [
+        "AZURE-DEVOPS-TOKEN",
+        "ANTHROPIC-API-KEY"
+      ],
+      "suggestedTriggers": [
+        "PR created / source branch updated / agent added as reviewer",
+        "PR comment mentioning @xianix"
+      ],
+      "executions": [
+        {
+          "name": "azuredevops-pull-request-review",
+          "platform": "azuredevops",
+          "repository": {
+            "url": {
+              "value": "https://dev.azure.com/org/project/_git/repo",
+              "constant": true
+            }
+          },
+          "match-any": [
+            {
+              "name": "azuredevops-pr-created-with-tag",
+              "rule": "eventType==git.pullrequest.created&&resource.status=='active'"
+            },
+            {
+              "name": "azuredevops-pr-source-branch-updated-with-tag",
+              "rule": "eventType==git.pullrequest.updated&&message.text*='updated the source branch'&&resource.status=='active'"
+            },
+            {
+              "name": "azuredevops-pr-agent-added-as-reviewer",
+              "rule": "eventType==git.pullrequest.updated&&message.text*='changed the reviewer list'&&resource.reviewers.*.uniqueName=='xianix-agent@99x.io'&&resource.status=='active'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "pr-number",
+              "value": "resource.pullRequestId",
+              "mandatory": true
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "pr-reviewer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "AZURE-DEVOPS-TOKEN",
+              "value": "secrets.AZURE-DEVOPS-TOKEN",
+              "mandatory": true
+            }
+          ],
+          "conversation-key": "resource.pullRequestId",
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 5.0,
+          "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}}. Run /pr-review {{pr-number}} to perform the automated review."
+        },
+        {
+          "name": "azuredevops-pr-agent-comment-instruction",
+          "platform": "azuredevops",
+          "repository": {
+            "url": {
+              "value": "https://dev.azure.com/org/project/_git/repo",
+              "constant": true
+            }
+          },
+          "match-any": [
+            {
+              "name": "azuredevops-pr-agent-re-review-requested",
+              "rule": "eventType==ms.vss-code.git-pullrequest-comment-event&&resource.comment.commentType=='text'&&resource.comment.content*='@xianix'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "pr-number",
+              "value": "resource.pullRequest.pullRequestId"
+            },
+            {
+              "name": "user-instruction",
+              "value": "resource.comment.content"
+            },
+            {
+              "name": "comment-author",
+              "value": "resource.comment.author.displayName"
+            },
+            {
+              "name": "thread-id",
+              "value": "resource.comment.parentCommentId"
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "pr-reviewer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official",
+              "slash-command": "/pr-review"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "AZURE-DEVOPS-TOKEN",
+              "value": "secrets.AZURE-DEVOPS-TOKEN",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 5.0,
+          "execute-prompt": "You are @xianix. {{comment-author}} mentioned @xianix in a comment on pull request #{{pr-number}}. The comment: \"{{user-instruction}}\"\n\nFirst, decide whether this comment is actually addressed to you. If not, do nothing. If yes, post a reply via the Azure DevOps REST API and perform any requested action. Post at most one reply comment per invocation."
+        }
+      ]
+    },
+    "github": {
+      "requiredEnvs": [
+        "GITHUB-TOKEN",
+        "ANTHROPIC-API-KEY"
+      ],
+      "suggestedGitHubWebhookEvents": [
+        "pull_request",
+        "issue_comment"
+      ],
+      "suggestedTriggers": [
+        "PR label ai-dlc/pr/pr-review",
+        "PR comment mentioning @xianix"
+      ],
+      "executions": [
+        {
+          "name": "github-pull-request-review",
+          "platform": "github",
+          "repository": {
+            "url": {
+              "value": "https://github.com/org/repo.git",
+              "constant": true
+            }
+          },
+          "match-any": [
+            {
+              "name": "github-pr-tag-applied",
+              "rule": "action==labeled&&label.name=='ai-dlc/pr/pr-review'&&pull_request.state=='open'"
+            },
+            {
+              "name": "github-pr-opened-with-tag",
+              "rule": "action==opened&&pull_request.labels.*.name=='ai-dlc/pr/pr-review'&&pull_request.state=='open'"
+            },
+            {
+              "name": "github-pr-synchronize-with-tag",
+              "rule": "action==synchronize&&pull_request.labels.*.name=='ai-dlc/pr/pr-review'&&pull_request.state=='open'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "pr-number",
+              "value": "pull_request.number",
+              "mandatory": true
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "pr-reviewer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "GITHUB-TOKEN",
+              "value": "secrets.GITHUB-TOKEN",
+              "mandatory": true
+            }
+          ],
+          "conversation-key": "pull_request.number",
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 3.0,
+          "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}}. Run /pr-review {{pr-number}} to perform the automated review."
+        },
+        {
+          "name": "github-pr-agent-comment-instruction",
+          "platform": "github",
+          "repository": {
+            "url": {
+              "value": "https://github.com/org/repo.git",
+              "constant": true
+            }
+          },
+          "match-any": [
+            {
+              "name": "github-pr-agent-re-instruction-requested",
+              "rule": "action==created&&comment.body*='@xianix'&&issue.pull_request?"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "pr-number",
+              "value": "issue.number"
+            },
+            {
+              "name": "user-instruction",
+              "value": "comment.body"
+            },
+            {
+              "name": "comment-author",
+              "value": "comment.user.login"
+            },
+            {
+              "name": "comment-id",
+              "value": "comment.id"
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "pr-reviewer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official",
+              "slash-command": "/pr-review"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "GITHUB-TOKEN",
+              "value": "secrets.GITHUB-TOKEN",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 5.0,
+          "execute-prompt": "You are @xianix. {{comment-author}} mentioned @xianix in a comment on pull request #{{pr-number}}. The comment: \"{{user-instruction}}\"\n\nFirst, decide whether this comment is actually addressed to you. If not, do nothing. If yes, post a reply via the platform comment API and perform any requested action. Post at most one reply comment per invocation."
+        }
+      ]
+    }
+  },
+  "chat": {
+    "slashCommand": "/pr-review",
+    "model": "claude-sonnet-4-5",
+    "max-budget-usd": 5.0
+  }
+}

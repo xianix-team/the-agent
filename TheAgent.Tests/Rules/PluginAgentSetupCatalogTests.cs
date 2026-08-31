@@ -1,0 +1,247 @@
+using System.Collections.Concurrent;
+using System.Text.Json;
+using Xianix.Rules;
+
+namespace TheAgent.Tests.Rules;
+
+[Collection(nameof(PluginAgentSetupCatalogCollection))]
+public class PluginAgentSetupCatalogTests : IDisposable
+{
+    public PluginAgentSetupCatalogTests()
+    {
+        PluginCatalogFixtures.SeedAgentSetupTestOverrides();
+    }
+
+    public void Dispose()
+    {
+        PluginAgentSetupCatalog.TestOverrides = null;
+        PluginAgentSetupCatalog.TestReadmeOverrides = null;
+        PluginAgentSetupCatalog.ClearCache();
+    }
+
+    [Fact]
+    public void FixturePluginNames_IncludesReadyPlugins()
+    {
+        string[] expected =
+        [
+            "pr-reviewer",
+            "req-analyst",
+            "arch-fitness",
+            "chatbot-tester",
+            "dependency-optimizer",
+            "doc-writer",
+            "impact-analyst",
+            "infra-scanner",
+            "pentest-agent",
+            "perf-optimizer",
+            "pr-comment-resolver",
+            "pr-descriptor",
+            "release-note-maintainer",
+            "test-strategist",
+            "ux-mob-process",
+            "web-app-tester",
+        ];
+
+        var names = PluginCatalogFixtures.AgentSetupPluginNames();
+        foreach (var name in expected)
+            Assert.Contains(name, names);
+
+        Assert.Equal(expected.Length, names.Count);
+        foreach (var name in expected)
+            Assert.True(PluginAgentSetupCatalog.IsInstallableCached(name), name);
+    }
+
+    [Fact]
+    public void IsInstallableCached_TrueForPrReviewer_FalseForUnknown()
+    {
+        Assert.True(PluginAgentSetupCatalog.IsInstallableCached("pr-reviewer"));
+        Assert.False(PluginAgentSetupCatalog.IsInstallableCached("unknown-plugin"));
+    }
+
+    [Fact]
+    public void IsInstallableCached_UsesFolderKey_WhenNameDiffers()
+    {
+        PluginAgentSetupCatalog.TestOverrides = null;
+        PluginAgentSetupCatalog.ClearCache();
+        PluginAgentSetupCatalog.TestReadmeOverrides = new ConcurrentDictionary<string, bool>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["ux-mob-process-plugin"] = true,
+        };
+
+        // Name ≠ folder: looking up by name alone must miss; folder key must hit.
+        Assert.False(PluginAgentSetupCatalog.IsInstallableCached("ux-mob-process"));
+        Assert.True(PluginAgentSetupCatalog.IsInstallableCached(
+            "ux-mob-process",
+            pluginFolder: "ux-mob-process-plugin"));
+
+        PluginCatalogFixtures.SeedAgentSetupTestOverrides();
+    }
+
+    [Fact]
+    public void WithoutTestOverrides_InstallableCachedNeedsReadmeCache()
+    {
+        PluginAgentSetupCatalog.TestOverrides = null;
+        PluginAgentSetupCatalog.TestReadmeOverrides = null;
+        PluginAgentSetupCatalog.ClearCache();
+
+        // Local fixtures may still load as recipes, but Ready requires a README cache hit.
+        Assert.False(PluginAgentSetupCatalog.IsInstallableCached("pr-reviewer"));
+        Assert.True(PluginAgentSetupCatalog.TryGetSetupCached("pr-reviewer", out _));
+
+        PluginCatalogFixtures.SeedAgentSetupTestOverrides();
+    }
+
+    [Fact]
+    public void BuildReadmeUrls_UsePluginsOfficialReadmePath()
+    {
+        Assert.Equal(
+            string.Format(MarketplaceCatalog.DefaultReadmeGithubBlobUrlTemplate, "pr-reviewer"),
+            MarketplaceCatalog.BuildReadmeGithubBlobUrl("pr-reviewer"));
+        Assert.Equal(
+            string.Format(MarketplaceCatalog.DefaultReadmeRawUrlTemplate, "ux-mob-process-plugin"),
+            MarketplaceCatalog.BuildReadmeRawUrl("ux-mob-process-plugin"));
+    }
+
+    [Fact]
+    public void SummarizeExecutionOptions_PrReviewerGithub_IncludesLabelAndMatches()
+    {
+        Assert.True(PluginAgentSetupCatalog.TryGetSetupCached("pr-reviewer", out var setup));
+        var options = PluginAgentSetupCatalog.SummarizeExecutionOptions(setup, ["github"]);
+
+        Assert.NotEmpty(options);
+        var json = JsonSerializer.Serialize(options);
+        Assert.Contains("github-pull-request-review", json);
+        Assert.Contains("ai-dlc/pr/pr-review", json);
+        Assert.Contains("Label", json);
+        Assert.Contains("@xianix", json);
+    }
+
+    [Fact]
+    public void MarketplacePluginFolder_UsesSourcePath()
+    {
+        var plugin = new MarketplacePlugin(
+            "ux-mob-process",
+            "1.0.0",
+            "desc",
+            "ux-design",
+            [],
+            "xianix-plugins-official",
+            "xianix-team/plugins-official",
+            "./plugins/ux-mob-process-plugin");
+
+        Assert.Equal("ux-mob-process-plugin", plugin.PluginFolder);
+    }
+
+    [Fact]
+    public void Parse_MissingPlatforms_NotInstallable()
+    {
+        var setup = PluginAgentSetupCatalog.Parse("""{"schemaVersion":1,"plugin":"x","platforms":{}}""");
+        Assert.False(PluginAgentSetupCatalog.IsInstallableSetup(setup));
+    }
+
+    [Fact]
+    public void MaterializeExecutions_SubstitutesRepoUrl()
+    {
+        Assert.True(PluginAgentSetupCatalog.TryGetSetupCached("test-strategist", out var setup));
+        var executions = PluginAgentSetupCatalog.MaterializeExecutions(
+            setup,
+            "github",
+            "https://github.com/acme/demo.git");
+
+        Assert.NotEmpty(executions);
+        var json = executions[0].GetRawText();
+        Assert.Contains("https://github.com/acme/demo.git", json);
+        Assert.DoesNotContain("https://github.com/org/repo.git", json);
+    }
+
+    [Fact]
+    public void MaterializeExecutions_DependencyOptimizer_IncludesScheduleBlock()
+    {
+        Assert.True(PluginAgentSetupCatalog.TryGetSetupCached("dependency-optimizer", out var setup));
+        var executions = PluginAgentSetupCatalog.MaterializeExecutions(
+            setup,
+            "azuredevops",
+            "https://dev.azure.com/org/project/_git/repo");
+
+        Assert.NotEmpty(executions);
+        Assert.True(executions[0].TryGetProperty("schedule", out _));
+        Assert.True(executions[0].TryGetProperty("cron", out var cron));
+        Assert.False(string.IsNullOrWhiteSpace(cron.GetString()));
+    }
+
+    [Fact]
+    public void ResolveRequiredEnvs_FiltersByPlatform()
+    {
+        Assert.True(PluginAgentSetupCatalog.TryGetSetupCached("doc-writer", out var setup));
+        var envs = PluginAgentSetupCatalog.ResolveRequiredEnvs(setup, ["github"]);
+
+        Assert.Contains("GITHUB-TOKEN", envs);
+        Assert.Contains("ANTHROPIC-API-KEY", envs);
+        Assert.DoesNotContain("AZURE-DEVOPS-TOKEN", envs);
+    }
+
+    [Fact]
+    public void PentestAndInfra_RequireAuthorization()
+    {
+        Assert.True(PluginAgentSetupCatalog.TryGetSetupCached("pentest-agent", out var pentest));
+        Assert.True(pentest.RequiresAuthorization);
+        Assert.True(PluginAgentSetupCatalog.TryGetSetupCached("infra-scanner", out var infra));
+        Assert.True(infra.RequiresAuthorization);
+    }
+
+    [Fact]
+    public void BuildWithEnvsTemplate_UsesSecretsPrefix()
+    {
+        var template = PluginAgentSetupCatalog.BuildWithEnvsTemplate(
+            ["GITHUB-TOKEN", "ANTHROPIC-API-KEY"]);
+
+        Assert.Equal(2, template.Count);
+        var json = JsonSerializer.Serialize(template);
+        Assert.Contains("\"name\":\"GITHUB-TOKEN\"", json);
+        Assert.Contains("\"value\":\"secrets.GITHUB-TOKEN\"", json);
+        Assert.Contains("\"mandatory\":true", json);
+    }
+
+    [Fact]
+    public void BuildPluginEntry_UsesSlashCommand()
+    {
+        Assert.True(PluginAgentSetupCatalog.TryGetSetupCached("req-analyst", out var setup));
+        var entry = PluginAgentSetupCatalog.BuildPluginEntry(setup);
+        Assert.Equal("req-analyst@xianix-plugins-official", entry.PluginName);
+        Assert.Equal("/requirement-analysis", entry.SlashCommand);
+    }
+
+    [Fact]
+    public async Task TryGetSetupAsync_TestOverride_MissingIsNull()
+    {
+        PluginAgentSetupCatalog.ClearCache();
+        PluginAgentSetupCatalog.TestOverrides = new ConcurrentDictionary<string, PluginAgentSetup>(
+            StringComparer.OrdinalIgnoreCase);
+
+        var missing = await PluginAgentSetupCatalog.TryGetSetupAsync("pr-reviewer");
+        Assert.Null(missing);
+        Assert.False(await PluginAgentSetupCatalog.IsInstallableAsync("pr-reviewer"));
+
+        PluginCatalogFixtures.SeedAgentSetupTestOverrides();
+    }
+
+    [Fact]
+    public void PrReviewer_HasGithubAndAzureDevOpsRecipes()
+    {
+        Assert.True(PluginAgentSetupCatalog.TryGetSetupCached("pr-reviewer", out var setup));
+        Assert.Equal("/pr-review", setup.SlashCommand);
+        Assert.Contains("GITHUB-TOKEN", setup.Platforms["github"].RequiredEnvs);
+        Assert.True(setup.Platforms["github"].Executions.Count >= 2);
+        Assert.True(setup.Platforms["azuredevops"].Executions.Count >= 2);
+    }
+
+    [Fact]
+    public void TestStrategist_HasGithubTriggerAndEnvs()
+    {
+        Assert.True(PluginAgentSetupCatalog.TryGetSetupCached("test-strategist", out var setup));
+        Assert.Contains("PR label ai-dlc/pr/test-strategy", setup.Platforms["github"].SuggestedTriggers);
+        Assert.Contains("GITHUB-TOKEN", setup.Platforms["github"].RequiredEnvs);
+        Assert.Contains("AZURE-DEVOPS-TOKEN", setup.Platforms["azuredevops"].RequiredEnvs);
+    }
+}

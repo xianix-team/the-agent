@@ -1,0 +1,139 @@
+{
+  "schemaVersion": 1,
+  "plugin": "test-strategist",
+  "slashCommand": "/test-strategy",
+  "platforms": {
+    "azuredevops": {
+      "requiredEnvs": [
+        "AZURE-DEVOPS-TOKEN",
+        "ANTHROPIC-API-KEY"
+      ],
+      "suggestedTriggers": [
+        "PR tag ai-dlc/pr/test-strategy"
+      ],
+      "executions": [
+        {
+          "name": "azuredevops-test-strategist",
+          "platform": "azuredevops",
+          "repository": {
+            "url": {
+              "value": "https://dev.azure.com/org/project/_git/repo",
+              "constant": true
+            }
+          },
+          "match-any": [
+            {
+              "name": "azuredevops-test-strategist-tag",
+              "rule": "eventType==git.pullrequest.created&&resource.labels.*.name=='ai-dlc/pr/test-strategy'&&resource.status=='active'"
+            },
+            {
+              "name": "azuredevops-test-strategist-updated-tag",
+              "rule": "eventType==git.pullrequest.updated&&resource.labels.*.name=='ai-dlc/pr/test-strategy'&&resource.status=='active'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "pr-number",
+              "value": "resource.pullRequestId",
+              "mandatory": true
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "test-strategist@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official",
+              "slash-command": "/test-strategy"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "AZURE-DEVOPS-TOKEN",
+              "value": "secrets.AZURE-DEVOPS-TOKEN",
+              "mandatory": true
+            },
+            {
+              "name": "ANTHROPIC-API-KEY",
+              "value": "secrets.ANTHROPIC-API-KEY",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 5.0,
+          "execute-prompt": "You are generating a risk-based test strategy for pull request #{{pr-number}}.\n\nRun /test-strategy pr {{pr-number}} to generate the impact analysis and test strategy report."
+        }
+      ]
+    },
+    "github": {
+      "requiredEnvs": [
+        "GITHUB-TOKEN",
+        "ANTHROPIC-API-KEY"
+      ],
+      "suggestedGitHubWebhookEvents": [
+        "pull_request"
+      ],
+      "suggestedTriggers": [
+        "PR label ai-dlc/pr/test-strategy"
+      ],
+      "executions": [
+        {
+          "name": "github-test-strategist",
+          "platform": "github",
+          "repository": {
+            "url": {
+              "value": "https://github.com/org/repo.git",
+              "constant": true
+            }
+          },
+          "match-any": [
+            {
+              "name": "github-test-strategist-tag-applied",
+              "rule": "action==labeled&&label.name=='ai-dlc/pr/test-strategy'&&pull_request.state=='open'"
+            },
+            {
+              "name": "github-test-strategist-opened-with-tag",
+              "rule": "action==opened&&pull_request.labels.*.name=='ai-dlc/pr/test-strategy'&&pull_request.state=='open'"
+            },
+            {
+              "name": "github-test-strategist-synchronize-with-tag",
+              "rule": "action==synchronize&&pull_request.labels.*.name=='ai-dlc/pr/test-strategy'&&pull_request.state=='open'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "pr-number",
+              "value": "pull_request.number",
+              "mandatory": true
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "test-strategist@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official",
+              "slash-command": "/test-strategy"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "GITHUB-TOKEN",
+              "value": "secrets.GITHUB-TOKEN",
+              "mandatory": true
+            },
+            {
+              "name": "ANTHROPIC-API-KEY",
+              "value": "secrets.ANTHROPIC-API-KEY",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 5.0,
+          "execute-prompt": "You are generating a risk-based test strategy for pull request #{{pr-number}}.\n\nRun /test-strategy pr {{pr-number}} to generate the impact analysis and test strategy report."
+        }
+      ]
+    }
+  },
+  "chat": {
+    "slashCommand": "/test-strategy",
+    "model": "claude-sonnet-4-5",
+    "max-budget-usd": 5.0
+  }
+}

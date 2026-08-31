@@ -52,6 +52,22 @@ internal static class AvailablePluginsCatalog
     }
 
     /// <summary>
+    /// Builds the plugin catalog from an explicit <c>rules.json</c> document string rather
+    /// than the activation-resolved knowledge channel. Used by the Rules Optimizer chat's
+    /// <c>ListAvailablePlugins</c> to surface the full <b>system seed</b> catalog (the complete
+    /// set of plugins the user can pick from) even after a trimmed selection has been saved at
+    /// activation scope — otherwise the resolved document would be the trimmed activation copy
+    /// and the catalog would shrink to only the already-selected plugins.
+    /// </summary>
+    /// <returns>An empty list when <paramref name="rulesJsonContent"/> is blank or unparseable.</returns>
+    public static IReadOnlyList<CatalogPlugin> BuildFromContent(string? rulesJsonContent)
+    {
+        var ruleSets = RulesKnowledge.ParseWebhookRuleSets(rulesJsonContent);
+        var chatRuleSets = RulesKnowledge.ParseChatRuleSets(rulesJsonContent);
+        return BuildCatalog(ruleSets, chatRuleSets);
+    }
+
+    /// <summary>
     /// Pure builder over already-deserialised rule sets, exposed for unit tests so the
     /// per-plugin / per-platform aggregation can be exercised without a Xians Knowledge
     /// fixture. <see cref="LoadAsync"/> calls this after pulling and parsing the document.
@@ -74,8 +90,20 @@ internal static class AvailablePluginsCatalog
         // common envs apply to every execution in the set, so a plugin used by any execution
         // may need them; pass them through to AddUsage so they accumulate into the plugin's
         // RequiredEnvs alongside execution-level envs (deduped first-wins by env name).
+        // Root-level use-plugins on a webhook rule set also mark a plugin as available even
+        // when executions are still empty (fresh / partial activation).
         foreach (var set in ruleSets)
         {
+            foreach (var plugin in set.Plugins)
+            {
+                if (string.IsNullOrWhiteSpace(plugin.PluginName))
+                    continue;
+
+                var key = BuildKey(plugin);
+                if (!byKey.ContainsKey(key))
+                    byKey[key] = new CatalogPluginBuilder(plugin);
+            }
+
             foreach (var execution in set.Executions)
                 AddExecution(byKey, execution, set.WithEnvs);
         }
