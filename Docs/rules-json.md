@@ -21,6 +21,8 @@ Do not write plugin installs back to system or organization scope.
 
 ## Three sources of truth (Rules Optimizer)
 
+Rules Optimizer uses the Xians.Lib SDK for tenant-scoped secrets, webhooks, and Rules knowledge; an Admin API key is not required on the agent host.
+
 Rules Optimizer no longer treats `rules.json` as both the plugin catalog and the installed configuration. Keep these separate:
 
 | Concern | Source | Notes |

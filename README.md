@@ -38,6 +38,8 @@ cp .env.example .env
 
 Key variables to set: `XIANS-SERVER-URL`, `XIANS-API-KEY`, `ANTHROPIC-API-KEY`, and at least one platform token (`GITHUB-TOKEN` or `AZURE-DEVOPS-TOKEN`). See `.env.example` for the full list.
 
+Rules Optimizer uses the Xians.Lib SDK (tenant-scoped secrets, webhooks, and Rules knowledge); an Admin API key is not required on the agent host.
+
 ### Environment-specific config
 
 The agent loads its env file based on the `APP_ENV` variable:
