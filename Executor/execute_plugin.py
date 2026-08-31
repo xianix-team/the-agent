@@ -34,7 +34,24 @@ from claude_agent_sdk import (
     ResultMessage,
 )
 
+try:
+    from claude_agent_sdk import HookMatcher
+except ImportError:  # pragma: no cover — older SDKs; fail closed at option-build time
+    HookMatcher = None  # type: ignore[misc, assignment]
+
 from host_context import prepend_host_context
+from instruction_hardening import (
+    HardeningError,
+    SecurityIncident,
+    claude_system_prompt_option,
+    contains_canary,
+    evaluate_tool_use,
+    hardening_audit_mode,
+    is_fix_mode,
+    merge_disallowed_tools,
+    new_canary,
+    redact_canary,
+)
 
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -235,6 +252,46 @@ class RunState:
 
 # Module-level so the top-level error handler can still read partial state after an abort.
 _run = RunState()
+_canary = ""
+
+
+def _raise_if_canary(text: str, where: str) -> None:
+    if contains_canary(text, _canary):
+        raise SecurityIncident(f"canary value observed in {where}")
+
+
+async def pre_tool_use_hook(input_data, tool_use_id, context):  # noqa: ARG001
+    """Deterministic gate before any tool runs (Claude Code application hook)."""
+    tool_name = ""
+    tool_input: object = {}
+    if isinstance(input_data, dict):
+        tool_name = str(input_data.get("tool_name") or "")
+        tool_input = input_data.get("tool_input") or {}
+
+    reason = evaluate_tool_use(
+        tool_name,
+        tool_input,
+        canary=_canary,
+        allow_mutates=is_fix_mode(os.environ.get("PROMPT", "")),
+    )
+    if not reason:
+        return {}
+
+    if hardening_audit_mode():
+        log(f"HARDENING AUDIT would deny {tool_name}: {reason}")
+        return {}
+
+    log(f"HARDENING denied {tool_name}: {reason}")
+    if reason.startswith("blocked: canary"):
+        raise SecurityIncident(reason)
+
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    }
 
 
 async def collect_messages(prompt: str, options: ClaudeAgentOptions) -> None:
@@ -328,23 +385,27 @@ def process_assistant_message(
         if hasattr(block, "thinking"):
             thinking = getattr(block, "thinking", "")
             if thinking:
-                log(f"  thinking: {truncate(thinking, 200)}")
+                _raise_if_canary(thinking, "assistant thinking")
+                log(f"  thinking: {truncate(redact_canary(thinking, _canary), 200)}")
 
         elif hasattr(block, "text"):
             text = block.text.strip()
             if text:
+                _raise_if_canary(text, "assistant output")
                 text_blocks.append(text)
-                preview = truncate(text, 150)
+                preview = truncate(redact_canary(text, _canary), 150)
                 log(f"  text: {preview}")
 
         elif hasattr(block, "name"):
             tool_input = getattr(block, "input", {})
             formatted = format_tool_input(block.name, tool_input)
+            _raise_if_canary(formatted, f"tool {block.name} arguments")
+            _raise_if_canary(str(tool_input), f"tool {block.name} arguments")
             tool_uses.append({
                 "tool": block.name,
-                "input_preview": str(tool_input)[:200],
+                "input_preview": redact_canary(str(tool_input)[:200], _canary),
             })
-            log(f"  ▶ {block.name}: {formatted}")
+            log(f"  ▶ {block.name}: {redact_canary(formatted, _canary)}")
 
         else:
             log(f"  {block_type}: {str(block)[:150]}")
@@ -503,8 +564,17 @@ async def main() -> None:
     # Per-execution max-turns wins; otherwise fall back to the host-wide backstop (off unless set).
     max_turns        = parse_int_env("XIANIX_MAX_TURNS") or parse_int_env("XIANIX_DEFAULT_MAX_TURNS")
     allowed_tools    = parse_tool_list(os.environ.get("XIANIX_ALLOWED_TOOLS"))
-    disallowed_tools = parse_tool_list(os.environ.get("XIANIX_DISALLOWED_TOOLS"))
+    disallowed_tools = merge_disallowed_tools(
+        parse_tool_list(os.environ.get("XIANIX_DISALLOWED_TOOLS"))
+    )
     max_budget_usd   = parse_float_env("XIANIX_MAX_BUDGET_USD") or 10.0
+
+    global _canary
+    _canary = new_canary()
+    try:
+        system_prompt = claude_system_prompt_option(_canary)
+    except HardeningError as exc:
+        raise HardeningError(str(exc)) from exc
 
     # Route Claude Code's background/side-query work (titles, summaries, etc.) to a cheap
     # Haiku-class model unless the operator already pinned one. ANTHROPIC_DEFAULT_HAIKU_MODEL
@@ -520,7 +590,8 @@ async def main() -> None:
     log(f"ANTHROPIC_API_KEY={'set' if os.environ.get('ANTHROPIC_API_KEY') else 'MISSING'}")
     log(f"model={model or '(sdk default)'} max_turns={max_turns or '(none)'} "
         f"allowed_tools={allowed_tools or '(all)'} disallowed_tools={disallowed_tools or '(none)'} "
-        f"max_budget_usd={max_budget_usd if max_budget_usd is not None else '(none)'}")
+        f"max_budget_usd={max_budget_usd if max_budget_usd is not None else '(none)'} "
+        f"hardening=on audit={hardening_audit_mode()} fix_mode={is_fix_mode(prompt)}")
     log(f"haiku_model={os.environ.get('ANTHROPIC_DEFAULT_HAIKU_MODEL')}")
 
     log_separator("Prompt")
@@ -533,9 +604,20 @@ async def main() -> None:
 
     # Build options from only the levers that were actually set, so an unset lever falls back
     # to the SDK's own default rather than forcing an empty/zero value onto it.
+    if HookMatcher is None:
+        raise HardeningError(
+            "Claude Agent SDK HookMatcher is unavailable. Refusing to run without PreToolUse gating."
+        )
+
     option_kwargs: dict = {
         "cwd": work_dir,
         "permission_mode": "bypassPermissions",
+        "system_prompt": system_prompt,
+        "hooks": {
+            "PreToolUse": [
+                HookMatcher(matcher=None, hooks=[pre_tool_use_hook]),
+            ],
+        },
     }
     if model:
         option_kwargs["model"] = model
@@ -598,9 +680,29 @@ async def main() -> None:
 if __name__ == "__main__":
     try:
         asyncio.run(main())
+    except SecurityIncident as e:
+        duration = time.monotonic() - _start_time
+        log(f"security_incident: {e.reason} (after {duration:.1f}s)")
+        plugins = parse_plugins(os.environ.get("CLAUDE_CODE_PLUGINS", "[]"))
+        emit(build_output(
+            tenant_id=os.environ.get("TENANT_ID", "unknown"),
+            execution_id=os.environ.get("EXECUTION_ID", "unknown"),
+            plugins=plugins,
+            status="error",
+            result="\n\n".join(_run.text_blocks) if _run.text_blocks else None,
+            tool_uses=_run.tool_uses or None,
+            duration_seconds=duration,
+            cost_usd=getattr(_run.result_message, "total_cost_usd", None),
+            session_id=getattr(_run.result_message, "session_id", None),
+            usage=_run.final_usage(),
+            models=sorted(_run.models_seen) if _run.models_seen else None,
+            model_usage=_run.model_usage_envelope(),
+            error=f"security_incident: {e.reason}",
+        ))
+        sys.exit(1)
     except BaseException as e:  # noqa: BLE001
         duration = time.monotonic() - _start_time
-        log(f"fatal: {type(e).__name__}: {e} (after {duration:.1f}s)")
+        log(f"fatal: {type(e).__name__}: {redact_canary(str(e), _canary)} (after {duration:.1f}s)")
 
         plugins = parse_plugins(os.environ.get("CLAUDE_CODE_PLUGINS", "[]"))
         # Carry whatever was accumulated before the abort (most importantly token usage when
@@ -619,7 +721,7 @@ if __name__ == "__main__":
             usage=_run.final_usage(),
             models=sorted(_run.models_seen) if _run.models_seen else None,
             model_usage=_run.model_usage_envelope(),
-            error=f"{type(e).__name__}: {e}",
-            error_traceback=traceback.format_exc(),
+            error=f"{type(e).__name__}: {redact_canary(str(e), _canary)}",
+            error_traceback=redact_canary(traceback.format_exc(), _canary),
         ))
         sys.exit(1)

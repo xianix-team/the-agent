@@ -611,7 +611,9 @@ public class WebhookRulesEvaluatorTests
         Assert.Equal("https://github.com/acme/app/pull/42", result.Inputs["pr-link"]);
 
         // Prompt interpolation sees the auto-injected keys.
-        Assert.Equal("review acme/app on github", result.Prompt);
+        Assert.Equal(
+            $"review {PromptUntrustedInterpolation.Wrap("repository-name", "acme/app")} on {PromptUntrustedInterpolation.Wrap("platform", "github")}",
+            result.Prompt);
     }
 
     [Fact]
@@ -652,7 +654,7 @@ public class WebhookRulesEvaluatorTests
         Assert.Equal("https://github.com/acme/app.git", result.RepositoryUrl);
         Assert.Equal("acme/app", result.RepositoryName);
         Assert.Equal("https://github.com/acme/app.git", result.Inputs["repository-url"]);
-        Assert.Equal("review acme/app", result.Prompt);
+        Assert.Equal($"review {PromptUntrustedInterpolation.Wrap("repository-name", "acme/app")}", result.Prompt);
     }
 
     [Fact]
@@ -780,7 +782,7 @@ public class WebhookRulesEvaluatorTests
         var result = outcome.Results![0];
         Assert.Equal("myproj/myrepo", result.RepositoryName);
         Assert.Equal("myproj/myrepo", result.Inputs["repository-name"]);
-        Assert.Equal("review myproj/myrepo", result.Prompt);
+        Assert.Equal($"review {PromptUntrustedInterpolation.Wrap("repository-name", "myproj/myrepo")}", result.Prompt);
     }
 
     [Fact]
@@ -939,7 +941,7 @@ public class WebhookRulesEvaluatorTests
         Assert.Equal("pinned/agent-repo", result.RepositoryName);
         Assert.Equal("https://github.com/pinned/agent-repo.git", result.Inputs["repository-url"]);
         Assert.Equal("pinned/agent-repo", result.Inputs["repository-name"]);
-        Assert.Equal("review pinned/agent-repo", result.Prompt);
+        Assert.Equal($"review {PromptUntrustedInterpolation.Wrap("repository-name", "pinned/agent-repo")}", result.Prompt);
     }
 
     [Fact]
@@ -979,7 +981,7 @@ public class WebhookRulesEvaluatorTests
 
         Assert.Equal("https://github.com/pinned/scan-target.git", result.RepositoryUrl);
         Assert.Equal("pinned/scan-target", result.RepositoryName);
-        Assert.Equal("scan pinned/scan-target", result.Prompt);
+        Assert.Equal($"scan {PromptUntrustedInterpolation.Wrap("repository-name", "pinned/scan-target")}", result.Prompt);
     }
 
     [Fact]
@@ -1449,13 +1451,30 @@ public class WebhookRulesEvaluatorTests
         Assert.Equal("webhook", outcome.Results![0].Prompt);
     }
 
+    /// <summary>
+    /// Resolves a repo-relative file by walking up from the test output directory.
+    /// Fixed <c>../../../../</c> hops break when OutputPath is not <c>bin/Debug/netX</c>.
+    /// </summary>
+    private static string FindRepoFile(params string[] relativeParts)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            var candidate = Path.Combine([dir.FullName, ..relativeParts]);
+            if (File.Exists(candidate))
+                return candidate;
+            dir = dir.Parent;
+        }
+
+        throw new FileNotFoundException(
+            $"Could not find '{Path.Combine(relativeParts)}' walking up from '{AppContext.BaseDirectory}'.");
+    }
+
     [Fact]
     public void EvaluateWithRules_GithubPrCommentMentioningXianix_MatchesPrCommentBlock()
     {
-        var rulesJson = File.ReadAllText(
-            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "TheAgent", "Knowledge", "rules.json"));
-        var payloadJson = File.ReadAllText(
-            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "TestScripts", "github-issue-comment-pr-sample.json"));
+        var rulesJson = File.ReadAllText(FindRepoFile("TheAgent", "Knowledge", "rules.json"));
+        var payloadJson = File.ReadAllText(FindRepoFile("TestScripts", "github-issue-comment-pr-sample.json"));
 
         using var doc = JsonDocument.Parse(payloadJson);
         var ruleSets = _sut.ParseRules(rulesJson);

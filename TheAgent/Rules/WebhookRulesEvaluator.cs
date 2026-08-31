@@ -635,18 +635,11 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
     }
 
     /// <summary>
-    /// Replaces &lt;input-name&gt; placeholders in the prompt template with resolved input values.
+    /// Replaces <c>{{input-name}}</c> placeholders in the prompt template with
+    /// resolved input values wrapped as untrusted <c>&lt;user_data&gt;</c>.
     /// </summary>
-    private static string InterpolatePrompt(string prompt, Dictionary<string, object?> inputs)
-    {
-        if (string.IsNullOrEmpty(prompt))
-            return prompt;
-
-        foreach (var (key, value) in inputs)
-            prompt = prompt.Replace($"{{{{{key}}}}}", value?.ToString() ?? "", StringComparison.OrdinalIgnoreCase);
-
-        return prompt;
-    }
+    private static string InterpolatePrompt(string prompt, Dictionary<string, object?> inputs) =>
+        PromptUntrustedInterpolation.Interpolate(prompt, inputs);
 
     private static bool TryGetRootElement(object? payload, out JsonElement root)
     {
