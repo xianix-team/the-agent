@@ -27,10 +27,8 @@ public class RulesOptimizerSkillCatalogTests
         Assert.Equal("plugin-marketplace", skill.Name);
         Assert.False(string.IsNullOrWhiteSpace(skill.Description));
         Assert.Contains("Ready to install", skill.Body, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(
-            "https://github.com/xianix-team/plugins-official/blob/main/.claude-plugin/marketplace.json",
-            skill.Body,
-            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("plugins-official", skill.Body, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ListAvailablePlugins", skill.Body, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -5,7 +5,7 @@ description: GetTenantState + live marketplace; user chooses plugin (or accept n
 
 # Marketplace discovery
 
-Follow **context → action → evidence**. Source: https://github.com/xianix-team/plugins-official/blob/main/.claude-plugin/marketplace.json
+Follow **context → action → evidence**. Source: official `xianix-team/plugins-official` marketplace.json via `ListAvailablePlugins` (`marketplaceUrl` in the tool result).
 
 Installability: live README (`plugins/<folder>/README.md`) **plus** local execution recipe. Do **not** use `.xianix/agent-setup.json`.
 

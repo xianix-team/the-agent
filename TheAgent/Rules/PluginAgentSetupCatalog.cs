@@ -19,14 +19,6 @@ namespace Xianix.Rules;
 /// </summary>
 internal static class PluginAgentSetupCatalog
 {
-    /// <summary>User-facing GitHub blob URL for the plugin README.</summary>
-    public const string DefaultReadmeGithubBlobUrlTemplate =
-        MarketplaceCatalog.DefaultReadmeGithubBlobUrlTemplate;
-
-    /// <summary>Raw URL used for HTTP presence checks (blob pages are HTML).</summary>
-    public const string DefaultReadmeRawUrlTemplate =
-        MarketplaceCatalog.DefaultReadmeRawUrlTemplate;
-
     private const string GitHubRepoPlaceholder = "https://github.com/org/repo.git";
     private const string AzureDevOpsRepoPlaceholder = "https://dev.azure.com/org/project/_git/repo";
 
@@ -54,15 +46,6 @@ internal static class PluginAgentSetupCatalog
 
     /// <summary>Optional test override for README presence (keyed by plugin folder).</summary>
     internal static ConcurrentDictionary<string, bool>? TestReadmeOverrides { get; set; }
-
-    public static string MarketplaceName => MarketplaceCatalog.DefaultMarketplaceName;
-    public static string MarketplaceRepo => MarketplaceCatalog.DefaultMarketplaceRepo;
-
-    public static string BuildReadmeGithubBlobUrl(string pluginFolder) =>
-        string.Format(DefaultReadmeGithubBlobUrlTemplate, pluginFolder.Trim().Trim('/'));
-
-    public static string BuildReadmeRawUrl(string pluginFolder) =>
-        string.Format(DefaultReadmeRawUrlTemplate, pluginFolder.Trim().Trim('/'));
 
     public static bool IsInstallableSetup(PluginAgentSetup? setup) =>
         setup is not null
@@ -126,7 +109,7 @@ internal static class PluginAgentSetupCatalog
         var present = false;
         try
         {
-            var url = BuildReadmeRawUrl(folder);
+            var url = MarketplaceCatalog.BuildReadmeRawUrl(folder);
             using var response = await Http.GetAsync(url, cancellationToken).ConfigureAwait(false);
             if (response.IsSuccessStatusCode)
             {
@@ -347,8 +330,8 @@ internal static class PluginAgentSetupCatalog
 
         return new PluginEntry
         {
-            PluginName = $"{setup.Plugin}@{MarketplaceName}",
-            Marketplace = MarketplaceRepo,
+            PluginName = $"{setup.Plugin}@{MarketplaceCatalog.DefaultMarketplaceName}",
+            Marketplace = MarketplaceCatalog.DefaultMarketplaceRepo,
             SlashCommand = slash,
         };
     }

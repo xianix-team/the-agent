@@ -27,8 +27,8 @@ Rules Optimizer no longer treats `rules.json` as both the plugin catalog and the
 
 | Concern | Source | Notes |
 | --------- | -------- | ------- |
-| **Available plugins** | Official marketplace only ([`marketplace.json`](https://github.com/xianix-team/plugins-official/blob/main/.claude-plugin/marketplace.json)), fetched live — no alternate catalog fallback | Full listing shown to the user. Test copies live under `TheAgent.Tests/Fixtures/marketplace.json` only. |
-| **Ready to install** | Marketplace entry **and** a live plugin [`README.md`](https://github.com/xianix-team/plugins-official/blob/main/plugins/pr-reviewer/README.md) at `plugins/<folder>/README.md` (folder from marketplace `source`) **and** a local execution recipe | Secrets, triggers, webhook events, and execution templates come from `TheAgent.Tests/Fixtures/agent-setup/<name>/agent-setup.json` (copied to the agent as `PluginRecipes/`). Do **not** fetch remote `.xianix/agent-setup.json`. |
+| **Available plugins** | Official marketplace only (`MarketplaceCatalog` → plugins-official `marketplace.json`), fetched live — no alternate catalog fallback | Full listing shown to the user. Test copies live under `TheAgent.Tests/Fixtures/marketplace.json` only. |
+| **Ready to install** | Marketplace entry **and** a live plugin `README.md` at `plugins/<folder>/README.md` (folder from marketplace `source`; URL templates on `MarketplaceCatalog`) **and** a local execution recipe | Secrets, triggers, webhook events, and execution templates come from `TheAgent.Tests/Fixtures/agent-setup/<name>/agent-setup.json` (copied to the agent as `PluginRecipes/`). Do **not** fetch remote `.xianix/agent-setup.json`. |
 | **Coming soon** | Marketplace entry without a fetchable README, or without a local execution recipe | Listed but not installable |
 | **Installed plugins** | Agent-scoped `rules.json` `use-plugins` entries (Studio: Agent = activation override; webhook root + executions + chat rule sets) | Deduplicated union; system seed stays empty until first save |
 

@@ -37,6 +37,12 @@ internal static class MarketplaceCatalog
         "https://raw.githubusercontent.com/" + DefaultMarketplaceRepo
         + "/main/plugins/{0}/README.md";
 
+    public static string BuildReadmeGithubBlobUrl(string pluginFolder) =>
+        string.Format(DefaultReadmeGithubBlobUrlTemplate, pluginFolder.Trim().Trim('/'));
+
+    public static string BuildReadmeRawUrl(string pluginFolder) =>
+        string.Format(DefaultReadmeRawUrlTemplate, pluginFolder.Trim().Trim('/'));
+
     // Live raw.githubusercontent.com fetches from some networks commonly take 15–25s.
     // A 10s timeout made the catalog look "unreachable" while the same URL worked in a browser.
     private static readonly HttpClient Http = new()

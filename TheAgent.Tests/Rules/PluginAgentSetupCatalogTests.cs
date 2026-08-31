@@ -96,11 +96,11 @@ public class PluginAgentSetupCatalogTests : IDisposable
     public void BuildReadmeUrls_UsePluginsOfficialReadmePath()
     {
         Assert.Equal(
-            "https://github.com/xianix-team/plugins-official/blob/main/plugins/pr-reviewer/README.md",
-            PluginAgentSetupCatalog.BuildReadmeGithubBlobUrl("pr-reviewer"));
+            string.Format(MarketplaceCatalog.DefaultReadmeGithubBlobUrlTemplate, "pr-reviewer"),
+            MarketplaceCatalog.BuildReadmeGithubBlobUrl("pr-reviewer"));
         Assert.Equal(
-            "https://raw.githubusercontent.com/xianix-team/plugins-official/main/plugins/ux-mob-process-plugin/README.md",
-            PluginAgentSetupCatalog.BuildReadmeRawUrl("ux-mob-process-plugin"));
+            string.Format(MarketplaceCatalog.DefaultReadmeRawUrlTemplate, "ux-mob-process-plugin"),
+            MarketplaceCatalog.BuildReadmeRawUrl("ux-mob-process-plugin"));
     }
 
     [Fact]

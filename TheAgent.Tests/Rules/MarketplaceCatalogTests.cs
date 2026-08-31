@@ -54,17 +54,19 @@ public class MarketplaceCatalogTests
     [Fact]
     public void DefaultMarketplaceUrl_IsOfficialPluginsOfficialRaw()
     {
+        Assert.Contains(MarketplaceCatalog.DefaultMarketplaceRepo, MarketplaceCatalog.DefaultMarketplaceUrl);
+        Assert.Contains(MarketplaceCatalog.DefaultMarketplaceRepo, MarketplaceCatalog.MarketplaceGithubBlobUrl);
         Assert.Equal(
-            "https://raw.githubusercontent.com/xianix-team/plugins-official/main/.claude-plugin/marketplace.json",
+            $"https://raw.githubusercontent.com/{MarketplaceCatalog.DefaultMarketplaceRepo}/main/.claude-plugin/marketplace.json",
             MarketplaceCatalog.DefaultMarketplaceUrl);
         Assert.Equal(
-            "https://github.com/xianix-team/plugins-official/blob/main/.claude-plugin/marketplace.json",
+            $"https://github.com/{MarketplaceCatalog.DefaultMarketplaceRepo}/blob/main/.claude-plugin/marketplace.json",
             MarketplaceCatalog.MarketplaceGithubBlobUrl);
         Assert.Equal(
-            "https://github.com/xianix-team/plugins-official/blob/main/plugins/{0}/README.md",
+            $"https://github.com/{MarketplaceCatalog.DefaultMarketplaceRepo}/blob/main/plugins/{{0}}/README.md",
             MarketplaceCatalog.DefaultReadmeGithubBlobUrlTemplate);
         Assert.Equal(
-            "https://raw.githubusercontent.com/xianix-team/plugins-official/main/plugins/{0}/README.md",
+            $"https://raw.githubusercontent.com/{MarketplaceCatalog.DefaultMarketplaceRepo}/main/plugins/{{0}}/README.md",
             MarketplaceCatalog.DefaultReadmeRawUrlTemplate);
     }
 

@@ -807,7 +807,7 @@ public sealed class OnboardingSubagentTools(
                     .ConfigureAwait(false);
                 var hasRecipe = PluginAgentSetupCatalog.IsInstallableSetup(setup);
                 var installable = hasReadme && hasRecipe;
-                var readmeUrl = PluginAgentSetupCatalog.BuildReadmeGithubBlobUrl(folder);
+                var readmeUrl = MarketplaceCatalog.BuildReadmeGithubBlobUrl(folder);
 
                 var supportedPlatforms = hasRecipe && setup is not null
                     ? setup.Platforms.Keys
@@ -929,7 +929,7 @@ public sealed class OnboardingSubagentTools(
             marketplace = marketplace.MarketplaceName,
             marketplaceRepo = marketplace.MarketplaceRepo,
             marketplaceUrl = MarketplaceCatalog.MarketplaceGithubBlobUrl,
-            readmeUrlTemplate = PluginAgentSetupCatalog.DefaultReadmeGithubBlobUrlTemplate,
+            readmeUrlTemplate = MarketplaceCatalog.DefaultReadmeGithubBlobUrlTemplate,
             recipesAvailable = readyToInstall.Select(p => p.name).OrderBy(n => n).ToArray(),
             installedFromRulesJson = installedList,
             readyToInstall,
@@ -1022,7 +1022,7 @@ public sealed class OnboardingSubagentTools(
             {
                 errors.Add(
                     $"'{name}' is not installable (missing live plugin README or local execution recipe). " +
-                    $"Expected README: {PluginAgentSetupCatalog.BuildReadmeGithubBlobUrl(folder)}");
+                    $"Expected README: {MarketplaceCatalog.BuildReadmeGithubBlobUrl(folder)}");
                 continue;
             }
 
@@ -1047,7 +1047,7 @@ public sealed class OnboardingSubagentTools(
             {
                 ["plugin-name"] = entry.PluginName,
                 ["marketplace"] = string.IsNullOrWhiteSpace(entry.Marketplace)
-                    ? PluginAgentSetupCatalog.MarketplaceRepo
+                    ? MarketplaceCatalog.DefaultMarketplaceRepo
                     : entry.Marketplace,
             };
             if (!string.IsNullOrWhiteSpace(entry.SlashCommand))
