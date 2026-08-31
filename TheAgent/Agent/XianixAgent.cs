@@ -40,11 +40,14 @@ public class XianixAgent(
     {
         var conversationWorkflow = xiansAgent.Workflows.DefineSupervisor();
 
+        // The Anthropic key resolver runs on the first chat message. At that point
+        // XiansContext.CurrentAgent is bound to the calling message's tenant, so
+        // StartupEnvResolver reads the correct rules.json and Secret Vault.
         async Task<string> ResolveAnthropicApiKeyAsync()
         {
             var resolved = await StartupEnvResolver.TryResolveValueAsync(
                     "ANTHROPIC-API-KEY",
-                    supervisorLogger)
+                    logger)
                 .ConfigureAwait(false);
             return resolved ?? EnvConfig.AnthropicApiKey;
         }

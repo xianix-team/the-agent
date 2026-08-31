@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Anthropic;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -23,8 +22,9 @@ internal readonly record struct ChatTurnGateResult(
 
 /// <summary>
 /// Shared Microsoft Agent Framework runner with empty-reply retries, optional
-/// claim-gate retries, and conversation metrics. Resolves the Anthropic API key
-/// lazily per tenant on first use.
+/// claim-gate retries, and conversation metrics. The Anthropic API key resolver
+/// runs under the current <see cref="Xians.Lib.Agents.Core.XiansContext.CurrentAgent"/>
+/// scope (tenant-bound by the platform when a message arrives).
 /// </summary>
 internal sealed class AnthropicChatSubagent
 {
@@ -52,11 +52,9 @@ internal sealed class AnthropicChatSubagent
     private readonly ILogger _logger;
     private readonly string _modelName;
 
-    private readonly ConcurrentDictionary<string, AIAgent> _agentsByTenant =
-        new(StringComparer.Ordinal);
-
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _initLocksByTenant =
-        new(StringComparer.Ordinal);
+    private AIAgent? _agent;
+    private string? _cachedApiKey;
+    private readonly SemaphoreSlim _initLock = new(1, 1);
 
     public AnthropicChatSubagent(
         string agentName,
@@ -84,9 +82,7 @@ internal sealed class AnthropicChatSubagent
         Func<string, bool, ChatTurnGateResult>? gate,
         CancellationToken cancellationToken)
     {
-        var agent = await EnsureAgentForTenantAsync(
-                context.Message.TenantId, cancellationToken)
-            .ConfigureAwait(false);
+        var agent = await EnsureAgentAsync(cancellationToken).ConfigureAwait(false);
 
         var emptyAttempts = new[]
         {
@@ -220,47 +216,49 @@ internal sealed class AnthropicChatSubagent
         }
     }
 
-    private async Task<AIAgent> EnsureAgentForTenantAsync(
-        string tenantId, CancellationToken cancellationToken)
+    /// <summary>
+    /// Returns a cached <see cref="AIAgent"/> built from the resolver's API key.
+    /// The resolver is parameterless because <c>XiansContext.CurrentAgent</c> is
+    /// already tenant-scoped when a chat message is handled.
+    /// </summary>
+    private async Task<AIAgent> EnsureAgentAsync(CancellationToken cancellationToken)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+        var apiKey = await _apiKeyResolver().ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            throw new InvalidOperationException(
+                "Anthropic API key resolver returned an empty value. " +
+                "Check the rule-set-level 'ANTHROPIC-API-KEY' entry in rules.json " +
+                "(constant / host.VAR / secrets.KEY) and the tenant Secret Vault, " +
+                "then the host ANTHROPIC-API-KEY fallback.");
+        }
 
-        if (_agentsByTenant.TryGetValue(tenantId, out var cached))
-            return cached;
+        if (_agent is not null && string.Equals(_cachedApiKey, apiKey, StringComparison.Ordinal))
+            return _agent;
 
-        var initLock = _initLocksByTenant.GetOrAdd(tenantId, _ => new SemaphoreSlim(1, 1));
-        await initLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await _initLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_agentsByTenant.TryGetValue(tenantId, out cached))
-                return cached;
-
-            var apiKey = await _apiKeyResolver().ConfigureAwait(false);
-            if (string.IsNullOrWhiteSpace(apiKey))
-            {
-                throw new InvalidOperationException(
-                    $"Anthropic API key resolver returned an empty value for tenant '{tenantId}'. " +
-                    "Check rule-set-level 'ANTHROPIC-API-KEY' in rules.json and the tenant Secret Vault, " +
-                    "then the host ANTHROPIC-API-KEY fallback.");
-            }
+            if (_agent is not null && string.Equals(_cachedApiKey, apiKey, StringComparison.Ordinal))
+                return _agent;
 
             var client = new AnthropicClient { ApiKey = apiKey };
-            var agent = client.AsAIAgent(new ChatClientAgentOptions
+            _agent = client.AsAIAgent(new ChatClientAgentOptions
             {
                 Name = _agentName,
                 ChatOptions = new ChatOptions { ModelId = _modelName },
                 ChatHistoryProvider = _historyProvider,
             });
+            _cachedApiKey = apiKey;
 
-            _agentsByTenant[tenantId] = agent;
             _logger.LogInformation(
-                "Constructed {Agent} AIAgent for tenant '{TenantId}' (model={Model}).",
-                _agentName, tenantId, _modelName);
-            return agent;
+                "Constructed {Agent} AIAgent (model={Model}).",
+                _agentName, _modelName);
+            return _agent;
         }
         finally
         {
-            initLock.Release();
+            _initLock.Release();
         }
     }
 
