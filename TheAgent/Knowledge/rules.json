@@ -2,6 +2,7 @@
   {
     "webhook": "Default",
     "with-envs": [],
+    "use-plugins": [],
     "executions": []
   },
   {

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Anthropic;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -21,9 +22,9 @@ internal readonly record struct ChatTurnGateResult(
     string? NextInstructionsOverride = null);
 
 /// <summary>
-/// Shared Microsoft Agent Framework runner with empty-reply retries and conversation
-/// metrics. Supervisor and onboarding each construct their own instance with a distinct
-/// agent name and tool set.
+/// Shared Microsoft Agent Framework runner with empty-reply retries, optional
+/// claim-gate retries, and conversation metrics. Resolves the Anthropic API key
+/// lazily per tenant on first use.
 /// </summary>
 internal sealed class AnthropicChatSubagent
 {
@@ -43,46 +44,51 @@ internal sealed class AnthropicChatSubagent
         "for this attempt. Reply to the user's latest message with at least one short " +
         "sentence of text. Empty output is not acceptable.";
 
+    private const int MaxGateRetriesPerEmptyAttempt = 2;
+
     private readonly string _agentName;
-    private readonly AIAgent _agent;
+    private readonly Func<Task<string>> _apiKeyResolver;
     private readonly XiansChatHistoryProvider _historyProvider;
     private readonly ILogger _logger;
     private readonly string _modelName;
 
+    private readonly ConcurrentDictionary<string, AIAgent> _agentsByTenant =
+        new(StringComparer.Ordinal);
+
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _initLocksByTenant =
+        new(StringComparer.Ordinal);
+
     public AnthropicChatSubagent(
         string agentName,
-        string anthropicApiKey,
+        Func<Task<string>> anthropicApiKeyResolver,
         string modelName,
         ILogger logger,
         ILoggerFactory? loggerFactory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentName);
-        ArgumentException.ThrowIfNullOrWhiteSpace(anthropicApiKey);
+        ArgumentNullException.ThrowIfNull(anthropicApiKeyResolver);
         ArgumentException.ThrowIfNullOrWhiteSpace(modelName);
 
         _agentName = agentName;
+        _apiKeyResolver = anthropicApiKeyResolver;
         _logger = logger ?? NullLogger.Instance;
         _modelName = modelName;
         _historyProvider = new XiansChatHistoryProvider(
             loggerFactory?.CreateLogger<XiansChatHistoryProvider>());
-
-        var client = new AnthropicClient { ApiKey = anthropicApiKey };
-        _agent = client.AsAIAgent(new ChatClientAgentOptions
-        {
-            Name = _agentName,
-            ChatOptions = new ChatOptions { ModelId = _modelName },
-            ChatHistoryProvider = _historyProvider,
-        });
     }
 
     public async Task<string> RunTurnAsync(
         UserMessageContext context,
         string baseInstructions,
         IList<AITool> tools,
-        Func<string, int, int, ChatTurnGateResult>? gate,
+        Func<string, bool, ChatTurnGateResult>? gate,
         CancellationToken cancellationToken)
     {
-        var attempts = new[]
+        var agent = await EnsureAgentForTenantAsync(
+                context.Message.TenantId, cancellationToken)
+            .ConfigureAwait(false);
+
+        var emptyAttempts = new[]
         {
             new RunAttempt(baseInstructions, IncludeHistory: true, Label: "normal"),
             new RunAttempt(baseInstructions + EmptyResponseNudge, IncludeHistory: true, Label: "with-nudge"),
@@ -90,93 +96,98 @@ internal sealed class AnthropicChatSubagent
         };
 
         AgentResponse? lastResponse = null;
-        string? stickyInstructions = null;
         long? inputTokens = null, outputTokens = null, cacheReadTokens = null, cacheCreationTokens = null;
+        var totalAttemptsMade = 0;
 
-        for (var i = 0; i < attempts.Length; i++)
+        foreach (var emptyAttempt in emptyAttempts)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var attempt = attempts[i];
-            var instructions = stickyInstructions ?? attempt.Instructions;
+            string? stickyInstructions = null;
 
-            var session = await _agent.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
-            if (attempt.IncludeHistory)
-                _historyProvider.PrimeSession(session, context);
-
-            var runOptions = new ChatClientAgentRunOptions(new ChatOptions
+            for (var gateTry = 0; gateTry <= MaxGateRetriesPerEmptyAttempt; gateTry++)
             {
-                Instructions = instructions,
-                Tools = tools,
-            });
+                cancellationToken.ThrowIfCancellationRequested();
+                totalAttemptsMade++;
+                var instructions = stickyInstructions ?? emptyAttempt.Instructions;
 
-            lastResponse = await _agent
-                .RunAsync(context.Message.Text, session, runOptions, cancellationToken)
-                .ConfigureAwait(false);
+                var session = await agent.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
+                if (emptyAttempt.IncludeHistory)
+                    _historyProvider.PrimeSession(session, context);
 
-            var (attemptIn, attemptOut, attemptCacheRead, attemptCacheCreate) = ExtractUsage(lastResponse.Usage);
-            if (attemptIn.HasValue) inputTokens = (inputTokens ?? 0) + attemptIn.Value;
-            if (attemptOut.HasValue) outputTokens = (outputTokens ?? 0) + attemptOut.Value;
-            if (attemptCacheRead.HasValue) cacheReadTokens = (cacheReadTokens ?? 0) + attemptCacheRead.Value;
-            if (attemptCacheCreate.HasValue) cacheCreationTokens = (cacheCreationTokens ?? 0) + attemptCacheCreate.Value;
-
-            var text = lastResponse.Text ?? "";
-            if (gate is not null && !string.IsNullOrWhiteSpace(text))
-            {
-                var gated = gate(text, i, attempts.Length);
-                if (gated.Action == ChatTurnGateAction.Replace)
+                var runOptions = new ChatClientAgentRunOptions(new ChatOptions
                 {
-                    await ReportTurnAsync(succeeded: true, attemptsMade: i + 1).ConfigureAwait(false);
-                    return gated.Reply ?? EmptyResponseFallback;
+                    Instructions = instructions,
+                    Tools = tools,
+                });
+
+                lastResponse = await agent
+                    .RunAsync(context.Message.Text, session, runOptions, cancellationToken)
+                    .ConfigureAwait(false);
+
+                var (attemptIn, attemptOut, attemptCacheRead, attemptCacheCreate) =
+                    ExtractUsage(lastResponse.Usage);
+                if (attemptIn.HasValue) inputTokens = (inputTokens ?? 0) + attemptIn.Value;
+                if (attemptOut.HasValue) outputTokens = (outputTokens ?? 0) + attemptOut.Value;
+                if (attemptCacheRead.HasValue) cacheReadTokens = (cacheReadTokens ?? 0) + attemptCacheRead.Value;
+                if (attemptCacheCreate.HasValue)
+                    cacheCreationTokens = (cacheCreationTokens ?? 0) + attemptCacheCreate.Value;
+
+                var text = lastResponse.Text ?? "";
+                if (gate is not null && !string.IsNullOrWhiteSpace(text))
+                {
+                    var isLastGateRetry = gateTry >= MaxGateRetriesPerEmptyAttempt;
+                    var gated = gate(text, isLastGateRetry);
+                    if (gated.Action == ChatTurnGateAction.Replace)
+                    {
+                        await ReportTurnAsync(succeeded: true, totalAttemptsMade).ConfigureAwait(false);
+                        return gated.Reply ?? EmptyResponseFallback;
+                    }
+
+                    if (gated.Action == ChatTurnGateAction.Retry)
+                    {
+                        stickyInstructions = gated.NextInstructionsOverride;
+                        continue;
+                    }
+
+                    text = gated.Reply ?? text;
                 }
 
-                if (gated.Action == ChatTurnGateAction.Retry)
+                if (!string.IsNullOrWhiteSpace(text))
                 {
-                    stickyInstructions = gated.NextInstructionsOverride;
-                    continue;
+                    if (totalAttemptsMade > 1)
+                    {
+                        _logger.LogInformation(
+                            "Model produced text after {Attempts} attempt(s) ({Strategy}). " +
+                            "Agent={Agent}, Tenant={TenantId}, Participant={ParticipantId}, ResponseId={ResponseId}.",
+                            totalAttemptsMade, emptyAttempt.Label,
+                            _agentName, context.Message.TenantId, context.Message.ParticipantId,
+                            lastResponse.ResponseId);
+                    }
+
+                    await ReportTurnAsync(succeeded: true, totalAttemptsMade).ConfigureAwait(false);
+                    return text;
                 }
 
-                text = gated.Reply ?? text;
-            }
-
-            if (!string.IsNullOrWhiteSpace(text))
-            {
-                if (i > 0)
-                {
-                    _logger.LogInformation(
-                        "Model produced text on retry attempt {Attempt}/{Total} ({Strategy}). " +
-                        "Agent={Agent}, Tenant={TenantId}, Participant={ParticipantId}, ResponseId={ResponseId}.",
-                        i + 1, attempts.Length, attempt.Label,
-                        _agentName, context.Message.TenantId, context.Message.ParticipantId,
-                        lastResponse.ResponseId);
-                }
-
-                await ReportTurnAsync(succeeded: true, attemptsMade: i + 1).ConfigureAwait(false);
-                return text;
+                break;
             }
 
             _logger.LogWarning(
-                "Model returned empty text on attempt {Attempt}/{Total} ({Strategy}). " +
+                "Model returned empty text on empty-response strategy '{Strategy}'. " +
                 "Agent={Agent}, Model={Model}, Tenant={TenantId}, Participant={ParticipantId}, " +
-                "ResponseId={ResponseId}, FinishReason={FinishReason}, Messages={MessageCount}, " +
-                "Contents={Contents}, UserMessage={UserMessage}.",
-                i + 1, attempts.Length, attempt.Label,
-                _agentName, _modelName,
+                "ResponseId={ResponseId}, FinishReason={FinishReason}, UserMessage={UserMessage}.",
+                emptyAttempt.Label, _agentName, _modelName,
                 context.Message.TenantId, context.Message.ParticipantId,
-                lastResponse.ResponseId, lastResponse.FinishReason,
-                lastResponse.Messages?.Count ?? 0,
-                SummariseResponseContents(lastResponse),
+                lastResponse?.ResponseId, lastResponse?.FinishReason,
                 Truncate(context.Message.Text, 200));
         }
 
         _logger.LogError(
-            "Model returned empty text on every attempt ({Total} total, including no-history retry). " +
-            "Sending fallback prompt to user. Agent={Agent}, Model={Model}, Tenant={TenantId}, " +
-            "Participant={ParticipantId}, LastResponseId={LastResponseId}, UserMessage={UserMessage}.",
-            attempts.Length, _agentName, _modelName,
-            context.Message.TenantId, context.Message.ParticipantId,
-            lastResponse?.ResponseId, Truncate(context.Message.Text, 200));
+            "Model returned empty text on every strategy. Sending fallback. Agent={Agent}, Tenant={TenantId}, " +
+            "Participant={ParticipantId}, LastResponseId={LastResponseId}.",
+            _agentName, context.Message.TenantId, context.Message.ParticipantId,
+            lastResponse?.ResponseId);
 
-        await ReportTurnAsync(succeeded: false, attemptsMade: attempts.Length).ConfigureAwait(false);
+        await ReportTurnAsync(succeeded: false, totalAttemptsMade).ConfigureAwait(false);
         return EmptyResponseFallback;
 
         async Task ReportTurnAsync(bool succeeded, int attemptsMade)
@@ -203,13 +214,58 @@ internal sealed class AnthropicChatSubagent
             {
                 _logger.LogWarning(ex,
                     "Failed to report chat conversation metrics for tenant '{TenantId}', " +
-                    "participant '{ParticipantId}'. Metrics are non-critical.",
+                    "participant '{ParticipantId}'.",
                     context.Message.TenantId, context.Message.ParticipantId);
             }
         }
     }
 
-    private static (long? Input, long? Output, long? CacheRead, long? CacheCreate) ExtractUsage(UsageDetails? usage)
+    private async Task<AIAgent> EnsureAgentForTenantAsync(
+        string tenantId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+
+        if (_agentsByTenant.TryGetValue(tenantId, out var cached))
+            return cached;
+
+        var initLock = _initLocksByTenant.GetOrAdd(tenantId, _ => new SemaphoreSlim(1, 1));
+        await initLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_agentsByTenant.TryGetValue(tenantId, out cached))
+                return cached;
+
+            var apiKey = await _apiKeyResolver().ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(apiKey))
+            {
+                throw new InvalidOperationException(
+                    $"Anthropic API key resolver returned an empty value for tenant '{tenantId}'. " +
+                    "Check rule-set-level 'ANTHROPIC-API-KEY' in rules.json and the tenant Secret Vault, " +
+                    "then the host ANTHROPIC-API-KEY fallback.");
+            }
+
+            var client = new AnthropicClient { ApiKey = apiKey };
+            var agent = client.AsAIAgent(new ChatClientAgentOptions
+            {
+                Name = _agentName,
+                ChatOptions = new ChatOptions { ModelId = _modelName },
+                ChatHistoryProvider = _historyProvider,
+            });
+
+            _agentsByTenant[tenantId] = agent;
+            _logger.LogInformation(
+                "Constructed {Agent} AIAgent for tenant '{TenantId}' (model={Model}).",
+                _agentName, tenantId, _modelName);
+            return agent;
+        }
+        finally
+        {
+            initLock.Release();
+        }
+    }
+
+    private static (long? Input, long? Output, long? CacheRead, long? CacheCreate) ExtractUsage(
+        UsageDetails? usage)
     {
         if (usage is null)
             return (null, null, null, null);
@@ -239,24 +295,4 @@ internal sealed class AnthropicChatSubagent
         string.IsNullOrEmpty(text) || text.Length <= max
             ? text
             : text[..max] + $"…(+{text.Length - max} chars)";
-
-    private static string SummariseResponseContents(AgentResponse response)
-    {
-        if (response.Messages is null || response.Messages.Count == 0)
-            return "(no messages)";
-
-        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (var message in response.Messages)
-        {
-            foreach (var content in message.Contents)
-            {
-                var key = content.GetType().Name;
-                counts[key] = counts.TryGetValue(key, out var n) ? n + 1 : 1;
-            }
-        }
-
-        return counts.Count == 0
-            ? "(no contents)"
-            : string.Join(", ", counts.Select(kv => $"{kv.Key}={kv.Value}"));
-    }
 }

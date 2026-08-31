@@ -42,25 +42,38 @@ public sealed class OnboardingSubagent
         "skipMatchAny so the save replaces rules.json (merge keeps omitted executions). " +
         "Do not claim install or execution updates from memory.";
 
+    private const string UnverifiedExecutionRetryNudge =
+        "\n\n## CRITICAL\n\n" +
+        "Your previous reply claimed an execution or match-any change was saved, but the " +
+        "tools did not confirm it in rules.json this turn. Call InstallPlugins (with " +
+        "skipExecutions / skipMatchAny when needed) or UpdateTriggerLabel, wait for " +
+        "ok=true, then reply only from that result.";
+
+    private const string UnverifiedTriggerLabelRetryNudge =
+        "\n\n## CRITICAL\n\n" +
+        "Your previous reply claimed the trigger label was updated, but UpdateTriggerLabel " +
+        "or InstallPlugins did not confirm it this turn. Call the appropriate tool, wait " +
+        "for ok=true, then reply only from that result.";
+
     private readonly AnthropicChatSubagent _runner;
     private readonly ILogger<OnboardingSubagentTools> _toolsLogger;
     private readonly ILogger<OnboardingSubagent> _logger;
 
     public OnboardingSubagent(
-        string anthropicApiKey,
+        Func<Task<string>> anthropicApiKeyResolver,
         string modelName,
         ILogger<OnboardingSubagent>? logger = null,
         ILogger<OnboardingSubagentTools>? toolsLogger = null,
         ILoggerFactory? loggerFactory = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(anthropicApiKey);
+        ArgumentNullException.ThrowIfNull(anthropicApiKeyResolver);
         ArgumentException.ThrowIfNullOrWhiteSpace(modelName);
 
         _logger = logger ?? NullLogger<OnboardingSubagent>.Instance;
         _toolsLogger = toolsLogger ?? NullLogger<OnboardingSubagentTools>.Instance;
         _runner = new AnthropicChatSubagent(
             agentName: nameof(OnboardingSubagent),
-            anthropicApiKey,
+            anthropicApiKeyResolver,
             modelName,
             _logger,
             loggerFactory);
@@ -85,7 +98,7 @@ public sealed class OnboardingSubagent
                 context,
                 instructions,
                 aiTools,
-                (text, attemptIndex, totalAttempts) => GateReply(text, tools, instructions, attemptIndex, totalAttempts),
+                (text, isLastGateRetry) => GateReply(text, tools, instructions, isLastGateRetry),
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -94,13 +107,12 @@ public sealed class OnboardingSubagent
         string text,
         OnboardingSubagentTools tools,
         string baseInstructions,
-        int attemptIndex,
-        int totalAttempts)
+        bool isLastGateRetry)
     {
         text = StripOnboardingProcessNarration(text);
 
         if (ClaimsPluginsInstalled(text) && tools.VerifiedInstalledShortNames.Count == 0)
-            return UnverifiedClaim(text, attemptIndex, totalAttempts, baseInstructions, UnverifiedInstallClaimFallback, "install");
+            return UnverifiedClaim(text, isLastGateRetry, baseInstructions, UnverifiedInstallClaimFallback, "install");
 
         if (ClaimsScmConnectionEstablished(text) && !tools.VerifiedScmConnectionEstablished)
         {
@@ -111,42 +123,43 @@ public sealed class OnboardingSubagent
         }
 
         if (ClaimsTriggerLabelUpdated(text) && string.IsNullOrWhiteSpace(tools.VerifiedTriggerLabel))
-        {
-            _logger.LogError(
-                "Blocked unverified trigger-label claim in Rules Optimizer reply. Reply={Reply}.",
-                Truncate(text, 400));
-            return new ChatTurnGateResult(ChatTurnGateAction.Replace, UnverifiedTriggerLabelClaimFallback);
-        }
+            return UnverifiedClaim(text, isLastGateRetry, baseInstructions, UnverifiedTriggerLabelClaimFallback, "trigger-label");
 
         if (ClaimsExecutionsUpdated(text) && !tools.VerifiedExecutionChange)
-            return UnverifiedClaim(text, attemptIndex, totalAttempts, baseInstructions, UnverifiedExecutionClaimFallback, "execution");
+            return UnverifiedClaim(text, isLastGateRetry, baseInstructions, UnverifiedExecutionClaimFallback, "execution");
 
         return new ChatTurnGateResult(ChatTurnGateAction.Accept, text);
     }
 
     private ChatTurnGateResult UnverifiedClaim(
         string text,
-        int attemptIndex,
-        int totalAttempts,
+        bool isLastGateRetry,
         string baseInstructions,
         string fallback,
         string kind)
     {
-        if (attemptIndex < totalAttempts - 1)
+        if (!isLastGateRetry)
         {
             _logger.LogWarning(
-                "Unverified {Kind} claim in Rules Optimizer reply — retrying {Attempt}/{Total}. Reply={Reply}.",
-                kind, attemptIndex + 2, totalAttempts, Truncate(text, 400));
+                "Unverified {Kind} claim in Rules Optimizer reply — retrying. Reply={Reply}.",
+                kind, Truncate(text, 400));
             return new ChatTurnGateResult(
                 ChatTurnGateAction.Retry,
-                NextInstructionsOverride: baseInstructions + UnverifiedInstallRetryNudge);
+                NextInstructionsOverride: baseInstructions + RetryNudgeFor(kind));
         }
 
         _logger.LogError(
-            "Blocked unverified {Kind} claim in Rules Optimizer reply after {Attempts} attempts. Reply={Reply}.",
-            kind, totalAttempts, Truncate(text, 400));
+            "Blocked unverified {Kind} claim in Rules Optimizer reply. Reply={Reply}.",
+            kind, Truncate(text, 400));
         return new ChatTurnGateResult(ChatTurnGateAction.Replace, fallback);
     }
+
+    private static string RetryNudgeFor(string kind) => kind switch
+    {
+        "execution" => UnverifiedExecutionRetryNudge,
+        "trigger-label" => UnverifiedTriggerLabelRetryNudge,
+        _ => UnverifiedInstallRetryNudge,
+    };
 
     private static IList<AITool> CreateTools(OnboardingSubagentTools tools) =>
     [

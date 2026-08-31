@@ -2,6 +2,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xianix;
+using Xianix.Rules;
 using Xians.Lib.Agents.Core;
 using Xians.Lib.Agents.Messaging;
 
@@ -18,19 +19,19 @@ public sealed class SupervisorSubagent
     private readonly ILogger<SupervisorSubagentTools> _toolsLogger;
 
     public SupervisorSubagent(
-        string anthropicApiKey,
+        Func<Task<string>> anthropicApiKeyResolver,
         string modelName,
         ILogger<SupervisorSubagent>? logger = null,
         ILogger<SupervisorSubagentTools>? toolsLogger = null,
         ILoggerFactory? loggerFactory = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(anthropicApiKey);
+        ArgumentNullException.ThrowIfNull(anthropicApiKeyResolver);
         ArgumentException.ThrowIfNullOrWhiteSpace(modelName);
 
         _toolsLogger = toolsLogger ?? NullLogger<SupervisorSubagentTools>.Instance;
         _runner = new AnthropicChatSubagent(
             agentName: nameof(SupervisorSubagent),
-            anthropicApiKey,
+            anthropicApiKeyResolver,
             modelName,
             logger ?? NullLogger<SupervisorSubagent>.Instance,
             loggerFactory);

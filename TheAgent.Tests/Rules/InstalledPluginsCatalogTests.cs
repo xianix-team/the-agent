@@ -191,4 +191,51 @@ public class InstalledPluginsCatalogTests
         Assert.Contains("github-issue-requirement-analysis", merged);
         Assert.Contains("\"chat\":\"chat\"", merged.Replace(" ", ""));
     }
+
+    [Fact]
+    public void MergeRulesJson_PreservesScheduleRuleSets()
+    {
+        const string existing = """
+            [
+              {
+                "webhook": "Default",
+                "use-plugins": [],
+                "executions": []
+              },
+              {
+                "schedule": "nightly-scan",
+                "cron": "0 2 * * *",
+                "timezone": "UTC",
+                "executions": [
+                  { "name": "nightly-scan-run", "execute-prompt": "scan" }
+                ]
+              }
+            ]
+            """;
+
+        const string incoming = """
+            [
+              {
+                "webhook": "Default",
+                "use-plugins": [
+                  { "plugin-name": "req-analyst@xianix-plugins-official", "marketplace": "xianix-team/plugins-official" }
+                ],
+                "executions": [
+                  { "name": "github-issue-requirement-analysis", "execute-prompt": "b" }
+                ]
+              },
+              {
+                "chat": "chat",
+                "use-plugins": [
+                  { "plugin-name": "req-analyst@xianix-plugins-official", "marketplace": "xianix-team/plugins-official" }
+                ]
+              }
+            ]
+            """;
+
+        var merged = OnboardingPlatformClient.MergeRulesJson(existing, incoming);
+        Assert.Contains("nightly-scan", merged);
+        Assert.Contains("nightly-scan-run", merged);
+        Assert.Contains("github-issue-requirement-analysis", merged);
+    }
 }

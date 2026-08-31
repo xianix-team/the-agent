@@ -519,18 +519,38 @@ public sealed class OnboardingSubagentTools(
                 eventList = ["issues", "pull_request", "issue_comment", "push"];
             }
 
-            // Prefer a tenant vault secret so receive-path HMAC verification can share it;
-            // otherwise RegisterGitHubWebhookAsync generates a one-time secret for GitHub signing.
+            // Prefer a tenant vault secret so receive-path HMAC verification can share it.
             string? webhookSecret = null;
             try
             {
-                var secretFetch = await vault.FetchByKeyAsync("GITHUB-WEBHOOK-SECRET").ConfigureAwait(false);
+                var secretFetch = await vault
+                    .FetchByKeyAsync(RulesGitHubWebhookSecret.VaultKey)
+                    .ConfigureAwait(false);
                 if (secretFetch is not null && !string.IsNullOrWhiteSpace(secretFetch.Value))
                     webhookSecret = secretFetch.Value;
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Optional GITHUB-WEBHOOK-SECRET lookup failed; generating ephemeral hook secret.");
+                _logger.LogDebug(ex, "GITHUB-WEBHOOK-SECRET lookup failed.");
+            }
+
+            if (string.IsNullOrWhiteSpace(webhookSecret))
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    ok = false,
+                    registrationStatus = "failed",
+                    connectionStatus = "not_established",
+                    connectionCheck = "github_ping",
+                    connectivityStatus = "not_connected",
+                    missingSecret = RulesGitHubWebhookSecret.VaultKey,
+                    error = $"{RulesGitHubWebhookSecret.VaultKey} is not set in the tenant vault.",
+                    userFacingMessage =
+                        $"{RulesGitHubWebhookSecret.VaultKey} is missing. Add it in Studio → Settings → Secrets " +
+                        "(use the same value GitHub will send as the webhook secret), then say \"done\".",
+                    hint = "Do NOT register the GitHub hook until this secret exists — inbound events " +
+                           "must verify against the same value stored in rules.json.",
+                });
             }
 
             var result = await _platform.RegisterGitHubWebhookAsync(
@@ -619,6 +639,20 @@ public sealed class OnboardingSubagentTools(
                 ping.LastResponseCode);
 
             VerifiedScmConnectionEstablished = true;
+
+            var (rulesContent, _) = await LoadEffectiveRulesContentAsync().ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(rulesContent))
+            {
+                var patchedRules = RulesGitHubWebhookSecret.EnsureVerificationSecretField(rulesContent);
+                if (!string.Equals(patchedRules, rulesContent, StringComparison.Ordinal))
+                {
+                    await SaveRules(
+                            patchedRules,
+                            requiredPlugins: null,
+                            replaceExisting: false)
+                        .ConfigureAwait(false);
+                }
+            }
 
             return JsonSerializer.Serialize(new
             {
@@ -1221,14 +1255,19 @@ public sealed class OnboardingSubagentTools(
         // First agent-scope save would otherwise drop system-scoped plugins.
         var (existing, _) = await LoadEffectiveRulesContentAsync().ConfigureAwait(false);
 
-        // Default: rematerialize full desired set so adding plugin N cannot leave N unverified.
-        // replaceExistingSet: treat requested as the complete set (supports uninstall).
         var fullSet = RulesInstallValidation.DesiredInstallSet(
             existing, requested, replaceExistingSet);
         var fullSetCsv = string.Join(",", fullSet);
 
+        // Default: materialize only newly requested plugins so existing customizations are kept.
+        // replaceExistingSet: rematerialize the complete desired set (supports uninstall).
+        var pluginsToMaterialize = replaceExistingSet
+            ? fullSet
+            : requested;
+        var materializeCsv = string.Join(",", pluginsToMaterialize);
+
         var materializeJson = await MaterializePluginRules(
-                fullSetCsv, repositoryUrl, normalizedPlatform, triggerLabel)
+                materializeCsv, repositoryUrl, normalizedPlatform, triggerLabel)
             .ConfigureAwait(false);
         using var materializeDoc = JsonDocument.Parse(materializeJson);
         if (!materializeDoc.RootElement.TryGetProperty("ok", out var matOk) || !matOk.GetBoolean())

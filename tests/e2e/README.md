@@ -32,11 +32,14 @@ GitHub/ADO account, repo, or token is involved. The `e2e-*` rules declare
 ## Prerequisites
 
 1. **Local Xians ACP running** and reachable (e.g. `http://localhost:5005`).
-2. **TheAgent deployed and registered** — and running with the current
-   [`TheAgent/Knowledge/rules.json`](../../TheAgent/Knowledge/rules.json),
-   which contains the two `e2e-*` execution blocks. rules.json is an
-   *embedded resource* uploaded at startup: **restart the agent after any
-   rules change** or the platform still has the old rules.
+2. **TheAgent deployed and registered** — running with activation-scoped Rules that
+   include the two `e2e-*` execution blocks. The system seed
+   [`TheAgent/Knowledge/rules.json`](../../TheAgent/Knowledge/rules.json) is intentionally
+   empty; for Tier 2 tests upload
+   [`TheAgent.Tests/Fixtures/e2e-rules.json`](../../TheAgent.Tests/Fixtures/e2e-rules.json)
+   to activation-scoped Knowledge (`Rules`) before running, or merge those executions into
+   your activation rules in Studio. **Restart the agent after any rules change** or the
+   platform still has the old rules.
 3. **Docker** on this machine (the agent starts executor containers on the
    same daemon, which is what lets the harness observe them).
 4. **`ANTHROPIC-API-KEY`** configured for the agent (host `.env` or rules

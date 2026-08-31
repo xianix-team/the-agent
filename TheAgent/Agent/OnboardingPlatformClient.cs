@@ -184,7 +184,8 @@ internal sealed class OnboardingPlatformClient
 
     /// <summary>
     /// Effective Rules content for the current agent context, with scope label.
-    /// Scope is "agent" when not system-scoped, "system" when system-scoped, or "missing".
+    /// Scope is "agent" when not system-scoped, "system" when system-scoped,
+    /// "missing" when absent, or "error" when the SDK read failed.
     /// </summary>
     public async Task<(string? Content, string Scope)> GetEffectiveRulesAsync(
         CancellationToken cancellationToken = default)
@@ -206,7 +207,7 @@ internal sealed class OnboardingPlatformClient
         }
         catch
         {
-            return (null, "missing");
+            return (null, "error");
         }
     }
 
@@ -299,7 +300,10 @@ internal sealed class OnboardingPlatformClient
 
             foreach (var incomingSet in incomingDoc.RootElement.EnumerateArray())
             {
-                var key = GetRuleSetKey(incomingSet) ?? "webhook:Default";
+                var key = GetRuleSetKey(incomingSet);
+                if (key is null)
+                    continue;
+
                 if (!byKey.TryGetValue(key, out var existingSet))
                 {
                     byKey[key] = incomingSet.Clone();
@@ -308,7 +312,9 @@ internal sealed class OnboardingPlatformClient
 
                 byKey[key] = key.StartsWith("chat:", StringComparison.OrdinalIgnoreCase)
                     ? MergeChatRuleSet(existingSet, incomingSet)
-                    : MergeWebhookRuleSet(existingSet, incomingSet);
+                    : key.StartsWith("schedule:", StringComparison.OrdinalIgnoreCase)
+                        ? incomingSet.Clone()
+                        : MergeWebhookRuleSet(existingSet, incomingSet);
             }
 
             var merged = byKey.Values.Select(e => JsonSerializer.Deserialize<JsonElement>(e.GetRawText())).ToArray();
@@ -336,15 +342,20 @@ internal sealed class OnboardingPlatformClient
             return "chat:" + chat.GetString();
         }
 
-        return null;
-    }
+        if (set.TryGetProperty("schedule", out var schedule)
+            && schedule.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(schedule.GetString()))
+        {
+            return "schedule:" + schedule.GetString();
+        }
 
-    private static string? GetWebhookKey(JsonElement set)
-    {
-        if (set.ValueKind != JsonValueKind.Object)
-            return null;
-        if (set.TryGetProperty("webhook", out var webhook))
-            return webhook.GetString();
+        if (set.TryGetProperty("cron", out var cron)
+            && cron.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(cron.GetString()))
+        {
+            return "schedule:cron:" + cron.GetString();
+        }
+
         return null;
     }
 
@@ -475,6 +486,8 @@ internal sealed class OnboardingPlatformClient
             return GitHubWebhookResult.Failed("GITHUB-TOKEN value is empty.");
         if (string.IsNullOrWhiteSpace(payloadUrl))
             return GitHubWebhookResult.Failed("Webhook payload URL is required.");
+        if (string.IsNullOrWhiteSpace(webhookSecret))
+            return GitHubWebhookResult.Failed("GITHUB-WEBHOOK-SECRET value is empty.");
 
         var repo = ParseGitHubOwnerRepo(repositoryCloneUrl);
         if (repo is null)
@@ -491,12 +504,17 @@ internal sealed class OnboardingPlatformClient
             .Distinct()
             .ToArray();
 
-        var secret = string.IsNullOrWhiteSpace(webhookSecret)
-            ? Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32))
-            : webhookSecret.Trim();
+        var secret = webhookSecret.Trim();
 
-        var existing = await ListGitHubWebhooksAsync(owner, name, githubToken, cancellationToken)
+        var listResult = await ListGitHubWebhooksAsync(owner, name, githubToken, cancellationToken)
             .ConfigureAwait(false);
+        if (!listResult.Success)
+        {
+            return GitHubWebhookResult.Failed(
+                listResult.Error ?? "Failed to list existing GitHub webhooks for this repository.");
+        }
+
+        var existing = listResult.Hooks;
 
         // Prefer an exact URL match; otherwise reuse a hook that already targets the same
         // Xians builtin webhook identity (path + agent/activation/webhook query) so a tunnel
@@ -814,7 +832,8 @@ internal sealed class OnboardingPlatformClient
         }
     }
 
-    private async Task<IReadOnlyList<GitHubHookSummary>> ListGitHubWebhooksAsync(
+    private async Task<(bool Success, IReadOnlyList<GitHubHookSummary> Hooks, string? Error)>
+        ListGitHubWebhooksAsync(
         string owner,
         string repo,
         string githubToken,
@@ -827,12 +846,17 @@ internal sealed class OnboardingPlatformClient
 
         using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
-            return Array.Empty<GitHubHookSummary>();
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            return (false, Array.Empty<GitHubHookSummary>(),
+                $"GitHub API rejected webhook list for {owner}/{repo}: " +
+                $"HTTP {(int)response.StatusCode} {SanitizeHttpErrorBody(body)}");
+        }
 
-        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        using var doc = JsonDocument.Parse(body);
+        var bodyText = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        using var doc = JsonDocument.Parse(bodyText);
         if (doc.RootElement.ValueKind != JsonValueKind.Array)
-            return Array.Empty<GitHubHookSummary>();
+            return (true, Array.Empty<GitHubHookSummary>(), null);
 
         var results = new List<GitHubHookSummary>();
         foreach (var item in doc.RootElement.EnumerateArray())
@@ -847,7 +871,7 @@ internal sealed class OnboardingPlatformClient
             results.Add(new GitHubHookSummary(id, url));
         }
 
-        return results;
+        return (true, results, null);
     }
 
     private static void ApplyGitHubHeaders(HttpRequestMessage request, string githubToken)

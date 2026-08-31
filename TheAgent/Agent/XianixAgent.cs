@@ -40,15 +40,24 @@ public class XianixAgent(
     {
         var conversationWorkflow = xiansAgent.Workflows.DefineSupervisor();
 
+        async Task<string> ResolveAnthropicApiKeyAsync()
+        {
+            var resolved = await StartupEnvResolver.TryResolveValueAsync(
+                    "ANTHROPIC-API-KEY",
+                    supervisorLogger)
+                .ConfigureAwait(false);
+            return resolved ?? EnvConfig.AnthropicApiKey;
+        }
+
         var supervisor = new SupervisorSubagent(
-            EnvConfig.AnthropicApiKey,
+            ResolveAnthropicApiKeyAsync,
             EnvConfig.AnthropicDeploymentName,
             supervisorLogger,
             supervisorToolsLogger,
             loggerFactory);
 
         var onboarding = new OnboardingSubagent(
-            EnvConfig.AnthropicApiKey,
+            ResolveAnthropicApiKeyAsync,
             EnvConfig.AnthropicDeploymentName,
             loggerFactory?.CreateLogger<OnboardingSubagent>(),
             loggerFactory?.CreateLogger<OnboardingSubagentTools>(),
