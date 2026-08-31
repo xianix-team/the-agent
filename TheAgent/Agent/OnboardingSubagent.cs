@@ -32,28 +32,13 @@ public sealed class OnboardingSubagent
         "I wasn't able to finish updating that execution in rules.json just now. " +
         "Please ask me to apply the change again and I'll retry.";
 
-    private const string UnverifiedInstallRetryNudge =
+    private const string UnverifiedClaimRetryNudge =
         "\n\n## CRITICAL\n\n" +
-        "Your previous reply claimed a plugin was installed, but InstallPlugins / " +
-        "VerifyInstalledPlugins did not confirm it in rules.json this turn. " +
-        "Call InstallPlugins now (or VerifyInstalledPlugins if already saved), wait for " +
-        "ok=true and claimAllowed=true, then reply only from that result. " +
-        "If the user skipped an execution or match-any alternative, pass skipExecutions / " +
-        "skipMatchAny so the save replaces rules.json (merge keeps omitted executions). " +
-        "Do not claim install or execution updates from memory.";
-
-    private const string UnverifiedExecutionRetryNudge =
-        "\n\n## CRITICAL\n\n" +
-        "Your previous reply claimed an execution or match-any change was saved, but the " +
-        "tools did not confirm it in rules.json this turn. Call InstallPlugins (with " +
-        "skipExecutions / skipMatchAny when needed) or UpdateTriggerLabel, wait for " +
-        "ok=true, then reply only from that result.";
-
-    private const string UnverifiedTriggerLabelRetryNudge =
-        "\n\n## CRITICAL\n\n" +
-        "Your previous reply claimed the trigger label was updated, but UpdateTriggerLabel " +
-        "or InstallPlugins did not confirm it this turn. Call the appropriate tool, wait " +
-        "for ok=true, then reply only from that result.";
+        "Your previous reply claimed a setup step succeeded, but no mutating tool returned " +
+        "ok=true with claimAllowed=true this turn. Re-read the last tool result, call the " +
+        "appropriate tool again (InstallPlugins, UpdateTriggerLabel, VerifyInstalledPlugins, " +
+        "RegisterGitHubRepositoryWebhook, or SaveRules), wait for claimAllowed=true, then " +
+        "reply only from that evidence. Do not claim success from memory or intent.";
 
     private readonly AnthropicChatSubagent _runner;
     private readonly ILogger<OnboardingSubagentTools> _toolsLogger;
@@ -103,6 +88,11 @@ public sealed class OnboardingSubagent
             .ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Last-resort safety net when the model narrates success without tool evidence.
+    /// Primary judge is the model reading <c>claimAllowed</c> from tool results (see system
+    /// prompt); this gate only compares narration patterns against per-turn Verified* flags.
+    /// </summary>
     private ChatTurnGateResult GateReply(
         string text,
         OnboardingSubagentTools tools,
@@ -145,7 +135,7 @@ public sealed class OnboardingSubagent
                 kind, Truncate(text, 400));
             return new ChatTurnGateResult(
                 ChatTurnGateAction.Retry,
-                NextInstructionsOverride: baseInstructions + RetryNudgeFor(kind));
+                NextInstructionsOverride: baseInstructions + UnverifiedClaimRetryNudge);
         }
 
         _logger.LogError(
@@ -153,13 +143,6 @@ public sealed class OnboardingSubagent
             kind, Truncate(text, 400));
         return new ChatTurnGateResult(ChatTurnGateAction.Replace, fallback);
     }
-
-    private static string RetryNudgeFor(string kind) => kind switch
-    {
-        "execution" => UnverifiedExecutionRetryNudge,
-        "trigger-label" => UnverifiedTriggerLabelRetryNudge,
-        _ => UnverifiedInstallRetryNudge,
-    };
 
     private static IList<AITool> CreateTools(OnboardingSubagentTools tools) =>
     [

@@ -640,20 +640,6 @@ public sealed class OnboardingSubagentTools(
 
             VerifiedScmConnectionEstablished = true;
 
-            var (rulesContent, _) = await LoadEffectiveRulesContentAsync().ConfigureAwait(false);
-            if (!string.IsNullOrWhiteSpace(rulesContent))
-            {
-                var patchedRules = RulesGitHubWebhookSecret.EnsureVerificationSecretField(rulesContent);
-                if (!string.Equals(patchedRules, rulesContent, StringComparison.Ordinal))
-                {
-                    await SaveRules(
-                            patchedRules,
-                            requiredPlugins: null,
-                            replaceExisting: false)
-                        .ConfigureAwait(false);
-                }
-            }
-
             return JsonSerializer.Serialize(new
             {
                 ok = true,
@@ -670,9 +656,21 @@ public sealed class OnboardingSubagentTools(
                 message = result.Created
                     ? "Registered the webhook on GitHub and confirmed connectivity via ping."
                     : "Reused an existing GitHub webhook and confirmed connectivity via ping.",
+                rulesVerificationSecret = new
+                {
+                    field = RulesGitHubWebhookSecret.RulesFieldName,
+                    vaultKey = RulesGitHubWebhookSecret.VaultKey,
+                    instruction =
+                        "Before claiming setup complete, call GetCurrentRules. If the Default " +
+                        "webhook block lacks github-webhook-verification-secret pointing at " +
+                        "GITHUB-WEBHOOK-SECRET, call SaveRules to add it, then verify with " +
+                        "GetCurrentRules. Only claim full setup success after rules reflect this field.",
+                },
                 hint = "Report separately: 'Xians webhook: ✅ Created' and " +
                        "'GitHub connection: ✅ Established — ping succeeded on {repo} " +
-                       "(HTTP {lastResponseCode}), events: {events}'.",
+                       "(HTTP {lastResponseCode}), events: {events}'. " +
+                       "If rulesVerificationSecret applies, complete the SaveRules step before " +
+                       "reporting '8. Setup: ✅ Completed'.",
             });
         }
         catch (Exception ex)

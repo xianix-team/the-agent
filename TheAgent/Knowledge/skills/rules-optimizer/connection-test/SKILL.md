@@ -13,19 +13,20 @@ Call `GetTenantState` first if webhook URL / repo URL are not already known this
 ### Context
 
 1. Call `GetTenantState` if webhook URL / repo URL are not already known this turn.
-2. **Auto-check** `CheckTenantSecretExists("GITHUB-TOKEN")` before registering.
-   - If `exists: false` → do **not** ask whether they have it. Say only:
+2. **Auto-check** `CheckTenantSecretExists("GITHUB-TOKEN")` and `CheckTenantSecretExists("GITHUB-WEBHOOK-SECRET")` before registering.
+   - If `GITHUB-TOKEN` is `exists: false` → do **not** ask whether they have it. Say only:
 
 ```
 GITHUB-TOKEN is missing. Add it in Studio → Settings → Secrets (exact key name), then say "done".
 ```
 
    - On "done", re-check; only then continue.
+   - If `GITHUB-WEBHOOK-SECRET` is `exists: false`, ask the user to add it in Studio → Settings → Secrets (same value GitHub will use as the webhook secret). Re-check on "done" before registering.
 3. Repo URL, webhook URL from prior create (or `GetTenantState.webhooks`), and `events` = union of `suggestedGitHubWebhookEvents` for installed plugins (default `issues,pull_request,issue_comment,push`). Never use event `label`.
 
 ### Action
 
-Call `RegisterGitHubRepositoryWebhook` **silently** (only after GITHUB-TOKEN exists).
+Call `RegisterGitHubRepositoryWebhook` **silently** (only after GITHUB-TOKEN and GITHUB-WEBHOOK-SECRET exist).
 
 **Forbidden narration** (never say these before/during the tool call):
 - "Now registering this webhook with GitHub…"
@@ -39,6 +40,9 @@ The user must only see the **evidence line after** the tool returns.
 Report from tool fields only — examples:
 
 **Success** (`registrationStatus=registered` + `connectionStatus=established`):
+
+1. If the tool returns `rulesVerificationSecret`, call `GetCurrentRules`. When the Default webhook block lacks `github-webhook-verification-secret` → `GITHUB-WEBHOOK-SECRET`, call `SaveRules` to add it, then re-read with `GetCurrentRules` before the final setup line.
+2. Then report:
 
 ```
 7. Connect SCM: ✅ Established — ping succeeded on {owner/repo} (HTTP {lastResponseCode}), events: {events}.
