@@ -230,6 +230,42 @@ public class RulesIntegrityGateTests
     }
 
     [Fact]
+    public void Validate_PluginWithoutMarketplaceField_Passes()
+    {
+        Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", "enforce");
+        try
+        {
+            var rules =
+                """
+                [
+                  {
+                    "webhook": "Default",
+                    "executions": [
+                      {
+                        "name": "builtin-marketplace",
+                        "match-any": [],
+                        "use-inputs": [],
+                        "use-plugins": [
+                          {
+                            "plugin-name": "pr-reviewer@xianix-plugins-official"
+                          }
+                        ],
+                        "execute-prompt": "run"
+                      }
+                    ]
+                  }
+                ]
+                """;
+
+            RulesIntegrityGate.Validate(rules, NullLogger.Instance, verifyContentHash: false);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", null);
+        }
+    }
+
+    [Fact]
     public void Validate_PathTraversalMarketplacePattern_Rejected()
     {
         Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", "enforce");
@@ -420,6 +456,145 @@ public class RulesIntegrityGateTests
                 RulesIntegrityGate.Validate(invalidRoot, NullLogger.Instance, verifyContentHash: false));
 
             // Schema validation rejects a non-array root before the marketplace walk runs.
+            Assert.Equal(RulesIntegrityFailureKind.SchemaValidation, ex.Kind);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", null);
+        }
+    }
+
+    [Fact]
+    public void Validate_OffMode_BypassesAllGates()
+    {
+        Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", "off");
+        Environment.SetEnvironmentVariable("RULES-APPROVED-HASHES", null);
+        try
+        {
+            var poisoned =
+                """
+                [
+                  {
+                    "webhook": "Default",
+                    "executions": [
+                      {
+                        "name": "evil",
+                        "repository": { "url": { "value": "https://x", "constant": "true" } },
+                        "match-any": [],
+                        "use-inputs": [],
+                        "use-plugins": [
+                          {
+                            "plugin-name": "evil@evil",
+                            "marketplace": "https://attacker.example/marketplace.json"
+                          }
+                        ],
+                        "execute-prompt": "pwn"
+                      }
+                    ]
+                  }
+                ]
+                """;
+
+            var hash = RulesIntegrityGate.Validate(
+                poisoned,
+                NullLogger.Instance,
+                verifyContentHash: true);
+
+            Assert.NotEmpty(hash);
+            Assert.NotEqual(RulesIntegrityGate.EmbeddedRulesContentSha256, hash);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", null);
+        }
+    }
+
+    [Fact]
+    public void ValidateSchema_OffMode_BypassesSchemaValidation()
+    {
+        Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", "off");
+        try
+        {
+            var badRules =
+                """
+                [
+                  {
+                    "webhook": "Default",
+                    "executions": [
+                      {
+                        "name": "bad-constant-block",
+                        "repository": { "url": { "value": "https://x", "constant": "true" } },
+                        "match-any": [],
+                        "use-inputs": [],
+                        "use-plugins": [],
+                        "execute-prompt": "ok"
+                      }
+                    ]
+                  }
+                ]
+                """;
+
+            var exception = Record.Exception(() =>
+                RulesIntegrityGate.ValidateSchema(badRules, NullLogger.Instance));
+
+            Assert.Null(exception);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", null);
+        }
+    }
+
+    [Fact]
+    public void Validate_OversizedPayload_ThrowsInEnforceMode()
+    {
+        Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", "enforce");
+        try
+        {
+            var oversized = new string('x', RulesIntegrityGate.MaxRulesJsonBytes + 1);
+
+            var ex = Assert.Throws<RulesIntegrityException>(() =>
+                RulesIntegrityGate.Validate(oversized, NullLogger.Instance, verifyContentHash: false));
+
+            Assert.Equal(RulesIntegrityFailureKind.SchemaValidation, ex.Kind);
+            Assert.Contains("exceeds maximum size", ex.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", null);
+        }
+    }
+
+    [Fact]
+    public void ValidateSchema_OversizedPayload_ThrowsInEnforceMode()
+    {
+        Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", "enforce");
+        try
+        {
+            var oversized = new string('x', RulesIntegrityGate.MaxRulesJsonBytes + 1);
+
+            var ex = Assert.Throws<RulesIntegrityException>(() =>
+                RulesIntegrityGate.ValidateSchema(oversized, NullLogger.Instance));
+
+            Assert.Equal(RulesIntegrityFailureKind.SchemaValidation, ex.Kind);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", null);
+        }
+    }
+
+    [Fact]
+    public void Validate_OversizedPayload_StillRejectedInOffMode()
+    {
+        Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", "off");
+        try
+        {
+            var oversized = new string('x', RulesIntegrityGate.MaxRulesJsonBytes + 1);
+
+            var ex = Assert.Throws<RulesIntegrityException>(() =>
+                RulesIntegrityGate.Validate(oversized, NullLogger.Instance, verifyContentHash: false));
+
             Assert.Equal(RulesIntegrityFailureKind.SchemaValidation, ex.Kind);
         }
         finally

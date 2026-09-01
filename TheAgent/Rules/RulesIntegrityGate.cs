@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
@@ -17,6 +18,9 @@ public static class RulesIntegrityGate
     /// <summary>Official Xianix plugin marketplace shipped with every agent.</summary>
     public const string DefaultMarketplace = "xianix-team/plugins-official";
 
+    /// <summary>Maximum UTF-8 byte length of a <c>rules.json</c> knowledge payload.</summary>
+    internal const int MaxRulesJsonBytes = 1_048_576;
+
     private static readonly Lazy<string> EmbeddedRulesHash = new(() =>
         RulesContentHasher.ComputeSha256Hex(RulesEmbeddedResources.LoadRulesJson()));
 
@@ -35,6 +39,9 @@ public static class RulesIntegrityGate
     {
         var mode = EnvConfig.RulesIntegrityMode;
         if (mode == RulesIntegrityMode.Off)
+            return;
+
+        if (TryRejectOversizedPayload(rulesJson, logger, mode))
             return;
 
         var schemaErrors = RulesSchemaValidator.Validate(rulesJson);
@@ -67,6 +74,16 @@ public static class RulesIntegrityGate
         bool verifyContentHash = true)
     {
         var mode = EnvConfig.RulesIntegrityMode;
+
+        if (!IsWithinSizeLimit(rulesJson))
+        {
+            var ex = CreateOversizedPayloadException();
+            if (mode == RulesIntegrityMode.Off)
+                throw ex;
+
+            return HandleFailureWithHash(logger, mode, ex);
+        }
+
         if (mode == RulesIntegrityMode.Off)
             return RulesContentHasher.ComputeSha256Hex(rulesJson);
 
@@ -86,9 +103,8 @@ public static class RulesIntegrityGate
                         RulesIntegrityFailureKind.ContentHashMismatch,
                         "rules.json content hash is not approved. The knowledge document was modified "
                         + "outside the agent deployment baseline. Add the hash to RULES-APPROVED-HASHES "
-                        + "after security review, or redeploy the agent with the updated embedded rules.",
-                        contentHash,
-                        approvedHashes.ToList()));
+                        +                         "after security review, or redeploy the agent with the updated embedded rules.",
+                        contentHash));
             }
         }
 
@@ -136,6 +152,45 @@ public static class RulesIntegrityGate
         return hashes;
     }
 
+    private static bool IsWithinSizeLimit(string rulesJson) =>
+        Encoding.UTF8.GetByteCount(rulesJson) <= MaxRulesJsonBytes;
+
+    private static RulesIntegrityException CreateOversizedPayloadException() =>
+        new(
+            RulesIntegrityFailureKind.SchemaValidation,
+            $"rules.json exceeds maximum size of {MaxRulesJsonBytes:N0} bytes.");
+
+    /// <summary>
+    /// Rejects oversize payloads before hash computation or JSON parsing. Returns <c>true</c>
+    /// when the payload was rejected in audit mode (logged, no throw). Throws in enforce and
+    /// off modes.
+    /// </summary>
+    private static bool TryRejectOversizedPayload(
+        string rulesJson,
+        ILogger? logger,
+        RulesIntegrityMode mode)
+    {
+        if (IsWithinSizeLimit(rulesJson))
+            return false;
+
+        var ex = CreateOversizedPayloadException();
+        if (mode == RulesIntegrityMode.Off)
+            throw ex;
+
+        HandleFailure(logger, mode, ex);
+        return true;
+    }
+
+    /// <summary>
+    /// Central failure handler for integrity violations. Always logs at error level, then:
+    /// <list type="bullet">
+    ///   <item><description><see cref="RulesIntegrityMode.Audit"/> — logs a warning and returns
+    ///     without throwing so callers can continue with degraded behaviour.</description></item>
+    ///   <item><description><see cref="RulesIntegrityMode.Enforce"/> — rethrows <paramref name="ex"/>
+    ///     to fail closed.</description></item>
+    /// </list>
+    /// <see cref="RulesIntegrityMode.Off"/> never reaches this method — gates are skipped earlier.
+    /// </summary>
     private static void HandleFailure(ILogger? logger, RulesIntegrityMode mode, RulesIntegrityException ex)
     {
         logger?.LogError(ex, "Rules integrity gate rejected rules.json ({FailureKind}).", ex.Kind);

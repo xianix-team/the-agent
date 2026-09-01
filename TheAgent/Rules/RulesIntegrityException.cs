@@ -17,20 +17,15 @@ public sealed class RulesIntegrityException : Exception
     public RulesIntegrityException(
         RulesIntegrityFailureKind kind,
         string message,
-        string? computedHash = null,
-        IReadOnlyList<string>? approvedHashes = null)
+        string? computedHash = null)
         : base(message)
     {
         Kind = kind;
         ComputedHash = computedHash;
-        ApprovedHashes = approvedHashes ?? [];
     }
 
     public RulesIntegrityFailureKind Kind { get; }
 
     /// <summary>SHA-256 of the rejected document content, when applicable.</summary>
     public string? ComputedHash { get; }
-
-    /// <summary>Hashes that would have been accepted (embedded + env-approved).</summary>
-    public IReadOnlyList<string> ApprovedHashes { get; }
 }
