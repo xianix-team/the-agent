@@ -1,3 +1,5 @@
+using Xianix.Rules;
+
 namespace TheAgent;
 
 public static class EnvConfig
@@ -160,4 +162,41 @@ public static class EnvConfig
     /// Defaults to the cheapest tier so building context never becomes a meaningful cost line.
     /// </summary>
     public static string ExecutorContextLlmModel => Get("EXECUTOR-CONTEXT-LLM-MODEL", "claude-haiku-4-5");
+
+    // rules.json integrity (GAP-8)
+    //
+    // RULES-INTEGRITY-MODE controls schema + hash + marketplace gates on every rules.json
+    // load from the Xians knowledge store. Defaults to enforce (fail closed).
+    public static RulesIntegrityMode RulesIntegrityMode =>
+        Get("RULES-INTEGRITY-MODE", "enforce").Trim().ToLowerInvariant() switch
+        {
+            "off" or "disabled" or "false" or "0" => RulesIntegrityMode.Off,
+            "audit" or "warn" => RulesIntegrityMode.Audit,
+            _ => RulesIntegrityMode.Enforce,
+        };
+
+    /// <summary>
+    /// Additional SHA-256 content hashes approved after security review. Comma-separated.
+    /// The embedded agent baseline hash is always trusted without listing it here.
+    /// </summary>
+    public static IReadOnlySet<string> RulesApprovedContentHashes =>
+        ParseHashSet(Get("RULES-APPROVED-HASHES"));
+
+    /// <summary>
+    /// Additional plugin marketplace sources (GitHub <c>owner/repo</c> shorthand) approved
+    /// after security review. The official <c>xianix-team/plugins-official</c> marketplace
+    /// is always allowed.
+    /// </summary>
+    public static IReadOnlySet<string> RulesApprovedMarketplaces =>
+        ParseHashSet(Get("RULES-APPROVED-MARKETPLACES"));
+
+    private static HashSet<string> ParseHashSet(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return [];
+
+        return raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
 }

@@ -15,12 +15,9 @@ namespace Xianix.Rules;
 /// caller open-coded the same three lines, which made it easy to drift on JSON
 /// options, error logging, or the document name.
 ///
-/// The document is fetched via <see cref="XiansContext"/>.<c>CurrentAgent.Knowledge</c>
-/// — same channel the Xians platform uses everywhere else — which means this method
-/// is only callable from a workflow / agent execution context where
-/// <see cref="XiansContext.CurrentAgent"/> is bound. Process-startup callers can't
-/// use it directly; they must defer to a later (per-message) call site. See
-/// <see cref="StartupEnvResolver"/> for an example of that deferral.
+/// Before deserialisation, every load passes through <see cref="RulesIntegrityGate"/>
+/// for schema validation, SHA-256 integrity verification, and marketplace allow-list
+/// checks (GAP-8).
 /// </summary>
 public static class RulesKnowledge
 {
@@ -44,16 +41,12 @@ public static class RulesKnowledge
     ///     missing — this is a deployment-level problem (rules.json wasn't uploaded
     ///     at agent startup) that a caller may want to surface as a loud error.</description></item>
     ///   <item><description>An empty list when the document exists but its content is
-    ///     blank or fails to parse — logs are emitted so the operator can see what
-    ///     went wrong, but every caller can keep running with no rules.</description></item>
+    ///     blank or fails integrity / parse checks in audit mode — logs are emitted
+    ///     so the operator can see what went wrong.</description></item>
     ///   <item><description>A non-empty list on success.</description></item>
     /// </list>
-    /// Distinguishing missing-vs-empty is intentional: a missing document means
-    /// "this agent has nothing wired up", while an empty/invalid document means
-    /// "the operator tried to wire something up and it didn't parse" — the two
-    /// failure modes have different operator responses, and conflating them was
-    /// what made the previous duplicated readers each handle this slightly
-    /// differently.
+    /// In <see cref="RulesIntegrityMode.Enforce"/> mode, schema or integrity failures
+    /// throw <see cref="RulesIntegrityException"/> instead of returning an empty list.
     /// </summary>
     /// <param name="logger">Optional logger for missing-document warnings and parse
     /// errors. Pass <see cref="NullLogger.Instance"/> (or omit) to stay silent.</param>
@@ -61,6 +54,63 @@ public static class RulesKnowledge
     {
         logger ??= NullLogger.Instance;
 
+        var content = await GetValidatedContentAsync(logger).ConfigureAwait(false);
+        if (content is null)
+            return null;
+
+        if (content.Length == 0)
+            return [];
+
+        try
+        {
+            return [.. (JsonSerializer.Deserialize<List<WebhookRuleSet>>(content, RulesJsonOptions)
+                   ?? []).Where(e => !string.IsNullOrWhiteSpace(e.WebhookName))];
+        }
+        catch (JsonException ex)
+        {
+            logger.LogError(
+                ex,
+                "Failed to parse rules knowledge document '{RulesName}' after integrity " +
+                "gate passed — treating as empty rule list.", Constants.RulesKnowledgeName);
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Loads the chat rule sets from the same <see cref="Constants.RulesKnowledgeName"/>
+    /// document. Chat rule sets are the root-level siblings of webhook (and schedule) rule
+    /// sets, discriminated by a non-empty <c>"chat"</c> name.
+    /// </summary>
+    public static async Task<List<ChatRuleSet>> LoadChatRuleSetsAsync(ILogger? logger = null)
+    {
+        logger ??= NullLogger.Instance;
+
+        var content = await GetValidatedContentAsync(logger).ConfigureAwait(false);
+        if (content is null || content.Length == 0)
+            return [];
+
+        try
+        {
+            return [.. (JsonSerializer.Deserialize<List<ChatRuleSet>>(content, RulesJsonOptions)
+                   ?? []).Where(e => !string.IsNullOrWhiteSpace(e.ChatName))];
+        }
+        catch (JsonException ex)
+        {
+            logger.LogError(
+                ex,
+                "Failed to parse chat rule sets from knowledge document '{RulesName}' after " +
+                "integrity gate passed — treating as no chat rule sets.", Constants.RulesKnowledgeName);
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Fetches the rules knowledge document, runs the integrity gate, and returns the raw
+    /// JSON text. Returns <c>null</c> when the document is missing; an empty string when
+    /// the document exists but has blank content.
+    /// </summary>
+    internal static async Task<string?> GetValidatedContentAsync(ILogger logger)
+    {
         var doc = await XiansContext.CurrentAgent.Knowledge
             .GetAsync(Constants.RulesKnowledgeName)
             .ConfigureAwait(false);
@@ -78,59 +128,23 @@ public static class RulesKnowledge
             logger.LogWarning(
                 "Rules knowledge document '{RulesName}' exists but has empty content.",
                 Constants.RulesKnowledgeName);
-            return [];
+            return "";
         }
 
         try
         {
-            return [.. (JsonSerializer.Deserialize<List<WebhookRuleSet>>(doc.Content, RulesJsonOptions)
-                   ?? []).Where(e => !string.IsNullOrWhiteSpace(e.WebhookName))];
+            var hash = RulesIntegrityGate.Validate(doc.Content, logger, verifyContentHash: true);
+            logger.LogDebug(
+                "Rules knowledge document '{RulesName}' passed integrity gate (sha256={ContentHash}).",
+                Constants.RulesKnowledgeName, hash);
+            return doc.Content;
         }
-        catch (JsonException ex)
+        catch (RulesIntegrityException ex) when (TheAgent.EnvConfig.RulesIntegrityMode == RulesIntegrityMode.Audit)
         {
-            logger.LogError(
+            logger.LogWarning(
                 ex,
-                "Failed to parse rules knowledge document '{RulesName}' — treating as empty " +
-                "rule list. Check rules.json syntax in Xians Studio.", Constants.RulesKnowledgeName);
-            return [];
-        }
-    }
-
-    /// <summary>
-    /// Loads the chat rule sets from the same <see cref="Constants.RulesKnowledgeName"/>
-    /// document. Chat rule sets are the root-level siblings of webhook (and schedule) rule
-    /// sets, discriminated by a non-empty <c>"chat"</c> name — exactly the same document
-    /// shape the <c>ScheduleEvaluator</c> re-parses for its <c>"schedule"</c> entries. Only
-    /// entries with a non-empty <see cref="ChatRuleSet.ChatName"/> are returned, so webhook /
-    /// schedule rule sets are ignored here just as chat rule sets are ignored by
-    /// <see cref="LoadAsync"/>.
-    /// </summary>
-    /// <returns>An empty list when the document is missing, blank, or unparseable — callers
-    /// (the chat plugin catalog) degrade to "no chat rule sets", falling back to webhook
-    /// usage examples.</returns>
-    public static async Task<List<ChatRuleSet>> LoadChatRuleSetsAsync(ILogger? logger = null)
-    {
-        logger ??= NullLogger.Instance;
-
-        var doc = await XiansContext.CurrentAgent.Knowledge
-            .GetAsync(Constants.RulesKnowledgeName)
-            .ConfigureAwait(false);
-
-        if (doc is null || string.IsNullOrWhiteSpace(doc.Content))
-            return [];
-
-        try
-        {
-            return [.. (JsonSerializer.Deserialize<List<ChatRuleSet>>(doc.Content, RulesJsonOptions)
-                   ?? []).Where(e => !string.IsNullOrWhiteSpace(e.ChatName))];
-        }
-        catch (JsonException ex)
-        {
-            logger.LogError(
-                ex,
-                "Failed to parse chat rule sets from knowledge document '{RulesName}' — treating " +
-                "as no chat rule sets. Check rules.json syntax in Xians Studio.", Constants.RulesKnowledgeName);
-            return [];
+                "Rules integrity gate failed in audit mode — treating rules as empty.");
+            return "";
         }
     }
 }

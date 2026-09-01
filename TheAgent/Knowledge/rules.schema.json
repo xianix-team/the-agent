@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xianix.com/schemas/the-agent/rules.schema.json",
+  "title": "rules.json",
+  "description": "Agent rules knowledge document — webhook, chat, and schedule rule sets.",
+  "type": "array",
+  "minItems": 1,
+  "items": {
+    "type": "object",
+    "oneOf": [
+      { "$ref": "#/$defs/webhookRuleSet" },
+      { "$ref": "#/$defs/chatRuleSet" },
+      { "$ref": "#/$defs/scheduleRuleSet" }
+    ]
+  },
+  "$defs": {
+    "envEntry": {
+      "type": "object",
+      "required": ["name", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "value": { "type": "string" },
+        "constant": { "type": "boolean" },
+        "mandatory": { "type": "boolean" }
+      }
+    },
+    "pluginEntry": {
+      "type": "object",
+      "required": ["plugin-name"],
+      "additionalProperties": false,
+      "properties": {
+        "plugin-name": { "type": "string", "minLength": 1 },
+        "marketplace": { "type": "string" },
+        "slash-command": { "type": "string" }
+      }
+    },
+    "matchEntry": {
+      "type": "object",
+      "required": ["rule"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "rule": { "type": "string" }
+      }
+    },
+    "inputEntry": {
+      "type": "object",
+      "required": ["name", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "value": { "type": "string" },
+        "constant": { "type": "boolean" },
+        "mandatory": { "type": "boolean" }
+      }
+    },
+    "repoFieldBinding": {
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "required": ["value"],
+          "additionalProperties": false,
+          "properties": {
+            "value": { "type": "string" },
+            "constant": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "repositoryBinding": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "required": ["url"],
+          "additionalProperties": false,
+          "properties": {
+            "url": { "$ref": "#/$defs/repoFieldBinding" }
+          }
+        }
+      ]
+    },
+    "webhookExecution": {
+      "type": "object",
+      "required": ["match-any", "execute-prompt"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "platform": { "type": "string" },
+        "repository": { "$ref": "#/$defs/repositoryBinding" },
+        "match-any": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/matchEntry" }
+        },
+        "use-inputs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/inputEntry" }
+        },
+        "use-plugins": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/pluginEntry" }
+        },
+        "with-envs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/envEntry" }
+        },
+        "model": { "type": "string" },
+        "max-turns": { "type": "integer", "minimum": 1 },
+        "allowed-tools": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "disallowed-tools": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "max-budget-usd": { "type": "number", "minimum": 0 },
+        "resume-sessions": { "type": "boolean" },
+        "conversation-key": { "$ref": "#/$defs/repoFieldBinding" },
+        "execute-prompt": { "type": "string" }
+      }
+    },
+    "webhookRuleSet": {
+      "type": "object",
+      "required": ["webhook", "executions"],
+      "additionalProperties": false,
+      "properties": {
+        "webhook": { "type": "string", "minLength": 1 },
+        "github-webhook-verification-secret": { "type": "string" },
+        "azuredevops-webhook-verification-secret": { "type": "string" },
+        "azuredevops-webhook-verification-header": { "type": "string" },
+        "with-envs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/envEntry" }
+        },
+        "executions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/webhookExecution" }
+        }
+      }
+    },
+    "chatRuleSet": {
+      "type": "object",
+      "required": ["chat", "use-plugins"],
+      "additionalProperties": false,
+      "properties": {
+        "chat": { "type": "string", "minLength": 1 },
+        "with-envs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/envEntry" }
+        },
+        "use-plugins": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/pluginEntry" }
+        },
+        "model": { "type": "string" },
+        "max-turns": { "type": "integer", "minimum": 1 },
+        "allowed-tools": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "disallowed-tools": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "max-budget-usd": { "type": "number", "minimum": 0 },
+        "resume-sessions": { "type": "boolean" }
+      }
+    },
+    "scheduleRuleSet": {
+      "type": "object",
+      "required": ["schedule", "cron"],
+      "additionalProperties": false,
+      "properties": {
+        "schedule": { "type": "string", "minLength": 1 },
+        "cron": { "type": "string", "minLength": 1 },
+        "executions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/webhookExecution" }
+        }
+      }
+    }
+  }
+}
