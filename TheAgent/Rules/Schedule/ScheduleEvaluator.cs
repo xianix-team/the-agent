@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CronExpressionDescriptor;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xianix.Rules;
 
@@ -9,9 +10,11 @@ public sealed class ScheduleEvaluator()
 {
     private static readonly JsonSerializerOptions RulesJsonOptions = RulesKnowledge.RulesJsonOptions;
 
-    public async Task<List<ScheduleEntry>> Evaluate()
+    public async Task<List<ScheduleEntry>> Evaluate(ILogger? logger = null)
     {
-        var content = await RulesKnowledge.GetValidatedContentAsync(NullLogger.Instance)
+        logger ??= NullLogger.Instance;
+
+        var content = await RulesKnowledge.GetValidatedContentAsync(logger)
             .ConfigureAwait(false);
         if (content is null)
             throw new InvalidOperationException("No rules knowledge document found.");

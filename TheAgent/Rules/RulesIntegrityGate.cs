@@ -21,7 +21,7 @@ public static class RulesIntegrityGate
         RulesContentHasher.ComputeSha256Hex(RulesEmbeddedResources.LoadRulesJson()));
 
     private static readonly Regex GitHubMarketplacePattern = new(
-        @"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+        @"^[A-Za-z0-9][A-Za-z0-9_.-]*[A-Za-z0-9]/[A-Za-z0-9][A-Za-z0-9_.-]*[A-Za-z0-9]$",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     /// <summary>SHA-256 of the embedded <c>Knowledge/rules.json</c> shipped with this agent build.</summary>
@@ -70,8 +70,31 @@ public static class RulesIntegrityGate
         if (mode == RulesIntegrityMode.Off)
             return RulesContentHasher.ComputeSha256Hex(rulesJson);
 
+        // Hash the exact input bytes before any parsing or structural validation so
+        // integrity is checked on the raw knowledge payload, not on a post-parse view.
+        var contentHash = RulesContentHasher.ComputeSha256Hex(rulesJson);
+
+        if (verifyContentHash)
+        {
+            var approvedHashes = GetApprovedContentHashes();
+            if (!approvedHashes.Contains(contentHash))
+            {
+                return HandleFailureWithHash(
+                    logger,
+                    mode,
+                    new RulesIntegrityException(
+                        RulesIntegrityFailureKind.ContentHashMismatch,
+                        "rules.json content hash is not approved. The knowledge document was modified "
+                        + "outside the agent deployment baseline. Add the hash to RULES-APPROVED-HASHES "
+                        + "after security review, or redeploy the agent with the updated embedded rules.",
+                        contentHash,
+                        approvedHashes.ToList()));
+            }
+        }
+
         var schemaErrors = RulesSchemaValidator.Validate(rulesJson);
         if (schemaErrors.Count > 0)
+        {
             return HandleFailureWithHash(
                 logger,
                 mode,
@@ -79,36 +102,24 @@ public static class RulesIntegrityGate
                     RulesIntegrityFailureKind.SchemaValidation,
                     "rules.json failed schema validation: " +
                     string.Join("; ", schemaErrors.Take(5)) +
-                    (schemaErrors.Count > 5 ? $" (+{schemaErrors.Count - 5} more)" : "")));
+                    (schemaErrors.Count > 5 ? $" (+{schemaErrors.Count - 5} more)" : ""),
+                    contentHash));
+        }
 
         var marketplaceErrors = ValidatePluginMarketplaces(rulesJson);
         if (marketplaceErrors.Count > 0)
+        {
             return HandleFailureWithHash(
                 logger,
                 mode,
                 new RulesIntegrityException(
                     RulesIntegrityFailureKind.DisallowedMarketplace,
                     "rules.json references disallowed plugin marketplace(s): " +
-                    string.Join("; ", marketplaceErrors)));
+                    string.Join("; ", marketplaceErrors),
+                    contentHash));
+        }
 
-        var contentHash = RulesContentHasher.ComputeSha256Hex(rulesJson);
-        if (!verifyContentHash)
-            return contentHash;
-
-        var approvedHashes = GetApprovedContentHashes();
-        if (approvedHashes.Contains(contentHash))
-            return contentHash;
-
-        return HandleFailureWithHash(
-            logger,
-            mode,
-            new RulesIntegrityException(
-                RulesIntegrityFailureKind.ContentHashMismatch,
-                "rules.json content hash is not approved. The knowledge document was modified "
-                + "outside the agent deployment baseline. Add the hash to RULES-APPROVED-HASHES "
-                + "after security review, or redeploy the agent with the updated embedded rules.",
-                contentHash,
-                approvedHashes.ToList()));
+        return contentHash;
     }
 
     /// <summary>Returns every content hash the agent will accept (embedded + env-approved).</summary>
@@ -166,7 +177,7 @@ public static class RulesIntegrityGate
 
         foreach (var ruleSet in doc.RootElement.EnumerateArray())
         {
-            CollectPluginMarketplaces(ruleSet, "with-envs", violations, allowedMarketplaces, isRoot: true);
+            // with-envs holds env entries ({name, value, ...}), not plugins — only use-plugins carries marketplaces.
             CollectPluginMarketplaces(ruleSet, "use-plugins", violations, allowedMarketplaces, isRoot: true);
 
             if (!ruleSet.TryGetProperty("executions", out var executions)
@@ -233,20 +244,20 @@ public static class RulesIntegrityGate
 
     private static bool IsAllowedMarketplace(string marketplace, IReadOnlySet<string> allowedMarketplaces)
     {
-        if (allowedMarketplaces.Contains(marketplace))
-            return true;
-
         if (string.IsNullOrWhiteSpace(marketplace))
             return true;
 
-        // Reject URLs, local paths, and other non-GitHub-shorthand sources outright.
+        // Reject malformed patterns before the allowlist — env-approved entries must
+        // still be well-formed GitHub owner/repo shorthand.
         if (marketplace.Contains("://", StringComparison.Ordinal)
             || marketplace.StartsWith("/", StringComparison.Ordinal)
             || marketplace.StartsWith(".", StringComparison.Ordinal)
             || marketplace.Contains('\\'))
             return false;
 
-        return GitHubMarketplacePattern.IsMatch(marketplace)
-               && allowedMarketplaces.Contains(marketplace);
+        if (!GitHubMarketplacePattern.IsMatch(marketplace))
+            return false;
+
+        return allowedMarketplaces.Contains(marketplace);
     }
 }
