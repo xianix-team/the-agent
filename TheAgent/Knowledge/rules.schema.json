@@ -19,8 +19,8 @@
       "required": ["name", "value"],
       "additionalProperties": false,
       "properties": {
-        "name": { "type": "string" },
-        "value": { "type": "string" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "value": { "type": "string", "maxLength": 10000 },
         "constant": { "type": "boolean" },
         "mandatory": { "type": "boolean" }
       }
@@ -30,9 +30,9 @@
       "required": ["plugin-name"],
       "additionalProperties": false,
       "properties": {
-        "plugin-name": { "type": "string", "minLength": 1 },
-        "marketplace": { "type": "string" },
-        "slash-command": { "type": "string" }
+        "plugin-name": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "marketplace": { "type": "string", "maxLength": 256 },
+        "slash-command": { "type": "string", "maxLength": 256 }
       }
     },
     "matchEntry": {
@@ -40,8 +40,8 @@
       "required": ["rule"],
       "additionalProperties": false,
       "properties": {
-        "name": { "type": "string" },
-        "rule": { "type": "string" }
+        "name": { "type": "string", "maxLength": 256 },
+        "rule": { "type": "string", "maxLength": 10000 }
       }
     },
     "inputEntry": {
@@ -49,21 +49,21 @@
       "required": ["name", "value"],
       "additionalProperties": false,
       "properties": {
-        "name": { "type": "string" },
-        "value": { "type": "string" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "value": { "type": "string", "maxLength": 10000 },
         "constant": { "type": "boolean" },
         "mandatory": { "type": "boolean" }
       }
     },
     "repoFieldBinding": {
       "oneOf": [
-        { "type": "string" },
+        { "type": "string", "maxLength": 10000 },
         {
           "type": "object",
           "required": ["value"],
           "additionalProperties": false,
           "properties": {
-            "value": { "type": "string" },
+            "value": { "type": "string", "maxLength": 10000 },
             "constant": { "type": "boolean" }
           }
         }
@@ -71,7 +71,7 @@
     },
     "repositoryBinding": {
       "oneOf": [
-        { "type": "string", "minLength": 1 },
+        { "type": "string", "minLength": 1, "maxLength": 10000 },
         {
           "type": "object",
           "required": ["url"],
@@ -87,8 +87,8 @@
       "required": ["match-any", "execute-prompt"],
       "additionalProperties": false,
       "properties": {
-        "name": { "type": "string" },
-        "platform": { "type": "string" },
+        "name": { "type": "string", "maxLength": 256 },
+        "platform": { "type": "string", "maxLength": 256 },
         "repository": { "$ref": "#/$defs/repositoryBinding" },
         "match-any": {
           "type": "array",
@@ -106,20 +106,20 @@
           "type": "array",
           "items": { "$ref": "#/$defs/envEntry" }
         },
-        "model": { "type": "string" },
+        "model": { "type": "string", "maxLength": 256 },
         "max-turns": { "type": "integer", "minimum": 1 },
         "allowed-tools": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": { "type": "string", "maxLength": 256 }
         },
         "disallowed-tools": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": { "type": "string", "maxLength": 256 }
         },
         "max-budget-usd": { "type": "number", "minimum": 0 },
         "resume-sessions": { "type": "boolean" },
         "conversation-key": { "$ref": "#/$defs/repoFieldBinding" },
-        "execute-prompt": { "type": "string" }
+        "execute-prompt": { "type": "string", "maxLength": 10000 }
       }
     },
     "webhookRuleSet": {
@@ -127,10 +127,10 @@
       "required": ["webhook", "executions"],
       "additionalProperties": false,
       "properties": {
-        "webhook": { "type": "string", "minLength": 1 },
-        "github-webhook-verification-secret": { "type": "string" },
-        "azuredevops-webhook-verification-secret": { "type": "string" },
-        "azuredevops-webhook-verification-header": { "type": "string" },
+        "webhook": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "github-webhook-verification-secret": { "type": "string", "maxLength": 10000 },
+        "azuredevops-webhook-verification-secret": { "type": "string", "maxLength": 10000 },
+        "azuredevops-webhook-verification-header": { "type": "string", "maxLength": 256 },
         "with-envs": {
           "type": "array",
           "items": { "$ref": "#/$defs/envEntry" }
@@ -147,7 +147,7 @@
       "required": ["chat", "use-plugins"],
       "additionalProperties": false,
       "properties": {
-        "chat": { "type": "string", "minLength": 1 },
+        "chat": { "type": "string", "minLength": 1, "maxLength": 256 },
         "with-envs": {
           "type": "array",
           "items": { "$ref": "#/$defs/envEntry" }
@@ -157,15 +157,15 @@
           "minItems": 1,
           "items": { "$ref": "#/$defs/pluginEntry" }
         },
-        "model": { "type": "string" },
+        "model": { "type": "string", "maxLength": 256 },
         "max-turns": { "type": "integer", "minimum": 1 },
         "allowed-tools": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": { "type": "string", "maxLength": 256 }
         },
         "disallowed-tools": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": { "type": "string", "maxLength": 256 }
         },
         "max-budget-usd": { "type": "number", "minimum": 0 },
         "resume-sessions": { "type": "boolean" }
@@ -176,8 +176,8 @@
       "required": ["schedule", "cron"],
       "additionalProperties": false,
       "properties": {
-        "schedule": { "type": "string", "minLength": 1 },
-        "cron": { "type": "string", "minLength": 1 },
+        "schedule": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "cron": { "type": "string", "minLength": 1, "maxLength": 256 },
         "executions": {
           "type": "array",
           "items": { "$ref": "#/$defs/webhookExecution" }
