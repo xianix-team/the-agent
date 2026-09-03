@@ -1,32 +1,25 @@
 using System.Text.Json;
 using CronExpressionDescriptor;
-using Xians.Lib.Agents.Core;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Xianix.Rules;
 
 namespace Xianix.Rules.Schedule;
 
 public sealed class ScheduleEvaluator()
 {
-    private static readonly JsonSerializerOptions RulesJsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-        ReadCommentHandling = JsonCommentHandling.Skip,
-        AllowTrailingCommas = true,
-    };
-    private static readonly JsonSerializerOptions RulesDumpJsonOptions = new()
-    {
-        WriteIndented = true,
-    };
+    private static readonly JsonSerializerOptions RulesJsonOptions = RulesKnowledge.RulesJsonOptions;
 
-    public async Task<List<ScheduleEntry>> Evaluate()
+    public async Task<List<ScheduleEntry>> Evaluate(ILogger? logger = null)
     {
+        logger ??= NullLogger.Instance;
 
-        var rulesKnowledge = await XiansContext.CurrentAgent.Knowledge.GetAsync(Constants.RulesKnowledgeName);
-        if (rulesKnowledge == null)
-        {
+        var content = await RulesKnowledge.GetValidatedContentAsync(logger)
+            .ConfigureAwait(false);
+        if (content is null)
             throw new InvalidOperationException("No rules knowledge document found.");
-        }
 
-        return ParseRules(rulesKnowledge.Content);
+        return ParseRules(content);
     }
 
     public List<ScheduleEntry> ParseRules(string rulesJson)
