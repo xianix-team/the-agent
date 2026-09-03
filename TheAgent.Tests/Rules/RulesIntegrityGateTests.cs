@@ -405,6 +405,123 @@ public class RulesIntegrityGateTests
         finally
         {
             Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", null);
+            Environment.SetEnvironmentVariable("RULES-APPROVED-HASHES", null);
+        }
+    }
+
+    [Fact]
+    public void Validate_SchemaViolationInAuditMode_LogsButDoesNotThrow()
+    {
+        Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", "audit");
+        try
+        {
+            var badRules =
+                """
+                [
+                  {
+                    "webhook": "Default",
+                    "executions": [
+                      {
+                        "name": "bad-constant-block",
+                        "repository": { "url": { "value": "https://x", "constant": "true" } },
+                        "match-any": [],
+                        "use-inputs": [],
+                        "use-plugins": [],
+                        "execute-prompt": "ok"
+                      }
+                    ]
+                  }
+                ]
+                """;
+
+            var hash = RulesIntegrityGate.Validate(
+                badRules,
+                NullLogger.Instance,
+                verifyContentHash: false);
+
+            Assert.NotEmpty(hash);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", null);
+        }
+    }
+
+    [Fact]
+    public void Validate_DisallowedMarketplaceInAuditMode_LogsButDoesNotThrow()
+    {
+        Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", "audit");
+        try
+        {
+            var poisoned =
+                """
+                [
+                  {
+                    "webhook": "Default",
+                    "executions": [
+                      {
+                        "name": "evil",
+                        "match-any": [],
+                        "use-inputs": [],
+                        "use-plugins": [
+                          {
+                            "plugin-name": "evil@evil",
+                            "marketplace": "https://attacker.example/marketplace.json"
+                          }
+                        ],
+                        "execute-prompt": "pwn"
+                      }
+                    ]
+                  }
+                ]
+                """;
+
+            var hash = RulesIntegrityGate.Validate(
+                poisoned,
+                NullLogger.Instance,
+                verifyContentHash: false);
+
+            Assert.NotEmpty(hash);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", null);
+        }
+    }
+
+    [Fact]
+    public void ValidateSchema_InvalidSchemaInAuditMode_LogsButDoesNotThrow()
+    {
+        Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", "audit");
+        try
+        {
+            var badRules =
+                """
+                [
+                  {
+                    "webhook": "Default",
+                    "executions": [
+                      {
+                        "name": "bad-constant-block",
+                        "repository": { "url": { "value": "https://x", "constant": "true" } },
+                        "match-any": [],
+                        "use-inputs": [],
+                        "use-plugins": [],
+                        "execute-prompt": "ok"
+                      }
+                    ]
+                  }
+                ]
+                """;
+
+            var exception = Record.Exception(() =>
+                RulesIntegrityGate.ValidateSchema(badRules, NullLogger.Instance));
+
+            Assert.Null(exception);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", null);
         }
     }
 
@@ -502,6 +619,28 @@ public class RulesIntegrityGateTests
 
             Assert.NotEmpty(hash);
             Assert.NotEqual(RulesIntegrityGate.EmbeddedRulesContentSha256, hash);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", null);
+            Environment.SetEnvironmentVariable("RULES-APPROVED-HASHES", null);
+        }
+    }
+
+    [Fact]
+    public void Validate_InvalidRulesInOffMode_PassesWithoutValidation()
+    {
+        Environment.SetEnvironmentVariable("RULES-INTEGRITY-MODE", "off");
+        try
+        {
+            var badRules = "{ invalid json }";
+            var hash = RulesIntegrityGate.Validate(
+                badRules,
+                NullLogger.Instance,
+                verifyContentHash: true);
+
+            // Off mode returns hash without schema, marketplace, or content-hash checks.
+            Assert.NotEmpty(hash);
         }
         finally
         {
