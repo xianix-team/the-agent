@@ -704,6 +704,13 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
 
         await InjectExecutionEnvVarsAsync(input.WithEnvsJson, env, prov, input.TenantId);
 
+        // Operator-only: host EXECUTOR-HARDENING-AUDIT is the sole source. with-envs entries
+        // for this name are ignored above; strip any residual dash/underscore form afterwards.
+        env.Remove("XIANIX-HARDENING-AUDIT");
+        env.Remove("XIANIX_HARDENING_AUDIT");
+        if (EnvConfig.ExecutorHardeningAudit)
+            SetRuntime(env, prov, "XIANIX-HARDENING-AUDIT", "1");
+
         LogEnvProvenance(input, prov);
 
         return [.. env.Select(kv => $"{kv.Key}={kv.Value}")];
@@ -767,6 +774,15 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
             var mandatory = entry.TryGetProperty("mandatory", out var m) && m.GetBoolean();
             if (string.IsNullOrEmpty(name) || value is null) continue;
 
+            if (IsOperatorOnlyEnvName(name))
+            {
+                logger.LogWarning(
+                    "Ignoring with-envs entry '{EnvName}' — this variable is operator-only " +
+                    "and cannot be set from rules.json (tenant={TenantId}).",
+                    name, tenantId);
+                continue;
+            }
+
             var (resolved, source, detail) = await ResolveEnvValueAsync(value, constant, name, logger);
 
             if (mandatory && string.IsNullOrWhiteSpace(resolved))
@@ -798,6 +814,17 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
                 $"Ensure these are configured on the agent host (for 'host.*' references) " +
                 $"or in the tenant Secret Vault (for 'secrets.*' references).", nonRetryable: true);
         }
+    }
+
+    /// <summary>
+    /// Env names that must never be set via tenant <c>with-envs</c>. Dash/underscore forms
+    /// are treated as the same name. Today this is the hardening audit switch — enabling it
+    /// disables PreToolUse enforcement and is reserved for operator-controlled test hosts.
+    /// </summary>
+    internal static bool IsOperatorOnlyEnvName(string name)
+    {
+        var normalized = name.Replace('_', '-');
+        return normalized.Equals("XIANIX-HARDENING-AUDIT", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
