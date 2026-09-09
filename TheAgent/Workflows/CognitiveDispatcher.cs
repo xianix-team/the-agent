@@ -20,7 +20,7 @@ public sealed class CognitiveDispatcher
 
         try
         {
-            foreach (ScheduleEntry schedule in await _scheduleEvaluator.Evaluate())
+            foreach (ScheduleEntry schedule in await _scheduleEvaluator.Evaluate(Workflow.Logger))
             {
                 await XiansContext.CurrentAgent.Schedules
                 .Create<JobDispatcherWorkflow>(schedule.ScheduleName)

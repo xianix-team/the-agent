@@ -38,6 +38,8 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
 
         try
         {
+            RulesIntegrityGate.ValidateSchema(rulesJson, _logger);
+
             var sets = JsonSerializer.Deserialize<List<WebhookRuleSet>>(rulesJson, RulesJsonOptions) ?? [];
             _logger.LogDebug(
                 "Parsed {RuleSetCount} webhook rule set(s) from knowledge ({WebhookNames}).",
@@ -48,6 +50,11 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             if (sets.Count == 0)
                 _logger.LogWarning("Rules knowledge deserialized to zero webhook rule sets — check rules JSON.");
             return sets;
+        }
+        catch (RulesIntegrityException ex)
+        {
+            _logger.LogError(ex, "Rules JSON failed integrity/schema validation — returning empty rule set.");
+            return [];
         }
         catch (JsonException ex)
         {
