@@ -160,4 +160,14 @@ public static class EnvConfig
     /// Defaults to the cheapest tier so building context never becomes a meaningful cost line.
     /// </summary>
     public static string ExecutorContextLlmModel => Get("EXECUTOR-CONTEXT-LLM-MODEL", "claude-haiku-4-5");
+
+    /// <summary>
+    /// Operator-only soft-enforcement mode for executor PreToolUse hardening. When enabled,
+    /// policy denials are logged but not enforced. Defaults to <c>false</c>. Seeded into the
+    /// container as <c>XIANIX-HARDENING-AUDIT</c> from the agent host only — never from tenant
+    /// <c>with-envs</c> (those names are rejected at injection). Use only in isolated test
+    /// environments; production must leave this off.
+    /// </summary>
+    public static bool ExecutorHardeningAudit =>
+        Get("EXECUTOR-HARDENING-AUDIT", "false").Trim().ToLowerInvariant() is "1" or "true" or "yes" or "on";
 }

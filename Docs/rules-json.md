@@ -495,6 +495,8 @@ The two levels are merged **before** the container starts:
 - Execution-level entries always win on a name collision — both `value` and `mandatory` are taken from the execution-level entry. The rule-set-level entry is dropped for that execution (so a rule-set `mandatory: true` can't trip the missing-mandatory check after the execution has explicitly overridden it).
 - The emitted order is "common defaults first, per-execution last" — operator-friendly when scanning the env-provenance log.
 
+**Operator-only names** — `XIANIX-HARDENING-AUDIT` (dash or underscore) cannot be set via `with-envs`. The control plane ignores those entries and only seeds the variable from the agent host (`EXECUTOR-HARDENING-AUDIT`) for isolated test environments. Tenant rules cannot disable PreToolUse enforcement.
+
 Examples:
 
 | Rule-set declares                                              | Execution declares                                                    | Effective env list for this run                                              |
@@ -550,7 +552,9 @@ The decrypted value is injected as the named env var into the executor container
 
 A string template run as the Claude Code prompt after plugins are installed. Use `{{input-name}}` placeholders for resolved `use-inputs` values.
 
-Placeholders are replaced case-insensitively. Any `{{name}}` with no matching input is left unchanged.
+Placeholders are replaced case-insensitively. Each substituted value is wrapped in `<user_data name="…">…</user_data>` so the executor model treats webhook fields (PR titles, comments, etc.) as untrusted data rather than instructions. A payload that contains the literal `</user_data>` sequence has that sequence broken up so it cannot close the wrapper. Any `{{name}}` with no matching input is left unchanged.
+
+The executor then appends a hardened system prompt (Claude Code preset + a per-run canary) and refuses environment-variable / secret-path tool calls regardless of what the interpolated prompt says.
 
 ---
 
