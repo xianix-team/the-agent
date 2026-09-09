@@ -262,8 +262,15 @@ public class XianixAgent(
         return xiansAgent;
     }
 
-    private static async Task UploadKnowledgeAsync(XiansAgent xiansAgent)
+    private async Task UploadKnowledgeAsync(XiansAgent xiansAgent)
     {
+        var embeddedRules = RulesEmbeddedResources.LoadRulesJson();
+        var hash = RulesIntegrityGate.Validate(embeddedRules, logger, verifyContentHash: false);
+        logger.LogInformation(
+            "Uploading rules.json knowledge document (baseline sha256={ContentHash}). " +
+            "Tenant overrides must be approved via RULES-APPROVED-HASHES after security review.",
+            hash);
+
         await xiansAgent.Knowledge.UploadEmbeddedResourceAsync(
             resourcePath: "Knowledge/rules.json",
             knowledgeName: Constants.RulesKnowledgeName,
