@@ -78,4 +78,60 @@ public static class RepositoryNaming
         var cut  = name.LastIndexOf('/');
         return cut >= 0 && cut < name.Length - 1 ? name[(cut + 1)..] : name;
     }
+
+    /// <summary>
+    /// Comparison key so <c>…/repo</c> and <c>…/repo.git</c> (and trailing-slash variants)
+    /// collapse to one entry when listing distinct repositories for the user.
+    /// </summary>
+    public static string NormalizeCloneUrlKey(string? repositoryUrl)
+    {
+        if (string.IsNullOrWhiteSpace(repositoryUrl))
+            return string.Empty;
+
+        var trimmed = repositoryUrl.Trim();
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+            return trimmed.TrimEnd('/').ToLowerInvariant();
+
+        var path = uri.AbsolutePath.TrimEnd('/');
+        if (path.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+            path = path[..^4];
+
+        // Host + path only — ignore query/fragment; lower-case for stable equality.
+        return $"{uri.Scheme}://{uri.Host.ToLowerInvariant()}{path}".ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Deduplicate clone URLs that differ only by trailing <c>.git</c> or slash.
+    /// Prefers the <c>.git</c> form when both exist (better clone URL).
+    /// </summary>
+    public static IReadOnlyList<string> DeduplicateCloneUrls(IEnumerable<string> urls)
+    {
+        var preferred = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var raw in urls)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                continue;
+
+            var url = raw.Trim();
+            var key = NormalizeCloneUrlKey(url);
+            if (string.IsNullOrEmpty(key))
+                continue;
+
+            if (!preferred.TryGetValue(key, out var existing))
+            {
+                preferred[key] = url;
+                continue;
+            }
+
+            // Prefer …/repo.git over …/repo when both appear.
+            var existingHasGit = existing.TrimEnd('/').EndsWith(".git", StringComparison.OrdinalIgnoreCase);
+            var candidateHasGit = url.TrimEnd('/').EndsWith(".git", StringComparison.OrdinalIgnoreCase);
+            if (candidateHasGit && !existingHasGit)
+                preferred[key] = url;
+        }
+
+        return preferred.Values
+            .OrderBy(u => u, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
 }

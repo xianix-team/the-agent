@@ -18,7 +18,7 @@
     <PackageReference Include="Microsoft.Agents.AI.Foundry" Version="1.1.0" />
     <PackageReference Include="Microsoft.Agents.AI.OpenAI" Version="1.0.0-rc5" />
     <PackageReference Include="OpenTelemetry.Api" Version="1.17.0" />
-    <PackageReference Include="Xians.Lib" Version="3.24.3" />
+    <PackageReference Include="Xians.Lib" Version="3.36.0" />
 
   </ItemGroup>
 
@@ -30,6 +30,14 @@
   <ItemGroup>
     <EmbeddedResource Include="**\*.json" />
     <EmbeddedResource Include="**\*.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Local execution recipes (not live SoT). Copied next to the agent binary. -->
+    <Content Include="..\TheAgent.Tests\Fixtures\agent-setup\**\*">
+      <Link>PluginRecipes\agent-setup\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>

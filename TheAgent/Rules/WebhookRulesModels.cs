@@ -45,6 +45,14 @@ public sealed class WebhookRuleSet
     [JsonPropertyName("with-envs")]
     public List<EnvEntry> WithEnvs { get; init; } = [];
 
+    /// <summary>
+    /// Optional rule-set-level installed-plugin manifest for this webhook. Rules Optimizer
+    /// treats the union of these entries plus every execution/chat <c>use-plugins</c> as the
+    /// installed set. Empty on a fresh activation.
+    /// </summary>
+    [JsonPropertyName("use-plugins")]
+    public List<PluginEntry> Plugins { get; init; } = [];
+
     [JsonPropertyName("executions")]
     public List<WebhookExecution> Executions { get; init; } = [];
 }

@@ -15,16 +15,8 @@ public static class EnvConfig
     /// cannot even register with the platform or upload its knowledge documents,
     /// so there is nothing useful it could do.
     ///
-    /// <c>ANTHROPIC-API-KEY</c> is deliberately <em>not</em> in this list. It is
-    /// resolved lazily on the supervisor's first chat message via
-    /// <see cref="Xianix.Rules.StartupEnvResolver.TryResolveValueAsync"/>, which
-    /// consults the rule-set-level <c>with-envs</c> entry in the uploaded
-    /// <c>rules.json</c> first and falls back to the host env when present. That
-    /// lets operators manage the Anthropic key entirely from <c>rules.json</c> and
-    /// run the agent host without it (e.g. when the secret has been removed from
-    /// Key Vault). The supervisor surfaces a loud, user-visible chat error if no
-    /// source resolves at first message time — see
-    /// <see cref="Xianix.Agent.SupervisorSubagent"/>'s lazy init.
+    /// <c>ANTHROPIC-API-KEY</c> is not in this list. Chat subagents read it from
+    /// the host env at construction and reject an empty value there.
     /// </summary>
     /// <exception cref="InvalidOperationException">When one or more required variables are missing.</exception>
     public static void ValidateRequiredVariables()
@@ -66,6 +58,13 @@ public static class EnvConfig
     public static string XiansServerUrl => GetRequired("XIANS-SERVER-URL");
     public static string XiansApiKey    => GetRequired("XIANS-API-KEY");
 
+    /// <summary>
+    /// In-memory TTL (seconds) for a successful live marketplace fetch. Defaults to 1 hour.
+    /// The marketplace URL itself lives on <c>MarketplaceCatalog</c> (not an env override).
+    /// </summary>
+    public static int MarketplaceJsonCacheTtlSeconds =>
+        int.TryParse(Get("MARKETPLACE-JSON-CACHE-TTL-SECONDS", "3600"), out var v) && v > 0 ? v : 3600;
+
     // Agent identity (display name shown when registering with the Xians platform).
     // Note: workflow type names still derive from <see cref="Xianix.Constants.AgentName"/>
     // because [Workflow(...)] attributes require compile-time constants.
@@ -80,15 +79,9 @@ public static class EnvConfig
 
     // LLM / Anthropic
     //
-    // Returns the host env value if set, otherwise an empty string. The Anthropic key
-    // is intentionally NOT required at startup — the supervisor subagent consults the
-    // rule-set-level `with-envs` entry from the uploaded rules.json on its first chat
-    // message first (see <see cref="Xianix.Rules.StartupEnvResolver"/> and the lazy
-    // init in <see cref="Xianix.Agent.SupervisorSubagent"/>), and falls back to this
-    // host value only when no rules.json entry resolves. Callers that need a hard
-    // throw on empty (e.g. <see cref="Xianix.Activities.ContainerActivities"/>'s
-    // container seed) must check for an empty string themselves and decide whether
-    // to surface a user-visible error or skip the env entirely.
+    // Host env used to construct the supervisor and Rules Optimizer chat agents.
+    // Empty if unset; those constructors reject an empty key. Executor containers
+    // still seed from this value when present, or from rules.json `with-envs`.
     public static string AnthropicApiKey => Get("ANTHROPIC-API-KEY");
     public static string AnthropicDeploymentName => Get("ANTHROPIC-DEPLOYMENT-NAME", "claude-haiku-4-5");
 
