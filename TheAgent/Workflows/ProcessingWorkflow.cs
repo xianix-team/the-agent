@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Temporalio.Exceptions;
 using Temporalio.Workflows;
 using Xianix.Activities;
+using Xianix.Webhooks;
 using Xianix.Containers;
 using Xianix.Orchestrator;
 using Xianix.Rules;
@@ -103,6 +104,9 @@ public class ProcessingWorkflow
             ContainerOutputParser.Parse(executionResult);
             LogOutcome(executionResult, executionLabel, executionId, orchestrationResult.TenantId, repoLabel, keyInputs);
             await ReportExecutionMetricsAsync(orchestrationResult, executionResult);
+            var raiseEvents = orchestrationResult.RaiseEvents;
+            if (raiseEvents is { Count: > 0 })
+                await ReportRaiseEventsAsync(orchestrationResult, executionResult, executionId);
         }
         finally
         {
@@ -305,6 +309,44 @@ public class ProcessingWorkflow
         {
             Workflow.Logger.LogWarning(ex,
                 "Failed to report execution metrics for '{Name}', block '{Block}'. Metrics are non-critical.",
+                orchestrationResult.Name,
+                orchestrationResult.ExecutionBlockName ?? "—");
+        }
+    }
+
+    private static async Task ReportRaiseEventsAsync(
+        ProcessingRequest orchestrationResult,
+        ContainerExecutionResult executionResult,
+        string executionId)
+    {
+        var raiseEvents = orchestrationResult.RaiseEvents;
+        if (raiseEvents is not { Count: > 0 })
+            return;
+
+        try
+        {
+            var request = RaiseEventsRequest.FromProcessing(
+                raiseEvents,
+                orchestrationResult.ExecutionBlockName,
+                executionId,
+                orchestrationResult.Inputs,
+                orchestrationResult.Execution?.Plugins,
+                executionResult);
+
+            await RaiseEventReporting.TryDeliverAsync(
+                request,
+                req => Workflow.ExecuteActivityAsync(
+                    (RaiseEventActivities a) => a.DeliverRaiseEventsAsync(req),
+                    ContainerWorkflowOptions.RaiseEvents),
+                Workflow.Logger,
+                orchestrationResult.Name,
+                orchestrationResult.ExecutionBlockName);
+        }
+        catch (Exception ex)
+        {
+            // Defensive: FromProcessing / scheduling failures are also non-critical.
+            Workflow.Logger.LogWarning(ex,
+                "Failed to deliver raise-events for '{Name}', block '{Block}'. The calls are non-critical.",
                 orchestrationResult.Name,
                 orchestrationResult.ExecutionBlockName ?? "—");
         }

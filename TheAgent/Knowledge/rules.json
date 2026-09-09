@@ -183,7 +183,110 @@
           "conversation-key": "pull_request.number",
           "model": "claude-sonnet-4-5",
           "max-budget-usd": 3,
-          "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}}. Run /pr-review {{pr-number}} to perform the automated review."
+          "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}}. Run /pr-review {{pr-number}} to perform the automated review.",
+          "raise-events": [
+            {
+              "name": "ai-hub-metrics",
+              "url": "https://ai-hub-api.99x.io/metrics/nodes/nd_9lcgvLaCAP/node-activities/na_qODqx_zINf/events",
+              "with-headers": [
+                {
+                  "name": "X-Api-Key",
+                  "value": "secrets.AIHUB-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "payload": [
+                {
+                  "correlationId": "{{correlationId}}",
+                  "actors": "{{plugin-name:array}}",
+                  "dimensions": {
+                    "tokens": "{{metrics.tokens.total:number}}",
+                    "costUsd": "{{metrics.cost-usd:number}}",
+                    "model": "{{metrics.model}}",
+                    "status": "{{metrics.status}}"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "github-performance-optimizer",
+          "platform": "github",
+          "repository": {
+            "url": "repository.clone_url",
+            "ref": "repository.default_branch"
+          },
+          "match-any": [
+            {
+              "name": "github-issue-label-applied",
+              "rule": "action==labeled&&label.name=='ai-dlc/perf/optimize'&&issue.number?&&issue.pull_request!?"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "issue-number",
+              "value": "issue.number",
+              "mandatory": true
+            },
+            {
+              "name": "issue-title",
+              "value": "issue.title"
+            },
+            {
+              "name": "issue-body",
+              "value": "issue.body"
+            },
+            {
+              "name": "repository-name",
+              "value": "repository.full_name"
+            },
+            {
+              "name": "default-branch",
+              "value": "repository.default_branch"
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "perf-optimizer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "GITHUB-TOKEN",
+              "value": "secrets.GITHUB-TOKEN",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 5,
+          "execute-prompt": "You are running a whole-codebase performance review for repository {{repository-name}} triggered by issue #{{issue-number}} titled \"{{issue-title}}\".\n\nFetch the default branch ({{default-branch}}), parse any `Scope:` / `Target:` hints from the issue body below, and run /perf-optimize across the selected scope (default: entire codebase).\n\nApply only low-risk optimizations on a new branch named `perf/issue-{{issue-number}}-<slug>` and open a pull request against {{default-branch}}. The PR body MUST embed the full performance report and include `Closes #{{issue-number}}`. After opening the PR, post a comment on issue #{{issue-number}} linking to it.\n\nIssue body:\n{{issue-body}}",
+          "raise-events": [
+            {
+              "name": "ai-hub-metrics",
+              "url": "https://ai-hub-api.99x.io/metrics/nodes/nd_-3OFf9O18r/node-activities/na_vhUBrUHNh4/events",
+              "with-headers": [
+                {
+                  "name": "X-Api-Key",
+                  "value": "secrets.AIHUB-API-KEY",
+                  "mandatory": true
+                }
+              ],
+              "payload": [
+                {
+                  "correlationId": "{{correlationId}}",
+                  "actors": "{{plugin-name:array}}",
+                  "dimensions": {
+                    "tokens": "{{metrics.tokens.total:number}}",
+                    "costUsd": "{{metrics.cost-usd:number}}",
+                    "model": "{{metrics.model}}",
+                    "status": "{{metrics.status}}"
+                  }
+                }
+              ]
+            }
+          ]
         },
         {
           "name": "azuredevops-pull-request-review",
