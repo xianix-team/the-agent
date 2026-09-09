@@ -80,7 +80,7 @@ internal sealed class XiansChatHistoryProvider : ChatHistoryProvider
             // Anthropic (especially Haiku) pattern-matches "user pings → assistant
             // declines" and replicates it as another empty turn — the very loop the
             // fallback was created to escape.
-            .Where(m => !string.Equals(m.Text, SupervisorSubagent.EmptyResponseFallback, StringComparison.Ordinal))
+            .Where(m => !string.Equals(m.Text, AnthropicChatSubagent.EmptyResponseFallback, StringComparison.Ordinal))
             .OrderBy(m => m.CreatedAt)
             .Select(m => new ChatMessage(
                 string.Equals(m.Direction, "outgoing", StringComparison.OrdinalIgnoreCase)

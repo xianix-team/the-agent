@@ -9,8 +9,8 @@ namespace Xianix.Rules;
 /// <summary>
 /// Single canonical reader for the <c>rules.json</c> knowledge document. Every caller
 /// that wants to look at the parsed rules — <see cref="WebhookRulesEvaluator"/>,
-/// <see cref="AvailablePluginsCatalog"/>, <see cref="RulesEnvCatalog"/>,
-/// <see cref="StartupEnvResolver"/> — goes through here so the "fetch from Xians
+/// <see cref="AvailablePluginsCatalog"/>, <see cref="RulesEnvCatalog"/> —
+/// goes through here so the "fetch from Xians
 /// Knowledge then deserialise" recipe lives in exactly one place. Previously each
 /// caller open-coded the same three lines, which made it easy to drift on JSON
 /// options, error logging, or the document name.
@@ -18,9 +18,7 @@ namespace Xianix.Rules;
 /// The document is fetched via <see cref="XiansContext"/>.<c>CurrentAgent.Knowledge</c>
 /// — same channel the Xians platform uses everywhere else — which means this method
 /// is only callable from a workflow / agent execution context where
-/// <see cref="XiansContext.CurrentAgent"/> is bound. Process-startup callers can't
-/// use it directly; they must defer to a later (per-message) call site. See
-/// <see cref="StartupEnvResolver"/> for an example of that deferral.
+/// <see cref="XiansContext.CurrentAgent"/> is bound.
 /// </summary>
 public static class RulesKnowledge
 {
@@ -29,7 +27,7 @@ public static class RulesKnowledge
     /// case-insensitive property names, tolerant of comments and trailing commas so
     /// the rules.json file can be authored as JSONC.
     /// </summary>
-    internal static readonly JsonSerializerOptions RulesJsonOptions = new()
+    public static readonly JsonSerializerOptions RulesJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
         ReadCommentHandling         = JsonCommentHandling.Skip,
@@ -81,9 +79,26 @@ public static class RulesKnowledge
             return [];
         }
 
+        return ParseWebhookRuleSets(doc.Content, logger);
+    }
+
+    /// <summary>
+    /// Parses raw <c>rules.json</c> text into webhook rule sets using the canonical
+    /// <see cref="RulesJsonOptions"/> and the same "keep only entries with a webhook name"
+    /// filter as <see cref="LoadAsync"/>. Exposed so callers that already hold the document
+    /// content (e.g. an already-fetched Rules document string) can build the same models
+    /// without going through <see cref="XiansContext"/>.
+    /// Returns an empty list for blank or unparseable content.
+    /// </summary>
+    public static List<WebhookRuleSet> ParseWebhookRuleSets(string? content, ILogger? logger = null)
+    {
+        logger ??= NullLogger.Instance;
+        if (string.IsNullOrWhiteSpace(content))
+            return [];
+
         try
         {
-            return [.. (JsonSerializer.Deserialize<List<WebhookRuleSet>>(doc.Content, RulesJsonOptions)
+            return [.. (JsonSerializer.Deserialize<List<WebhookRuleSet>>(content, RulesJsonOptions)
                    ?? []).Where(e => !string.IsNullOrWhiteSpace(e.WebhookName))];
         }
         catch (JsonException ex)
@@ -119,9 +134,24 @@ public static class RulesKnowledge
         if (doc is null || string.IsNullOrWhiteSpace(doc.Content))
             return [];
 
+        return ParseChatRuleSets(doc.Content, logger);
+    }
+
+    /// <summary>
+    /// Parses raw <c>rules.json</c> text into root-level chat rule sets (entries with a
+    /// non-empty <c>"chat"</c> name), the string-content counterpart to
+    /// <see cref="LoadChatRuleSetsAsync"/>. Returns an empty list for blank or unparseable
+    /// content.
+    /// </summary>
+    public static List<ChatRuleSet> ParseChatRuleSets(string? content, ILogger? logger = null)
+    {
+        logger ??= NullLogger.Instance;
+        if (string.IsNullOrWhiteSpace(content))
+            return [];
+
         try
         {
-            return [.. (JsonSerializer.Deserialize<List<ChatRuleSet>>(doc.Content, RulesJsonOptions)
+            return [.. (JsonSerializer.Deserialize<List<ChatRuleSet>>(content, RulesJsonOptions)
                    ?? []).Where(e => !string.IsNullOrWhiteSpace(e.ChatName))];
         }
         catch (JsonException ex)

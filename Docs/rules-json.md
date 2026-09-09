@@ -21,12 +21,14 @@ Do not write plugin installs back to system or organization scope.
 
 ## Three sources of truth (Rules Optimizer)
 
+Rules Optimizer uses the Xians.Lib SDK for tenant-scoped secrets, webhooks, and Rules knowledge; an Admin API key is not required on the agent host.
+
 Rules Optimizer no longer treats `rules.json` as both the plugin catalog and the installed configuration. Keep these separate:
 
 | Concern | Source | Notes |
 | --------- | -------- | ------- |
-| **Available plugins** | Official marketplace only ([`marketplace.json`](https://github.com/xianix-team/plugins-official/blob/main/.claude-plugin/marketplace.json)), fetched live — no alternate catalog fallback | Full listing shown to the user. Test copies live under `TheAgent.Tests/Fixtures/marketplace.json` only. |
-| **Ready to install** | Marketplace entry **and** a live plugin [`README.md`](https://github.com/xianix-team/plugins-official/blob/main/plugins/pr-reviewer/README.md) at `plugins/<folder>/README.md` (folder from marketplace `source`) **and** a local execution recipe | Secrets, triggers, webhook events, and execution templates come from `TheAgent.Tests/Fixtures/agent-setup/<name>/agent-setup.json` (copied to the agent as `PluginRecipes/`). Do **not** fetch remote `.xianix/agent-setup.json`. |
+| **Available plugins** | Official marketplace only (`MarketplaceCatalog` → plugins-official `marketplace.json`), fetched live — no alternate catalog fallback | Full listing shown to the user. Test copies live under `TheAgent.Tests/Fixtures/marketplace.json` only. |
+| **Ready to install** | Marketplace entry **and** a live plugin `README.md` at `plugins/<folder>/README.md` (folder from marketplace `source`; URL templates on `MarketplaceCatalog`) **and** a local execution recipe | Secrets, triggers, webhook events, and execution templates come from `TheAgent.Tests/Fixtures/agent-setup/<name>/agent-setup.json` (copied to the agent as `PluginRecipes/`). Do **not** fetch remote `.xianix/agent-setup.json`. |
 | **Coming soon** | Marketplace entry without a fetchable README, or without a local execution recipe | Listed but not installable |
 | **Installed plugins** | Agent-scoped `rules.json` `use-plugins` entries (Studio: Agent = activation override; webhook root + executions + chat rule sets) | Deduplicated union; system seed stays empty until first save |
 
@@ -518,16 +520,9 @@ When the host `.env` (or Key Vault on the deployed VM) declares `ANTHROPIC-API-K
 
 ### Agent-process credentials (e.g. `ANTHROPIC-API-KEY`)
 
-Some credentials are consumed by the agent process itself, not just the container — `ANTHROPIC-API-KEY` is the headline example (the supervisor chat subagent calls Claude directly). For those, the rule-set-level `with-envs` is honoured on the supervisor's **first chat message per tenant** with a "rules-first, host-fallback" policy implemented by `StartupEnvResolver`:
+Some credentials are consumed by the agent process itself, not just the container — `ANTHROPIC-API-KEY` is the headline example (the supervisor and Rules Optimizer chat agents call Claude directly). Those chat agents are constructed at process start from the host env (`EnvConfig.AnthropicApiKey`). An empty host value fails those constructors.
 
-1. On the first incoming chat message for a given tenant, the supervisor reads the uploaded `rules.json` knowledge document via the canonical `RulesKnowledge.LoadAsync` reader (same call site every other rules consumer uses) and walks every rule set's top-level `with-envs`. Match is by exact `name`, first-wins across rule sets.
-2. If a matching entry is found, it is resolved against the **current tenant's** scope (`XiansContext.CurrentAgent` is bound to the calling message's tenant via AsyncLocal at that point):
-   - `"constant": true` → value taken verbatim.
-   - `"value": "host.VAR_NAME"` → looked up on the host process env.
-   - `"value": "secrets.SECRET-KEY"` → fetched from the **tenant-scoped Xians Secret Vault** (`XiansContext.CurrentAgent.Secrets.TenantScope().FetchByKeyAsync(...)`). Each tenant therefore plugs in their own API key; the supervisor caches one `AIAgent` per tenant so each gets their own `AnthropicClient`. A missing vault entry resolves to `null` and the resolver falls back to the host env — same semantics as the container path.
-3. If resolution fails or no entry is declared, the supervisor falls back to the host env var of the same name (`EnvConfig.AnthropicApiKey`).
-
-The host env var is **optional**. `EnvConfig.ValidateRequiredVariables()` gates only the Xians platform credentials (`XIANS-SERVER-URL`, `XIANS-API-KEY`) so the agent can register and upload knowledge before any chat traffic arrives — Anthropic key absence does not block boot. If neither the rule-set-level entry nor the host env resolves at first-message time, the supervisor raises a clear `Anthropic API key resolver returned an empty value for tenant '<tenant>'` error which the conversation workflow logs and surfaces to the user as a generic apology; fix it by adding either a rule-set-level `with-envs` entry (constant / `host.*` / `secrets.*`) or a host env value. No restart needed — `SupervisorSubagent.EnsureAgentForTenantAsync` only caches successful constructions, so the next message from that tenant retries the resolver. When a host value is present, a rule-set-level `ANTHROPIC-API-KEY` entry in `rules.json` *overrides* it on the first chat message per tenant, after which the resolved `AnthropicClient` is cached for the lifetime of the process *for that tenant*. The container path also picks up rule-set commons via the normal `with-envs` merge, so the same declaration covers both the supervisor and every executor run.
+Executor containers still honour rule-set-level `with-envs` for `ANTHROPIC-API-KEY` (and other keys) via the normal merge: `"constant": true`, `"value": "host.VAR_NAME"`, or `"value": "secrets.SECRET-KEY"` against the tenant vault. The host env is seeded into the container when present; a `with-envs` entry overrides it.
 
 ### Resolving `secrets.*`
 
