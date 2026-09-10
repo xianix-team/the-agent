@@ -197,13 +197,13 @@
               ],
               "payload": [
                 {
-                  "correlationId": "{{correlationId}}",
-                  "actors": "{{plugin-name:array}}",
+                  "correlationId": "",
+                  "actors": [],
                   "dimensions": {
-                    "tokens": "{{metrics.tokens.total:number}}",
-                    "costUsd": "{{metrics.cost-usd:number}}",
-                    "model": "{{metrics.model}}",
-                    "status": "{{metrics.status}}"
+                    "tokens": 0,
+                    "costUsd": 0,
+                    "model": "",
+                    "status": ""
                   }
                 }
               ]
@@ -275,13 +275,13 @@
               ],
               "payload": [
                 {
-                  "correlationId": "{{correlationId}}",
-                  "actors": "{{plugin-name:array}}",
+                  "correlationId": "",
+                  "actors": [],
                   "dimensions": {
-                    "tokens": "{{metrics.tokens.total:number}}",
-                    "costUsd": "{{metrics.cost-usd:number}}",
-                    "model": "{{metrics.model}}",
-                    "status": "{{metrics.status}}"
+                    "tokens": 0,
+                    "costUsd": 0,
+                    "model": "",
+                    "status": ""
                   }
                 }
               ]

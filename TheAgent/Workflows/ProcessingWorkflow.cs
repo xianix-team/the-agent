@@ -3,7 +3,6 @@ using Microsoft.Extensions.Logging;
 using Temporalio.Exceptions;
 using Temporalio.Workflows;
 using Xianix.Activities;
-using Xianix.Webhooks;
 using Xianix.Containers;
 using Xianix.Orchestrator;
 using Xianix.Rules;
@@ -104,7 +103,7 @@ public class ProcessingWorkflow
             ContainerOutputParser.Parse(executionResult);
             LogOutcome(executionResult, executionLabel, executionId, orchestrationResult.TenantId, repoLabel, keyInputs);
             await ReportExecutionMetricsAsync(orchestrationResult, executionResult);
-            await ReportRaiseEventsAsync(orchestrationResult, executionResult, executionId);
+            await ReportRaiseEventsAsync(orchestrationResult);
         }
         finally
         {
@@ -312,10 +311,7 @@ public class ProcessingWorkflow
         }
     }
 
-    private static async Task ReportRaiseEventsAsync(
-        ProcessingRequest orchestrationResult,
-        ContainerExecutionResult executionResult,
-        string executionId)
+    private static async Task ReportRaiseEventsAsync(ProcessingRequest orchestrationResult)
     {
         var raiseEvents = orchestrationResult.RaiseEvents;
         if (raiseEvents is not { Count: > 0 })
@@ -329,9 +325,6 @@ public class ProcessingWorkflow
                 {
                     Event = raiseEvent,
                     ExecutionName = orchestrationResult.ExecutionBlockName,
-                    CorrelationId = executionId,
-                    Plugins = orchestrationResult.Execution?.Plugins,
-                    Result = executionResult,
                 };
 
                 await Workflow.ExecuteActivityAsync(

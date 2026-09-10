@@ -355,16 +355,14 @@ public sealed class RaiseEventEntry
     public string Url { get; init; } = "";
 
     /// <summary>
-    /// Request headers. Raise-event delivery resolves <c>secrets.KEY</c> only
-    /// (<c>host.*</c> and <c>constant: true</c> are rejected).
+    /// Request headers. Raise-event delivery resolves <c>secrets.KEY</c> from the
+    /// tenant Secret Vault via <c>XiansContext.CurrentAgent.Secrets.TenantScope().FetchByKeyAsync</c>.
     /// </summary>
     [JsonPropertyName("with-headers")]
     public List<EnvEntry> WithHeaders { get; init; } = [];
 
     /// <summary>
-    /// Optional JSON body template. Placeholders use <c>{{name}}</c> with optional
-    /// <c>:number</c> or <c>:array</c> suffixes. Unresolved keys are omitted from the
-    /// rendered payload.
+    /// Optional static JSON body sent as-is (no placeholder substitution).
     /// </summary>
     [JsonPropertyName("payload")]
     public JsonNode? Payload { get; init; }
