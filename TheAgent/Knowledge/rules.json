@@ -187,7 +187,7 @@
           "raise-events": [
             {
               "name": "ai-hub-metrics",
-              "url": "https://ai-hub-api.99x.io/metrics/nodes/nd_9lcgvLaCAP/node-activities/na_qODqx_zINf/events",
+              "url": "https://ai-hub-api.99x.io/metrics/nodes/nd_FNZoN9xQkP/node-activities/na_Tjd72dAipX/events",
               "with-headers": [
                 {
                   "name": "X-Api-Key",
@@ -197,13 +197,13 @@
               ],
               "payload": [
                 {
-                  "correlationId": "",
-                  "actors": [],
+                  "correlationId": "{{correlationId}}",
+                  "actors": "{{plugin-name:array}}",
                   "dimensions": {
-                    "tokens": 0,
-                    "costUsd": 0,
-                    "model": "",
-                    "status": ""
+                    "tokens": "{{metrics.tokens.total:number}}",
+                    "costUsd": "{{metrics.cost-usd:number}}",
+                    "model": "{{metrics.model}}",
+                    "status": "{{metrics.status}}"
                   }
                 }
               ]
@@ -265,7 +265,7 @@
           "raise-events": [
             {
               "name": "ai-hub-metrics",
-              "url": "https://ai-hub-api.99x.io/metrics/nodes/nd_-3OFf9O18r/node-activities/na_vhUBrUHNh4/events",
+              "url": "https://ai-hub-api.99x.io/metrics/nodes/nd_FNZoN9xQkP/node-activities/na_Tjd72dAipX/events",
               "with-headers": [
                 {
                   "name": "X-Api-Key",
@@ -275,13 +275,13 @@
               ],
               "payload": [
                 {
-                  "correlationId": "",
-                  "actors": [],
+                  "correlationId": "{{correlationId}}",
+                  "actors": "{{plugin-name:array}}",
                   "dimensions": {
-                    "tokens": 0,
-                    "costUsd": 0,
-                    "model": "",
-                    "status": ""
+                    "tokens": "{{metrics.tokens.total:number}}",
+                    "costUsd": "{{metrics.cost-usd:number}}",
+                    "model": "{{metrics.model}}",
+                    "status": "{{metrics.status}}"
                   }
                 }
               ]

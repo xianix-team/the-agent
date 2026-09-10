@@ -1,4 +1,5 @@
-using System.Net.Http.Json;
+using System.Net.Http;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using Temporalio.Activities;
 using Xians.Lib.Agents.Core;
@@ -23,6 +24,7 @@ public sealed class RaiseEventActivities
         var logger = ActivityExecutionContext.Current.Logger;
         var entry = request.Event;
         var eventName = string.IsNullOrWhiteSpace(entry.Name) ? "raise-event" : entry.Name;
+        var variables = request.Variables ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         // Resolve with-headers: secrets.KEY → tenant vault FetchByKeyAsync.
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -78,8 +80,9 @@ public sealed class RaiseEventActivities
             headers[header.Name] = value;
         }
 
-        if (string.IsNullOrWhiteSpace(entry.Url)
-            || !Uri.TryCreate(entry.Url.Trim(), UriKind.Absolute, out var uri)
+        var renderedUrl = RaiseEventTemplate.RenderUrl(entry.Url ?? string.Empty, variables);
+        if (string.IsNullOrWhiteSpace(renderedUrl)
+            || !Uri.TryCreate(renderedUrl.Trim(), UriKind.Absolute, out var uri)
             || !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
         {
             logger.LogWarning(
@@ -100,32 +103,43 @@ public sealed class RaiseEventActivities
         }
 
         if (entry.Payload is not null)
-            message.Content = JsonContent.Create(entry.Payload);
+        {
+            var payload = RaiseEventTemplate.RenderPayload(entry.Payload.ToJsonString(), variables);
+            if (!string.IsNullOrWhiteSpace(payload) && payload != "null")
+            {
+                message.Content = new StringContent(payload, Encoding.UTF8, "application/json");
+            }
+        }
 
         try
         {
             using var response = await Client.SendAsync(message).ConfigureAwait(false);
-            var host = $"{uri.Scheme}://{uri.IdnHost}";
 
             if (response.IsSuccessStatusCode)
             {
                 logger.LogInformation(
-                    "raise-events accepted: {StatusCode} {UrlHost}",
-                    (int)response.StatusCode, host);
+                    "raise-events accepted: {StatusCode} {Url}",
+                    (int)response.StatusCode, url);
                 return;
             }
 
+            var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            if (body.Length > 500)
+                body = body[..500] + "…";
+
             if ((int)response.StatusCode >= 500)
+            {
                 throw new HttpRequestException(
-                    $"raise-events rejected with {(int)response.StatusCode} from {host}");
+                    $"raise-events rejected with {(int)response.StatusCode} from {url}: {body}");
+            }
 
             logger.LogWarning(
-                "raise-events rejected: {StatusCode} {UrlHost}",
-                (int)response.StatusCode, host);
+                "raise-events rejected: {StatusCode} {Url} body={Body}",
+                (int)response.StatusCode, url, string.IsNullOrWhiteSpace(body) ? "(empty)" : body);
         }
         catch (OperationCanceledException)
         {
-            throw new TimeoutException($"raise-events POST timed out: {uri.Scheme}://{uri.IdnHost}");
+            throw new TimeoutException($"raise-events POST timed out: {url}");
         }
     }
 }
@@ -135,4 +149,5 @@ public sealed class RaiseEventRequest
 {
     public required RaiseEventEntry Event { get; init; }
     public string? ExecutionName { get; init; }
+    public IReadOnlyDictionary<string, string>? Variables { get; init; }
 }

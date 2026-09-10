@@ -103,7 +103,7 @@ public class ProcessingWorkflow
             ContainerOutputParser.Parse(executionResult);
             LogOutcome(executionResult, executionLabel, executionId, orchestrationResult.TenantId, repoLabel, keyInputs);
             await ReportExecutionMetricsAsync(orchestrationResult, executionResult);
-            await ReportRaiseEventsAsync(orchestrationResult);
+            await ReportRaiseEventsAsync(orchestrationResult, executionResult);
         }
         finally
         {
@@ -311,11 +311,25 @@ public class ProcessingWorkflow
         }
     }
 
-    private static async Task ReportRaiseEventsAsync(ProcessingRequest orchestrationResult)
+    private static async Task ReportRaiseEventsAsync(
+        ProcessingRequest orchestrationResult,
+        ContainerExecutionResult executionResult)
     {
         var raiseEvents = orchestrationResult.RaiseEvents;
         if (raiseEvents is not { Count: > 0 })
             return;
+
+        var variables = RaiseEventVariables.Build(
+            orchestrationResult.Inputs,
+            orchestrationResult.Execution?.Plugins,
+            executionResult);
+
+        // Prefer the configured execution model when the run didn't report one.
+        if (!variables.ContainsKey("metrics.model")
+            && !string.IsNullOrWhiteSpace(orchestrationResult.Execution?.Model))
+        {
+            variables["metrics.model"] = orchestrationResult.Execution.Model.Trim();
+        }
 
         foreach (var raiseEvent in raiseEvents)
         {
@@ -325,6 +339,7 @@ public class ProcessingWorkflow
                 {
                     Event = raiseEvent,
                     ExecutionName = orchestrationResult.ExecutionBlockName,
+                    Variables = variables,
                 };
 
                 await Workflow.ExecuteActivityAsync(

@@ -362,7 +362,8 @@ public sealed class RaiseEventEntry
     public List<EnvEntry> WithHeaders { get; init; } = [];
 
     /// <summary>
-    /// Optional static JSON body sent as-is (no placeholder substitution).
+    /// Optional JSON body. <c>{{…}}</c> placeholders resolve from use-inputs and
+    /// <c>metrics.*</c> after the run finishes.
     /// </summary>
     [JsonPropertyName("payload")]
     public JsonNode? Payload { get; init; }
