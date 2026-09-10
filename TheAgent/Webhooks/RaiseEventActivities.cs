@@ -48,6 +48,10 @@ public sealed class RaiseEventActivities
         new()
         {
             AllowAutoRedirect = false,
+            // Ambient HTTP(S)_PROXY would re-resolve and bypass DNS pin — never use a proxy here.
+            UseProxy = false,
+            // Shared across tenants; cookies from one raise-event must not attach to another.
+            UseCookies = false,
             PooledConnectionLifetime = TimeSpan.FromMinutes(5),
             // Connect only to addresses RaiseEventCaller pinned after SSRF validation.
             ConnectCallback = ConnectToPinnedAddressAsync,
@@ -168,13 +172,15 @@ public sealed class RaiseEventActivities
         if (!urlVarsOk)
             return;
 
-        IReadOnlyDictionary<string, string> renderVars = variables;
+        // URL vars apply only to the URL template — never overwrite payload metrics keys
+        // (model, tokens, costUsd, …) that ExecutionVariablesBuilder already set.
+        IReadOnlyDictionary<string, string> urlRenderVars = variables;
         if (urlVars.Count > 0)
         {
             var merged = new Dictionary<string, string>(variables, StringComparer.OrdinalIgnoreCase);
             foreach (var (key, value) in urlVars)
                 WebhookPlaceholders.SetWithAliases(merged, key, value);
-            renderVars = merged;
+            urlRenderVars = merged;
         }
 
         var (headersOk, headers) = WebhookEntryResolver.ResolveMap(
@@ -182,7 +188,7 @@ public sealed class RaiseEventActivities
         if (!headersOk)
             return;
 
-        var url = WebhookUrlRenderer.TryRender(spec.Url, renderVars, out var missingUrl);
+        var url = WebhookUrlRenderer.TryRender(spec.Url, urlRenderVars, out var missingUrl);
         if (url is null)
         {
             logger.LogWarning(
@@ -196,7 +202,7 @@ public sealed class RaiseEventActivities
         string? payload = null;
         if (!string.IsNullOrWhiteSpace(spec.PayloadJson))
         {
-            payload = WebhookPayloadRenderer.TryRenderOmitMissing(spec.PayloadJson, renderVars);
+            payload = WebhookPayloadRenderer.TryRenderOmitMissing(spec.PayloadJson, variables);
             if (payload is null)
             {
                 logger.LogWarning(

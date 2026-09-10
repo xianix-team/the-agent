@@ -45,11 +45,18 @@ internal static class WebhookUrlRenderer
             return null;
         }
 
+        // Require a fixed scheme+host in the template so placeholders cannot turn the whole
+        // URL into an attacker-controlled host (e.g. "{{callbackUrl}}").
         var probe = WebhookPlaceholders.Pattern.Replace(template, "x");
-        if (Uri.TryCreate(probe, UriKind.Absolute, out var expected)
-            && Uri.TryCreate(rendered, UriKind.Absolute, out var actual)
-            && (!string.Equals(expected.Scheme, actual.Scheme, StringComparison.OrdinalIgnoreCase)
-                || !string.Equals(expected.IdnHost, actual.IdnHost, StringComparison.OrdinalIgnoreCase)))
+        if (!Uri.TryCreate(probe, UriKind.Absolute, out var expected))
+        {
+            missing = "(url template must have a fixed https scheme and host)";
+            return null;
+        }
+
+        if (!Uri.TryCreate(rendered, UriKind.Absolute, out var actual)
+            || !string.Equals(expected.Scheme, actual.Scheme, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(expected.IdnHost, actual.IdnHost, StringComparison.OrdinalIgnoreCase))
         {
             missing = "(rendered URL host/scheme changed)";
             return null;

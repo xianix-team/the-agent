@@ -24,14 +24,10 @@ internal static class ExecutionVariablesBuilder
             }
         }
 
-        var (costUsd, _) = ExecutionCostResolver.Resolve(result);
+        var (costUsd, estimated) = ExecutionCostResolver.Resolve(result);
         var id = string.IsNullOrWhiteSpace(correlationId)
             ? Guid.NewGuid().ToString()
             : correlationId.Trim();
-        var model = result.Models is { Count: > 0 } models
-                    && !string.IsNullOrWhiteSpace(models[0])
-            ? models[0]
-            : "no-models-provided";
 
         WebhookPlaceholders.SetWithAliases(merged, "correlationId", id);
         WebhookPlaceholders.SetWithAliases(merged, "correlation-id", id);
@@ -55,11 +51,23 @@ internal static class ExecutionVariablesBuilder
             WebhookPlaceholders.SetWithAliases(merged, "costUsd", cost);
             WebhookPlaceholders.SetWithAliases(merged, "cost-usd", cost);
             WebhookPlaceholders.SetWithAliases(merged, "metrics.cost-usd", cost);
+            if (estimated)
+            {
+                WebhookPlaceholders.SetWithAliases(merged, "costEstimated", "true");
+                WebhookPlaceholders.SetWithAliases(merged, "metrics.cost-estimated", "true");
+            }
         }
 
-        WebhookPlaceholders.SetWithAliases(merged, "model", model);
+        // Omit model when the executor did not report one — no litter dimension.
+        if (result.Models is { Count: > 0 } models
+            && !string.IsNullOrWhiteSpace(models[0]))
+        {
+            var model = models[0];
+            WebhookPlaceholders.SetWithAliases(merged, "model", model);
+            WebhookPlaceholders.SetWithAliases(merged, "metrics.model", model);
+        }
+
         WebhookPlaceholders.SetWithAliases(merged, "status", result.Succeeded ? "success" : "error");
-        WebhookPlaceholders.SetWithAliases(merged, "metrics.model", model);
         WebhookPlaceholders.SetWithAliases(merged, "metrics.status", merged["status"]);
         WebhookPlaceholders.SetWithAliases(merged, "exitCode", result.ExitCode.ToString());
         WebhookPlaceholders.SetWithAliases(merged, "succeeded", result.Succeeded ? "true" : "false");

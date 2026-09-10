@@ -52,7 +52,8 @@ public static class ContainerWorkflowOptions
 
     public static readonly ActivityOptions RaiseEvents = new()
     {
-        StartToCloseTimeout = TimeSpan.FromSeconds(30),
+        // Prefetch vault + up to 10 concurrent POSTs at 15s each — 30s was too tight.
+        StartToCloseTimeout = TimeSpan.FromSeconds(90),
         RetryPolicy = new() { MaximumAttempts = 1 },
     };
 }
