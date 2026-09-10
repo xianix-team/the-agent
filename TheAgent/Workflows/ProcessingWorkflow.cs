@@ -330,7 +330,6 @@ public class ProcessingWorkflow
                     Event = raiseEvent,
                     ExecutionName = orchestrationResult.ExecutionBlockName,
                     CorrelationId = executionId,
-                    Inputs = orchestrationResult.Inputs,
                     Plugins = orchestrationResult.Execution?.Plugins,
                     Result = executionResult,
                 };

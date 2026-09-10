@@ -6,14 +6,10 @@ using Xianix.Rules;
 namespace Xianix.Webhooks;
 
 /// <summary>
-/// Resolves <c>with-headers</c> on <c>raise-events</c> (secrets / constants).
-/// Host env references are denied by default.
+/// Resolves raise-event <c>with-headers</c>. Only <c>secrets.KEY</c> values are supported.
 /// </summary>
 internal static class WebhookEntryResolver
 {
-    /// <summary>
-    /// Prefetches distinct secret keys referenced by the given header entries.
-    /// </summary>
     public static async Task<Dictionary<string, string?>> PrefetchSecretsAsync(
         IEnumerable<EnvEntry> entries,
         ILogger logger)
@@ -45,9 +41,6 @@ internal static class WebhookEntryResolver
             StringComparer.OrdinalIgnoreCase);
     }
 
-    /// <summary>
-    /// Resolves header entries against a pre-fetched secret cache.
-    /// </summary>
     public static (bool Success, Dictionary<string, string> Values) ResolveMap(
         IReadOnlyList<EnvEntry> entries,
         IReadOnlyDictionary<string, string?> secrets,
@@ -60,7 +53,7 @@ internal static class WebhookEntryResolver
             if (string.IsNullOrWhiteSpace(entry.Name))
                 continue;
 
-            if (!RaiseEventActivities.IsSafeHeaderName(entry.Name))
+            if (!RaiseEventHttp.IsSafeHeaderName(entry.Name))
             {
                 logger.LogWarning(
                     "raise-events header '{Header}' has an unsafe name (CRLF or control chars); skipping event.",
@@ -68,7 +61,7 @@ internal static class WebhookEntryResolver
                 return (false, resolved);
             }
 
-            var value = ResolveValue(entry, secrets, logger);
+            var value = ResolveSecretValue(entry, secrets, logger);
             if (string.IsNullOrEmpty(value))
             {
                 if (entry.Mandatory)
@@ -82,7 +75,7 @@ internal static class WebhookEntryResolver
                 continue;
             }
 
-            if (!RaiseEventActivities.IsSafeHeaderValue(value))
+            if (!RaiseEventHttp.IsSafeHeaderValue(value))
             {
                 logger.LogWarning(
                     "raise-events header '{Name}' resolved to an unsafe value (contains CRLF or control chars); skipping event.",
@@ -96,50 +89,32 @@ internal static class WebhookEntryResolver
         return (true, resolved);
     }
 
-    private static string ResolveValue(
+    private static string ResolveSecretValue(
         EnvEntry entry,
         IReadOnlyDictionary<string, string?> secrets,
         ILogger logger)
     {
         if (entry.Constant)
-            return entry.Value ?? string.Empty;
+        {
+            logger.LogWarning(
+                "raise-events header '{Name}' uses constant values which are not supported; expected secrets.KEY.",
+                entry.Name);
+            return string.Empty;
+        }
 
         var form = EnvValueForm.Parse(entry.Value);
-        switch (form.Kind)
+        if (form.Kind == EnvValueKind.Secret)
         {
-            case EnvValueKind.Secret:
-                return secrets.TryGetValue(form.Identifier, out var secret)
-                    ? secret ?? string.Empty
-                    : string.Empty;
-
-            case EnvValueKind.Host:
-                logger.LogWarning(
-                    "raise-events entry '{Name}' references host env '{Var}' which is not permitted; skipping value.",
-                    entry.Name,
-                    form.Identifier);
-                return string.Empty;
-
-            case EnvValueKind.EmptySecret:
-                logger.LogWarning(
-                    "raise-events entry '{Name}' references an empty secret key ('secrets.').",
-                    entry.Name);
-                return string.Empty;
-
-            case EnvValueKind.EmptyHost:
-                logger.LogWarning(
-                    "raise-events entry '{Name}' has an empty host reference ('host.').",
-                    entry.Name);
-                return string.Empty;
-
-            case EnvValueKind.Invalid:
-            default:
-                logger.LogWarning(
-                    "raise-events entry '{Name}' has an unrecognised value form '{Value}'. " +
-                    "Expected 'secrets.SECRET-KEY' or \"constant\": true.",
-                    entry.Name,
-                    entry.Value);
-                return string.Empty;
+            return secrets.TryGetValue(form.Identifier, out var secret)
+                ? secret ?? string.Empty
+                : string.Empty;
         }
+
+        logger.LogWarning(
+            "raise-events header '{Name}' has unsupported value form '{Value}'. Expected 'secrets.SECRET-KEY'.",
+            entry.Name,
+            entry.Value);
+        return string.Empty;
     }
 
     private static async Task<string?> LoadByKeyAsync(string secretKey, ILogger logger)
@@ -149,7 +124,20 @@ internal static class WebhookEntryResolver
 
         try
         {
-            return await LoadFromTenantVaultAsync(secretKey.Trim(), logger).ConfigureAwait(false);
+            var vault = XiansContext.CurrentAgent.Secrets.TenantScope();
+            var fetched = await vault
+                .FetchByKeyAsync(secretKey.Trim())
+                .ConfigureAwait(false);
+
+            if (fetched is null || string.IsNullOrWhiteSpace(fetched.Value))
+            {
+                logger.LogWarning(
+                    "Tenant secret '{Name}' is missing; skipping raise-event value.",
+                    secretKey);
+                return null;
+            }
+
+            return fetched.Value;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -159,23 +147,5 @@ internal static class WebhookEntryResolver
                 secretKey);
             return null;
         }
-    }
-
-    private static async Task<string?> LoadFromTenantVaultAsync(string secretKey, ILogger logger)
-    {
-        var vault = XiansContext.CurrentAgent.Secrets.TenantScope();
-        var fetched = await vault
-            .FetchByKeyAsync(secretKey)
-            .ConfigureAwait(false);
-
-        if (fetched is null || string.IsNullOrWhiteSpace(fetched.Value))
-        {
-            logger.LogWarning(
-                "Tenant secret '{Name}' is missing; skipping raise-event value.",
-                secretKey);
-            return null;
-        }
-
-        return fetched.Value;
     }
 }

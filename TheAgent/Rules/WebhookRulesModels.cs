@@ -355,16 +355,16 @@ public sealed class RaiseEventEntry
     public string Url { get; init; } = "";
 
     /// <summary>
-    /// Request headers resolved the same way as <see cref="EnvEntry"/> values
-    /// (<c>host.*</c>, <c>secrets.*</c>, or <c>constant: true</c>).
+    /// Request headers. Raise-event delivery resolves <c>secrets.KEY</c> only
+    /// (<c>host.*</c> and <c>constant: true</c> are rejected).
     /// </summary>
     [JsonPropertyName("with-headers")]
     public List<EnvEntry> WithHeaders { get; init; } = [];
 
     /// <summary>
     /// Optional JSON body template. Placeholders use <c>{{name}}</c> with optional
-    /// <c>:number</c>, <c>:array</c>, or <c>:boolean</c> suffixes. Unresolved keys
-    /// are omitted from the rendered payload.
+    /// <c>:number</c> or <c>:array</c> suffixes. Unresolved keys are omitted from the
+    /// rendered payload.
     /// </summary>
     [JsonPropertyName("payload")]
     public JsonNode? Payload { get; init; }

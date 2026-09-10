@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
-using Xianix.Webhooks;
 
 namespace Xianix.Rules;
 
@@ -638,25 +637,27 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
         return merged;
     }
 
-    private static List<RaiseEventSpec> BuildRaiseEvents(WebhookExecution execution)
+    private static List<RaiseEventEntry> BuildRaiseEvents(WebhookExecution execution)
     {
         if (execution.RaiseEvents.Count == 0)
             return [];
 
-        var specs = new List<RaiseEventSpec>(execution.RaiseEvents.Count);
+        var entries = new List<RaiseEventEntry>(execution.RaiseEvents.Count);
         foreach (var entry in execution.RaiseEvents)
         {
             if (string.IsNullOrWhiteSpace(entry.Url))
                 continue;
 
-            specs.Add(new RaiseEventSpec(
-                string.IsNullOrWhiteSpace(entry.Name) ? "raise-event" : entry.Name.Trim(),
-                entry.Url.Trim(),
-                entry.WithHeaders,
-                entry.Payload?.ToJsonString()));
+            entries.Add(new RaiseEventEntry
+            {
+                Name = string.IsNullOrWhiteSpace(entry.Name) ? "raise-event" : entry.Name.Trim(),
+                Url = entry.Url.Trim(),
+                WithHeaders = entry.WithHeaders,
+                Payload = entry.Payload,
+            });
         }
 
-        return specs;
+        return entries;
     }
 
     /// <summary>

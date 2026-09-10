@@ -6,9 +6,9 @@ using System.Text.RegularExpressions;
 namespace Xianix.Webhooks;
 
 /// <summary>
-/// Substitutes <c>{{name}}</c> / <c>{{name:number}}</c> / <c>{{name:array}}</c> /
-/// <c>{{name:boolean}}</c> in a raise-event JSON payload template. Unresolved
-/// placeholders (and their parent object keys) are omitted.
+/// Substitutes <c>{{name}}</c> / <c>{{name:number}}</c> / <c>{{name:array}}</c>
+/// in a raise-event JSON payload template. Unresolved placeholders (and their
+/// parent object keys) are omitted.
 /// </summary>
 internal static class WebhookPayloadRenderer
 {
@@ -103,7 +103,6 @@ internal static class WebhookPayloadRenderer
         {
             "number" => ParseNumber(value),
             "array" => ParseArray(value),
-            "boolean" => JsonValue.Create(ParseBoolean(value)),
             _ => JsonValue.Create(value),
         };
     }
@@ -144,9 +143,4 @@ internal static class WebhookPayloadRenderer
 
         return array;
     }
-
-    private static bool ParseBoolean(string value) =>
-        value.Equals("true", StringComparison.OrdinalIgnoreCase)
-        || value.Equals("1", StringComparison.OrdinalIgnoreCase)
-        || value.Equals("yes", StringComparison.OrdinalIgnoreCase);
 }

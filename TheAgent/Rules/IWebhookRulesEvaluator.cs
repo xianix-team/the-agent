@@ -1,5 +1,3 @@
-using Xianix.Webhooks;
-
 namespace Xianix.Rules;
 
 /// <summary>
@@ -34,7 +32,7 @@ public sealed record EvaluationResult(
     IReadOnlyList<string>? DisallowedTools = null,
     double? MaxBudgetUsd = null,
     bool ResumeSessions = false,
-    IReadOnlyList<RaiseEventSpec>? RaiseEvents = null);
+    IReadOnlyList<RaiseEventEntry>? RaiseEvents = null);
 
 /// <summary>
 /// Outcome of a rules evaluation: zero or more matching execution blocks, or a skip reason.
