@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
@@ -16,7 +17,7 @@ internal sealed class RaiseEventCaller
     private readonly HttpClient _http;
     private readonly ILogger _logger;
     private readonly Func<string, CancellationToken, Task<IPAddress[]>> _resolveHost;
-    private readonly Dictionary<string, (bool Ok, string? Reason, IPAddress[]? Addresses)> _urlValidationCache =
+    private readonly ConcurrentDictionary<string, (bool Ok, string? Reason, IPAddress[]? Addresses)> _urlValidationCache =
         new(StringComparer.Ordinal);
 
     public RaiseEventCaller(
@@ -127,8 +128,8 @@ internal sealed class RaiseEventCaller
 
         var result = await ValidateWebhookUrlAsync(url, cancellationToken, _resolveHost)
             .ConfigureAwait(false);
-        _urlValidationCache[url] = result;
-        return result;
+        // Concurrent get-or-add: first writer wins; duplicate DNS work is rare and safe.
+        return _urlValidationCache.GetOrAdd(url, result);
     }
 
     /// <summary>
@@ -275,6 +276,12 @@ internal sealed class RaiseEventCaller
         // Collapse embedded IPv4 forms so private/metadata ranges cannot bypass checks.
         if (TryExtractEmbeddedIPv4(ip, out var embeddedV4))
             ip = embeddedV4;
+
+        // Unspecified (:: / 0.0.0.0) is not loopback but often binds locally — treat as blocked.
+        if (IPAddress.Any.Equals(ip)
+            || IPAddress.IPv6Any.Equals(ip)
+            || IPAddress.IPv6None.Equals(ip))
+            return true;
 
         if (IPAddress.IsLoopback(ip))
             return true;

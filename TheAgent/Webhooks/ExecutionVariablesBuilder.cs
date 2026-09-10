@@ -25,18 +25,29 @@ internal static class ExecutionVariablesBuilder
         }
 
         var (costUsd, _) = ExecutionCostResolver.Resolve(result);
-        var tokens = (result.InputTokens ?? 0) + (result.OutputTokens ?? 0);
+        var id = string.IsNullOrWhiteSpace(correlationId)
+            ? Guid.NewGuid().ToString()
+            : correlationId.Trim();
         var model = result.Models is { Count: > 0 } models
                     && !string.IsNullOrWhiteSpace(models[0])
             ? models[0]
             : "no-models-provided";
-        var id = string.IsNullOrWhiteSpace(correlationId)
-            ? Guid.NewGuid().ToString()
-            : correlationId.Trim();
 
         WebhookPlaceholders.SetWithAliases(merged, "correlationId", id);
         WebhookPlaceholders.SetWithAliases(merged, "correlation-id", id);
-        WebhookPlaceholders.SetWithAliases(merged, "tokens", tokens.ToString());
+
+        // Omit token keys when usage was never parsed — avoid posting fabricated zeros.
+        if (result.InputTokens is not null || result.OutputTokens is not null)
+        {
+            var input = result.InputTokens ?? 0;
+            var output = result.OutputTokens ?? 0;
+            var tokens = (input + output).ToString();
+            WebhookPlaceholders.SetWithAliases(merged, "tokens", tokens);
+            WebhookPlaceholders.SetWithAliases(merged, "metrics.tokens.total", tokens);
+            WebhookPlaceholders.SetWithAliases(merged, "inputTokens", input.ToString());
+            WebhookPlaceholders.SetWithAliases(merged, "outputTokens", output.ToString());
+        }
+
         // Omit cost keys when unknown — avoid posting a fabricated 0 to metrics webhooks.
         if (costUsd is { } knownCost)
         {
@@ -48,11 +59,8 @@ internal static class ExecutionVariablesBuilder
 
         WebhookPlaceholders.SetWithAliases(merged, "model", model);
         WebhookPlaceholders.SetWithAliases(merged, "status", result.Succeeded ? "success" : "error");
-        WebhookPlaceholders.SetWithAliases(merged, "metrics.tokens.total", merged["tokens"]);
         WebhookPlaceholders.SetWithAliases(merged, "metrics.model", model);
         WebhookPlaceholders.SetWithAliases(merged, "metrics.status", merged["status"]);
-        WebhookPlaceholders.SetWithAliases(merged, "inputTokens", (result.InputTokens ?? 0).ToString());
-        WebhookPlaceholders.SetWithAliases(merged, "outputTokens", (result.OutputTokens ?? 0).ToString());
         WebhookPlaceholders.SetWithAliases(merged, "exitCode", result.ExitCode.ToString());
         WebhookPlaceholders.SetWithAliases(merged, "succeeded", result.Succeeded ? "true" : "false");
         return merged;
