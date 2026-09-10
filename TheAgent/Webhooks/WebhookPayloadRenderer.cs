@@ -1,192 +1,125 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 namespace Xianix.Webhooks;
 
 /// <summary>
-/// Walks a JSON payload template from rules.json and substitutes
-/// <c>{{name}}</c> / <c>{{name:number}}</c> / <c>{{name:array}}</c> / <c>{{name:boolean}}</c>.
+/// Substitutes <c>{{name}}</c> / <c>{{name:number}}</c> / <c>{{name:array}}</c> /
+/// <c>{{name:boolean}}</c> in a raise-event JSON payload template. Unresolved
+/// placeholders (and their parent object keys) are omitted.
 /// </summary>
 internal static class WebhookPayloadRenderer
 {
-    private enum MissingMode
-    {
-        /// <summary>Record missing keys and keep walking (strict render fails at the end).</summary>
-        Collect,
-        /// <summary>Drop unresolved placeholders / object keys (omit-missing render).</summary>
-        Omit,
-    }
+    private static readonly Regex Placeholder = new(
+        @"\{\{([^}]+)\}\}",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static string? TryRender(
-        string templateJson,
-        IReadOnlyDictionary<string, string>? variables,
-        out string? missing)
-    {
-        missing = null;
-        if (string.IsNullOrWhiteSpace(templateJson))
-        {
-            missing = "(empty payload)";
-            return null;
-        }
-
-        if (!TryParseRoot(templateJson, out var root))
-        {
-            missing = "(invalid payload JSON)";
-            return null;
-        }
-
-        var vars = variables ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var missingKeys = new List<string>();
-        var node = Render(root, vars, MissingMode.Collect, missingKeys);
-        if (missingKeys.Count > 0)
-        {
-            missing = string.Join(", ", missingKeys.Distinct(StringComparer.OrdinalIgnoreCase));
-            return null;
-        }
-
-        return node?.ToJsonString() ?? "null";
-    }
-
-    /// <summary>
-    /// Renders a payload template, omitting object keys whose placeholders do not resolve.
-    /// </summary>
-    public static string? TryRenderOmitMissing(
         string templateJson,
         IReadOnlyDictionary<string, string>? variables)
     {
         if (string.IsNullOrWhiteSpace(templateJson))
             return null;
 
-        if (!TryParseRoot(templateJson, out var root))
-            return null;
-
-        var vars = variables ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var node = Render(root, vars, MissingMode.Omit, missing: null);
-        return node?.ToJsonString() ?? "null";
-    }
-
-    private static bool TryParseRoot(string templateJson, out JsonElement root)
-    {
+        JsonElement root;
         try
         {
             using var doc = JsonDocument.Parse(templateJson);
             root = doc.RootElement.Clone();
-            return true;
         }
         catch (JsonException)
         {
-            root = default;
-            return false;
+            return null;
         }
+
+        var vars = variables ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        return Render(root, vars)?.ToJsonString() ?? "null";
     }
 
-    private static JsonNode? Render(
-        JsonElement element,
-        IReadOnlyDictionary<string, string> variables,
-        MissingMode mode,
-        List<string>? missing)
-    {
-        return element.ValueKind switch
+    private static JsonNode? Render(JsonElement element, IReadOnlyDictionary<string, string> variables) =>
+        element.ValueKind switch
         {
-            JsonValueKind.Object => RenderObject(element, variables, mode, missing),
-            JsonValueKind.Array => RenderArray(element, variables, mode, missing),
-            JsonValueKind.String => RenderString(element.GetString() ?? "", variables, mode, missing),
+            JsonValueKind.Object => RenderObject(element, variables),
+            JsonValueKind.Array => RenderArray(element, variables),
+            JsonValueKind.String => RenderString(element.GetString() ?? "", variables),
             _ => JsonNode.Parse(element.GetRawText()),
         };
-    }
 
-    private static JsonObject RenderObject(
-        JsonElement element,
-        IReadOnlyDictionary<string, string> variables,
-        MissingMode mode,
-        List<string>? missing)
+    private static JsonObject RenderObject(JsonElement element, IReadOnlyDictionary<string, string> variables)
     {
         var obj = new JsonObject();
         foreach (var property in element.EnumerateObject())
         {
-            var rendered = Render(property.Value, variables, mode, missing);
-            if (rendered is not null || mode == MissingMode.Collect)
+            var rendered = Render(property.Value, variables);
+            if (rendered is not null)
                 obj[property.Name] = rendered;
         }
 
         return obj;
     }
 
-    private static JsonArray RenderArray(
-        JsonElement element,
-        IReadOnlyDictionary<string, string> variables,
-        MissingMode mode,
-        List<string>? missing)
+    private static JsonArray RenderArray(JsonElement element, IReadOnlyDictionary<string, string> variables)
     {
         var array = new JsonArray();
         foreach (var item in element.EnumerateArray())
         {
-            var rendered = Render(item, variables, mode, missing);
-            if (rendered is not null || mode == MissingMode.Collect)
+            var rendered = Render(item, variables);
+            if (rendered is not null)
                 array.Add(rendered);
         }
 
         return array;
     }
 
-    private static JsonNode? RenderString(
-        string template,
-        IReadOnlyDictionary<string, string> variables,
-        MissingMode mode,
-        List<string>? missing)
+    private static JsonNode? RenderString(string template, IReadOnlyDictionary<string, string> variables)
     {
-        var match = WebhookPlaceholders.Pattern.Match(template);
+        var match = Placeholder.Match(template);
         if (match.Success && match.Length == template.Length)
-            return RenderPlaceholder(match.Groups[1].Value, variables, mode, missing);
+            return RenderPlaceholder(match.Groups[1].Value, variables);
 
         var hadMissing = false;
-        var interpolated = WebhookPlaceholders.Pattern.Replace(template, found =>
+        var interpolated = Placeholder.Replace(template, found =>
         {
-            var key = WebhookPlaceholders.Parse(found.Groups[1].Value).Name;
-            if (WebhookPlaceholders.TryGet(variables, key, out var value))
+            var key = ParseName(found.Groups[1].Value);
+            if (variables.TryGetValue(key, out var value) && value is not null)
                 return value;
 
             hadMissing = true;
-            missing?.Add(key);
             return found.Value;
         });
 
-        if (mode == MissingMode.Omit && hadMissing)
-            return null;
-
-        return JsonValue.Create(interpolated);
+        return hadMissing ? null : JsonValue.Create(interpolated);
     }
 
-    private static JsonNode? RenderPlaceholder(
-        string raw,
-        IReadOnlyDictionary<string, string> variables,
-        MissingMode mode,
-        List<string>? missing)
+    private static JsonNode? RenderPlaceholder(string raw, IReadOnlyDictionary<string, string> variables)
     {
-        var (name, type) = WebhookPlaceholders.Parse(raw);
-        if (!WebhookPlaceholders.TryGet(variables, name, out var value))
-        {
-            missing?.Add(name);
-            return mode == MissingMode.Omit ? null : JsonValue.Create(string.Empty);
-        }
+        var (name, type) = Parse(raw);
+        if (!variables.TryGetValue(name, out var value) || value is null)
+            return null;
 
         return type?.ToLowerInvariant() switch
         {
-            "number" => ParseNumber(value) ?? NoteMissing(name, missing),
+            "number" => ParseNumber(value),
             "array" => ParseArray(value),
             "boolean" => JsonValue.Create(ParseBoolean(value)),
             _ => JsonValue.Create(value),
         };
     }
 
-    private static JsonNode? NoteMissing(string name, List<string>? missing)
+    private static string ParseName(string raw) => Parse(raw).Name;
+
+    private static (string Name, string? Type) Parse(string raw)
     {
-        missing?.Add(name);
-        return null;
+        var value = raw.Trim();
+        var colon = value.LastIndexOf(':');
+        if (colon <= 0 || colon == value.Length - 1)
+            return (value, null);
+
+        return (value[..colon].Trim(), value[(colon + 1)..].Trim());
     }
 
-    /// <summary>Null when unparseable — omit (omit-missing) or fail (strict) instead of emitting 0.</summary>
     private static JsonNode? ParseNumber(string value)
     {
         if (long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var integer))

@@ -104,9 +104,7 @@ public class ProcessingWorkflow
             ContainerOutputParser.Parse(executionResult);
             LogOutcome(executionResult, executionLabel, executionId, orchestrationResult.TenantId, repoLabel, keyInputs);
             await ReportExecutionMetricsAsync(orchestrationResult, executionResult);
-            var raiseEvents = orchestrationResult.RaiseEvents;
-            if (raiseEvents is { Count: > 0 })
-                await ReportRaiseEventsAsync(orchestrationResult, executionResult, executionId);
+            await ReportRaiseEventsAsync(orchestrationResult, executionResult, executionId);
         }
         finally
         {
@@ -323,32 +321,32 @@ public class ProcessingWorkflow
         if (raiseEvents is not { Count: > 0 })
             return;
 
-        try
+        foreach (var raiseEvent in raiseEvents)
         {
-            var request = RaiseEventsRequest.FromProcessing(
-                raiseEvents,
-                orchestrationResult.ExecutionBlockName,
-                executionId,
-                orchestrationResult.Inputs,
-                orchestrationResult.Execution?.Plugins,
-                executionResult);
+            try
+            {
+                var request = new RaiseEventRequest
+                {
+                    Event = raiseEvent,
+                    ExecutionName = orchestrationResult.ExecutionBlockName,
+                    CorrelationId = executionId,
+                    Inputs = orchestrationResult.Inputs,
+                    Plugins = orchestrationResult.Execution?.Plugins,
+                    Result = executionResult,
+                };
 
-            await RaiseEventReporting.TryDeliverAsync(
-                request,
-                req => Workflow.ExecuteActivityAsync(
-                    (RaiseEventActivities a) => a.DeliverRaiseEventsAsync(req),
-                    ContainerWorkflowOptions.RaiseEvents),
-                Workflow.Logger,
-                orchestrationResult.Name,
-                orchestrationResult.ExecutionBlockName);
-        }
-        catch (Exception ex)
-        {
-            // Defensive: FromProcessing / scheduling failures are also non-critical.
-            Workflow.Logger.LogWarning(ex,
-                "Failed to deliver raise-events for '{Name}', block '{Block}'. The calls are non-critical.",
-                orchestrationResult.Name,
-                orchestrationResult.ExecutionBlockName ?? "—");
+                await Workflow.ExecuteActivityAsync(
+                    (RaiseEventActivities a) => a.DeliverRaiseEventAsync(request),
+                    ContainerWorkflowOptions.RaiseEvents);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Workflow.Logger.LogWarning(ex,
+                    "Failed to deliver raise-event '{Event}' for '{Name}', block '{Block}'. The call is non-critical.",
+                    raiseEvent.Name,
+                    orchestrationResult.Name,
+                    orchestrationResult.ExecutionBlockName ?? "—");
+            }
         }
     }
 

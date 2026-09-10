@@ -2,6 +2,10 @@ using Xianix.Rules;
 
 namespace Xianix.Webhooks;
 
+/// <summary>
+/// Builds the base variable map for raise-event payload templates
+/// (correlation id + plugin names).
+/// </summary>
 internal static class WebhookUrlVariables
 {
     public static Dictionary<string, string> From(
@@ -9,6 +13,8 @@ internal static class WebhookUrlVariables
         string? correlationId,
         IEnumerable<PluginEntry>? plugins = null)
     {
+        // Inputs are accepted for forward-compat with payload templates that
+        // reference rule inputs; current AI Hub payloads only need correlation + plugins.
         var vars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (inputs is not null)
         {
@@ -16,63 +22,25 @@ internal static class WebhookUrlVariables
             {
                 if (string.IsNullOrWhiteSpace(key) || value is null)
                     continue;
-                WebhookPlaceholders.SetWithAliases(vars, key, value.ToString() ?? string.Empty);
+                vars[key] = value.ToString() ?? string.Empty;
             }
         }
 
-        AddCorrelation(vars, correlationId);
-        AddPlugins(vars, plugins);
-        return vars;
-    }
+        if (!string.IsNullOrWhiteSpace(correlationId))
+            vars["correlationId"] = correlationId;
 
-    public static Dictionary<string, string> From(
-        IReadOnlyDictionary<string, string>? inputs,
-        string? correlationId)
-    {
-        var vars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        if (inputs is not null)
+        if (plugins is not null)
         {
-            foreach (var (key, value) in inputs)
-            {
-                if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
-                    continue;
-                WebhookPlaceholders.SetWithAliases(vars, key, value);
-            }
+            var names = plugins
+                .Select(plugin => plugin.PluginName.Trim())
+                .Where(name => name.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            if (names.Length > 0)
+                vars["plugin-name"] = string.Join(",", names);
         }
 
-        AddCorrelation(vars, correlationId);
         return vars;
-    }
-
-    private static void AddPlugins(
-        Dictionary<string, string> vars,
-        IEnumerable<PluginEntry>? plugins)
-    {
-        if (plugins is null)
-            return;
-
-        var names = plugins
-            .Select(plugin => plugin.PluginName.Trim())
-            .Where(name => name.Length > 0)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        if (names.Length == 0)
-            return;
-
-        var joined = string.Join(",", names);
-        WebhookPlaceholders.SetWithAliases(vars, "plugin-name", joined);
-        WebhookPlaceholders.SetWithAliases(vars, "plugin-names", joined);
-        if (!vars.ContainsKey("actors"))
-            WebhookPlaceholders.SetWithAliases(vars, "actors", joined);
-    }
-
-    private static void AddCorrelation(Dictionary<string, string> vars, string? correlationId)
-    {
-        if (string.IsNullOrWhiteSpace(correlationId))
-            return;
-
-        WebhookPlaceholders.SetWithAliases(vars, "correlationId", correlationId);
-        WebhookPlaceholders.SetWithAliases(vars, "correlation-id", correlationId);
     }
 }

@@ -1,6 +1,6 @@
-using Xianix.Workflows;
+using Xianix.Activities;
 
-namespace Xianix.Activities;
+namespace Xianix.Workflows;
 
 /// <summary>
 /// Resolves authoritative or estimated USD cost from a completed container execution.
@@ -15,7 +15,8 @@ internal static class ExecutionCostResolver
         if (result.CostUsd.HasValue)
             return (result.CostUsd.Value, false);
 
-        if (result.ModelUsage is not { Count: > 0 } modelUsage)
+        var modelUsage = result.ModelUsage;
+        if (modelUsage is null || modelUsage.Count == 0)
             return (null, false);
 
         double total = 0;

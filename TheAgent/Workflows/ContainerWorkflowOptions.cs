@@ -50,10 +50,12 @@ public static class ContainerWorkflowOptions
         RetryPolicy = new() { MaximumAttempts = 1 },
     };
 
+    /// <summary>
+    /// One external HTTPS raise-event POST. Retries are Temporal's responsibility.
+    /// </summary>
     public static readonly ActivityOptions RaiseEvents = new()
     {
-        // Prefetch vault + up to 10 concurrent POSTs at 15s each — 30s was too tight.
-        StartToCloseTimeout = TimeSpan.FromSeconds(90),
-        RetryPolicy = new() { MaximumAttempts = 1 },
+        StartToCloseTimeout = TimeSpan.FromSeconds(30),
+        RetryPolicy = new() { MaximumAttempts = 10 },
     };
 }

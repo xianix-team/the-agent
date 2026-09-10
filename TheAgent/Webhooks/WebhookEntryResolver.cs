@@ -1,38 +1,22 @@
 using Microsoft.Extensions.Logging;
-using TheAgent;
+using Xians.Lib.Agents.Core;
 using Xianix.Activities;
 using Xianix.Rules;
 
 namespace Xianix.Webhooks;
 
 /// <summary>
-/// Resolves <c>with-headers</c> / <c>with-url-vars</c> entries on <c>raise-events</c>
-/// using the same value forms as <c>with-envs</c>.
+/// Resolves <c>with-headers</c> on <c>raise-events</c> (secrets / constants).
+/// Host env references are denied by default.
 /// </summary>
 internal static class WebhookEntryResolver
 {
     /// <summary>
-    /// Host env vars permitted in raise-event headers / url-vars. Deny-by-default so a
-    /// malicious rules.json cannot exfiltrate credentials (e.g. <c>host.XIANS-API-KEY</c>).
-    /// </summary>
-    private static readonly HashSet<string> AllowedHostEnvVars = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "AIHUB-NODE-ID",
-        "AIHUB-ACTIVITY-ID",
-        "AIHUB-PR-REVIEW-NODE-ID",
-        "AIHUB-PR-REVIEW-ACTIVITY-ID",
-        "AIHUB-PERF-OPTIMIZER-NODE-ID",
-        "AIHUB-PERF-OPTIMIZER-ACTIVITY-ID",
-    };
-
-    /// <summary>
-    /// Prefetches distinct secret keys referenced by the given entries, with bounded concurrency
-    /// to avoid exhausting the vault connection pool under large header/url-var sets.
+    /// Prefetches distinct secret keys referenced by the given header entries.
     /// </summary>
     public static async Task<Dictionary<string, string?>> PrefetchSecretsAsync(
         IEnumerable<EnvEntry> entries,
-        ILogger logger,
-        Func<string, ILogger, Task<string?>>? secretFetcher = null)
+        ILogger logger)
     {
         var secretKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in entries)
@@ -48,22 +32,10 @@ internal static class WebhookEntryResolver
         if (secretKeys.Count == 0)
             return new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
 
-        const int maxConcurrentSecretFetches = 10;
-        using var semaphore = new SemaphoreSlim(maxConcurrentSecretFetches);
         var tasks = secretKeys.Select(async key =>
         {
-            await semaphore.WaitAsync().ConfigureAwait(false);
-            try
-            {
-                var value = await WebhookSecrets
-                    .LoadByKeyAsync(key, logger, secretFetcher)
-                    .ConfigureAwait(false);
-                return (key, value);
-            }
-            finally
-            {
-                semaphore.Release();
-            }
+            var value = await LoadByKeyAsync(key, logger).ConfigureAwait(false);
+            return (key, value);
         }).ToArray();
 
         var results = await Task.WhenAll(tasks).ConfigureAwait(false);
@@ -74,27 +46,12 @@ internal static class WebhookEntryResolver
     }
 
     /// <summary>
-    /// Resolves header entries. Header names are compared with
-    /// <see cref="StringComparer.OrdinalIgnoreCase"/> (HTTP header names are case-insensitive
-    /// per RFC 7230); authors should still use a single canonical casing in rules.json.
-    /// </summary>
-    public static async Task<(bool Success, Dictionary<string, string> Headers)> ResolveHeadersAsync(
-        IReadOnlyList<EnvEntry> headers,
-        ILogger logger,
-        Func<string, ILogger, Task<string?>>? secretFetcher = null)
-    {
-        var secrets = await PrefetchSecretsAsync(headers, logger, secretFetcher).ConfigureAwait(false);
-        return ResolveMap(headers, secrets, logger, validateAsHttpHeaders: true);
-    }
-
-    /// <summary>
-    /// Resolves entries against a pre-fetched secret cache (shared across webhooks in one activity).
+    /// Resolves header entries against a pre-fetched secret cache.
     /// </summary>
     public static (bool Success, Dictionary<string, string> Values) ResolveMap(
         IReadOnlyList<EnvEntry> entries,
         IReadOnlyDictionary<string, string?> secrets,
-        ILogger logger,
-        bool validateAsHttpHeaders)
+        ILogger logger)
     {
         var resolved = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -103,7 +60,7 @@ internal static class WebhookEntryResolver
             if (string.IsNullOrWhiteSpace(entry.Name))
                 continue;
 
-            if (validateAsHttpHeaders && !RaiseEventCaller.IsSafeHeaderName(entry.Name))
+            if (!RaiseEventActivities.IsSafeHeaderName(entry.Name))
             {
                 logger.LogWarning(
                     "raise-events header '{Header}' has an unsafe name (CRLF or control chars); skipping event.",
@@ -117,8 +74,7 @@ internal static class WebhookEntryResolver
                 if (entry.Mandatory)
                 {
                     logger.LogWarning(
-                        "raise-events {Kind} '{Name}' is mandatory but resolved empty; skipping event.",
-                        validateAsHttpHeaders ? "header" : "url-var",
+                        "raise-events header '{Name}' is mandatory but resolved empty; skipping event.",
                         entry.Name);
                     return (false, resolved);
                 }
@@ -126,12 +82,10 @@ internal static class WebhookEntryResolver
                 continue;
             }
 
-            // CRLF / control-char checks for headers and url-vars (host/secret/constant alike).
-            if (!RaiseEventCaller.IsSafeHeaderValue(value))
+            if (!RaiseEventActivities.IsSafeHeaderValue(value))
             {
                 logger.LogWarning(
-                    "raise-events {Kind} '{Name}' resolved to an unsafe value (contains CRLF or control chars); skipping event.",
-                    validateAsHttpHeaders ? "header" : "url-var",
+                    "raise-events header '{Name}' resolved to an unsafe value (contains CRLF or control chars); skipping event.",
                     entry.Name);
                 return (false, resolved);
             }
@@ -159,16 +113,11 @@ internal static class WebhookEntryResolver
                     : string.Empty;
 
             case EnvValueKind.Host:
-                if (!AllowedHostEnvVars.Contains(form.Identifier))
-                {
-                    logger.LogWarning(
-                        "raise-events entry '{Name}' references host env '{Var}' which is not on the webhook allowlist; skipping value.",
-                        entry.Name,
-                        form.Identifier);
-                    return string.Empty;
-                }
-
-                return EnvConfig.Get(form.Identifier);
+                logger.LogWarning(
+                    "raise-events entry '{Name}' references host env '{Var}' which is not permitted; skipping value.",
+                    entry.Name,
+                    form.Identifier);
+                return string.Empty;
 
             case EnvValueKind.EmptySecret:
                 logger.LogWarning(
@@ -186,14 +135,47 @@ internal static class WebhookEntryResolver
             default:
                 logger.LogWarning(
                     "raise-events entry '{Name}' has an unrecognised value form '{Value}'. " +
-                    "Expected 'host.VAR_NAME', 'secrets.SECRET-KEY', or \"constant\": true.",
+                    "Expected 'secrets.SECRET-KEY' or \"constant\": true.",
                     entry.Name,
                     entry.Value);
                 return string.Empty;
         }
     }
 
-    /// <summary>Test seam: whether a host env var name is permitted for raise-events.</summary>
-    internal static bool IsAllowedHostEnvVar(string name) =>
-        !string.IsNullOrWhiteSpace(name) && AllowedHostEnvVars.Contains(name);
+    private static async Task<string?> LoadByKeyAsync(string secretKey, ILogger logger)
+    {
+        if (string.IsNullOrWhiteSpace(secretKey))
+            return null;
+
+        try
+        {
+            return await LoadFromTenantVaultAsync(secretKey.Trim(), logger).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(
+                ex,
+                "Failed to read tenant secret '{Name}' for raise-event.",
+                secretKey);
+            return null;
+        }
+    }
+
+    private static async Task<string?> LoadFromTenantVaultAsync(string secretKey, ILogger logger)
+    {
+        var vault = XiansContext.CurrentAgent.Secrets.TenantScope();
+        var fetched = await vault
+            .FetchByKeyAsync(secretKey)
+            .ConfigureAwait(false);
+
+        if (fetched is null || string.IsNullOrWhiteSpace(fetched.Value))
+        {
+            logger.LogWarning(
+                "Tenant secret '{Name}' is missing; skipping raise-event value.",
+                secretKey);
+            return null;
+        }
+
+        return fetched.Value;
+    }
 }

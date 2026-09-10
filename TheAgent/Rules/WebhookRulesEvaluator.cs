@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
+using Xianix.Webhooks;
 
 namespace Xianix.Rules;
 
@@ -652,8 +653,7 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
                 string.IsNullOrWhiteSpace(entry.Name) ? "raise-event" : entry.Name.Trim(),
                 entry.Url.Trim(),
                 entry.WithHeaders,
-                entry.Payload?.ToJsonString(),
-                entry.WithUrlVars));
+                entry.Payload?.ToJsonString()));
         }
 
         return specs;

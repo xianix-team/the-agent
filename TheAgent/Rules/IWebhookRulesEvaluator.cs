@@ -1,3 +1,5 @@
+using Xianix.Webhooks;
+
 namespace Xianix.Rules;
 
 /// <summary>
@@ -33,17 +35,6 @@ public sealed record EvaluationResult(
     double? MaxBudgetUsd = null,
     bool ResumeSessions = false,
     IReadOnlyList<RaiseEventSpec>? RaiseEvents = null);
-
-public sealed record RaiseEventSpec(
-    string Name,
-    string Url,
-    IReadOnlyList<EnvEntry> WithHeaders,
-    string? PayloadJson,
-    IReadOnlyList<EnvEntry>? UrlVarEntries = null)
-{
-    /// <summary>Resolved URL template variables (<c>with-url-vars</c>), never null.</summary>
-    public IReadOnlyList<EnvEntry> WithUrlVars => UrlVarEntries ?? [];
-}
 
 /// <summary>
 /// Outcome of a rules evaluation: zero or more matching execution blocks, or a skip reason.

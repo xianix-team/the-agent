@@ -1,5 +1,7 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Sockets;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using Temporalio.Activities;
 using Xianix.Activities;
@@ -8,21 +10,17 @@ using Xianix.Rules;
 namespace Xianix.Webhooks;
 
 /// <summary>
-/// Delivers <c>raise-events</c> declared on a matched execution block.
+/// Delivers one <c>raise-events</c> HTTPS POST. All external I/O (vault + DNS + HTTP)
+/// lives here — workflows only schedule this activity.
 /// </summary>
 public sealed class RaiseEventActivities
 {
-    private const int MaxConcurrentDeliveries = 10;
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(15);
 
-    /// <summary>
-    /// Shared client for production: redirects disabled (SSRF), connection pooling reused.
-    /// </summary>
     private static readonly HttpClient SharedHttpClient = CreateSharedHttpClient();
 
     private readonly Func<HttpClient> _httpClientFactory;
     private readonly bool _disposeHttpClient;
-    private readonly Func<string, ILogger, Task<string?>>? _secretFetcher;
-    private readonly Func<string, CancellationToken, Task<IPAddress[]>>? _resolveHost;
 
     public RaiseEventActivities()
         : this(() => SharedHttpClient, disposeHttpClient: false)
@@ -31,37 +29,375 @@ public sealed class RaiseEventActivities
 
     internal RaiseEventActivities(
         Func<HttpClient> httpClientFactory,
-        bool disposeHttpClient = true,
-        Func<string, ILogger, Task<string?>>? secretFetcher = null,
-        Func<string, CancellationToken, Task<IPAddress[]>>? resolveHost = null)
+        bool disposeHttpClient = true)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _disposeHttpClient = disposeHttpClient;
-        _secretFetcher = secretFetcher;
-        _resolveHost = resolveHost;
     }
 
-    internal static HttpClient CreateSharedHttpClient() =>
+    private static HttpClient CreateSharedHttpClient() =>
         new(CreateSharedHandler(), disposeHandler: true);
 
-    internal static SocketsHttpHandler CreateSharedHandler() =>
+    private static SocketsHttpHandler CreateSharedHandler() =>
         new()
         {
             AllowAutoRedirect = false,
-            // Ambient HTTP(S)_PROXY would re-resolve and bypass DNS pin — never use a proxy here.
             UseProxy = false,
-            // Shared across tenants; cookies from one raise-event must not attach to another.
             UseCookies = false,
             PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-            // Connect only to addresses RaiseEventCaller pinned after SSRF validation.
             ConnectCallback = ConnectToPinnedAddressAsync,
         };
+
+    [Activity]
+    public async Task DeliverRaiseEventAsync(RaiseEventRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Event);
+        ArgumentNullException.ThrowIfNull(request.Result);
+
+        var logger = GetLogger();
+        var spec = request.Event;
+        var variables = ExecutionVariablesBuilder.Merge(
+            WebhookUrlVariables.From(request.Inputs, request.CorrelationId, request.Plugins),
+            request.Result,
+            request.CorrelationId);
+
+        var secrets = await WebhookEntryResolver
+            .PrefetchSecretsAsync(spec.WithHeaders, logger)
+            .ConfigureAwait(false);
+
+        var (headersOk, headers) = WebhookEntryResolver.ResolveMap(
+            spec.WithHeaders, secrets, logger);
+        if (!headersOk)
+            return;
+
+        var url = WebhookUrlRenderer.TryRender(spec.Url, out var missingUrl);
+        if (url is null)
+        {
+            logger.LogWarning(
+                "raise-event '{Event}' URL for '{Execution}' has unresolved placeholder(s): {Missing}. Skipping.",
+                spec.Name,
+                request.ExecutionName ?? "—",
+                missingUrl);
+            return;
+        }
+
+        string? payload = null;
+        if (!string.IsNullOrWhiteSpace(spec.PayloadJson))
+        {
+            payload = WebhookPayloadRenderer.TryRender(spec.PayloadJson, variables);
+            if (payload is null)
+            {
+                logger.LogWarning(
+                    "raise-event '{Event}' payload template is empty or invalid JSON; sending without a body.",
+                    spec.Name);
+            }
+        }
+
+        var http = _httpClientFactory();
+        try
+        {
+            await PostAsync(http, url, payload, headers, logger).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (_disposeHttpClient)
+                http.Dispose();
+        }
+    }
+
+    private async Task PostAsync(
+        HttpClient http,
+        string url,
+        string? payloadJson,
+        IReadOnlyDictionary<string, string> headers,
+        ILogger logger,
+        CancellationToken cancellationToken = default)
+    {
+        var validation = await ValidateWebhookUrlAsync(url, cancellationToken)
+            .ConfigureAwait(false);
+        if (!validation.Ok || validation.Addresses is not { Length: > 0 } pinned)
+        {
+            logger.LogWarning(
+                "raise-events POST blocked unsafe URL ({Reason}): {UrlHost}",
+                validation.Reason ?? "unknown",
+                DescribeUrlHost(url));
+            return;
+        }
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        foreach (var (name, value) in headers)
+        {
+            if (!IsSafeHeaderName(name) || !IsSafeHeaderValue(value))
+            {
+                logger.LogWarning(
+                    "raise-events POST blocked header with invalid name/value (CRLF or control chars): {Header}",
+                    name);
+                return;
+            }
+
+            if (!request.Headers.TryAddWithoutValidation(name, value))
+            {
+                logger.LogWarning("raise-events POST could not add header '{Header}'.", name);
+                return;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(payloadJson))
+        {
+            request.Content = new StringContent(payloadJson, Encoding.UTF8, "application/json");
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        }
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(RequestTimeout);
+
+        using (DnsPin.Use(pinned))
+        {
+            try
+            {
+                using var response = await http.SendAsync(request, cts.Token).ConfigureAwait(false);
+
+                if ((int)response.StatusCode is >= 300 and < 400)
+                {
+                    logger.LogWarning(
+                        "raise-events refused redirect response: {StatusCode} {UrlHost}",
+                        (int)response.StatusCode, DescribeUrlHost(url));
+                    return;
+                }
+
+                if (response.IsSuccessStatusCode)
+                {
+                    logger.LogInformation(
+                        "raise-events accepted: {StatusCode} {UrlHost}",
+                        (int)response.StatusCode, DescribeUrlHost(url));
+                    return;
+                }
+
+                if ((int)response.StatusCode >= 500)
+                {
+                    throw new HttpRequestException(
+                        $"raise-events rejected with {(int)response.StatusCode} from {DescribeUrlHost(url)}");
+                }
+
+                logger.LogWarning(
+                    "raise-events rejected: {StatusCode} {UrlHost}",
+                    (int)response.StatusCode, DescribeUrlHost(url));
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException($"raise-events POST timed out: {DescribeUrlHost(url)}");
+            }
+        }
+    }
+
+    // ── Shared validation helpers (also used by URL/header resolvers) ────────
+
+    /// <summary>Structural HTTPS checks only (no DNS) — used after URL template render.</summary>
+    internal static bool TryValidateWebhookUrlStructure(string url, out string? reason) =>
+        TryValidateStructure(url, out reason, out _);
+
+    internal static bool IsSafeHeaderName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return false;
+
+        foreach (var c in name)
+        {
+            if (c <= 32 || c >= 127 || c is ':' or '\r' or '\n')
+                return false;
+        }
+
+        return true;
+    }
+
+    internal static bool IsSafeHeaderValue(string? value)
+    {
+        if (value is null)
+            return false;
+
+        foreach (var c in value)
+        {
+            if (c is '\r' or '\n' or '\0')
+                return false;
+        }
+
+        return true;
+    }
+
+    private static async Task<(bool Ok, string? Reason, IPAddress[]? Addresses)> ValidateWebhookUrlAsync(
+        string url,
+        CancellationToken cancellationToken)
+    {
+        if (!TryValidateStructure(url, out var reason, out var uri))
+            return (false, reason, null);
+
+        var host = uri!.IdnHost;
+        if (IPAddress.TryParse(host, out var literal))
+        {
+            if (IsBlockedAddress(literal))
+                return (false, "IP address not allowed", null);
+
+            return (true, null, [literal]);
+        }
+
+        IPAddress[] addresses;
+        try
+        {
+            addresses = await Dns.GetHostAddressesAsync(host, cancellationToken).ConfigureAwait(false);
+        }
+        catch (SocketException)
+        {
+            return (false, "DNS resolution failed", null);
+        }
+
+        if (addresses.Length == 0)
+            return (false, "DNS returned no addresses", null);
+
+        if (addresses.Any(IsBlockedAddress))
+            return (false, "resolves to a blocked address", null);
+
+        return (true, null, addresses);
+    }
+
+    private static bool TryValidateStructure(string url, out string? reason, out Uri? uri)
+    {
+        reason = null;
+        uri = null;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out uri))
+        {
+            reason = "not an absolute URI";
+            return false;
+        }
+
+        if (!string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            reason = "HTTPS required";
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(uri.UserInfo))
+        {
+            reason = "userinfo not allowed";
+            return false;
+        }
+
+        var host = uri.IdnHost;
+        if (string.IsNullOrWhiteSpace(host)
+            || host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase)
+            || host.Equals("metadata.google.internal", StringComparison.OrdinalIgnoreCase))
+        {
+            reason = "host not allowed";
+            return false;
+        }
+
+        if (IPAddress.TryParse(host, out var literal) && IsBlockedAddress(literal))
+        {
+            reason = "IP address not allowed";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsBlockedAddress(IPAddress ip)
+    {
+        if (TryExtractEmbeddedIPv4(ip, out var embeddedV4))
+            ip = embeddedV4;
+
+        if (IPAddress.Any.Equals(ip)
+            || IPAddress.IPv6Any.Equals(ip)
+            || IPAddress.IPv6None.Equals(ip)
+            || IPAddress.IsLoopback(ip)
+            || ip.IsIPv6LinkLocal
+            || ip.IsIPv6SiteLocal)
+            return true;
+
+        if (ip.AddressFamily == AddressFamily.InterNetworkV6)
+        {
+            var bytes = ip.GetAddressBytes();
+            if (bytes.Length > 0)
+            {
+                if (bytes[0] == 0xfe && (bytes[1] & 0xc0) == 0xc0)
+                    return true;
+                if ((bytes[0] & 0xfe) == 0xfc)
+                    return true;
+            }
+        }
+
+        if (ip.AddressFamily != AddressFamily.InterNetwork)
+            return false;
+
+        var v4 = ip.GetAddressBytes();
+        return v4[0] switch
+        {
+            0 => true,
+            10 => true,
+            127 => true,
+            169 when v4[1] == 254 => true,
+            172 when v4[1] >= 16 && v4[1] <= 31 => true,
+            192 when v4[1] == 168 => true,
+            100 when v4[1] >= 64 && v4[1] <= 127 => true,
+            _ => false,
+        };
+    }
+
+    private static bool TryExtractEmbeddedIPv4(IPAddress ip, out IPAddress ipv4)
+    {
+        ipv4 = IPAddress.None;
+        if (ip.IsIPv4MappedToIPv6)
+        {
+            ipv4 = ip.MapToIPv4();
+            return true;
+        }
+
+        if (ip.AddressFamily != AddressFamily.InterNetworkV6)
+            return false;
+
+        var bytes = ip.GetAddressBytes();
+        if (bytes.Length != 16)
+            return false;
+
+        var isCompatible = true;
+        for (var i = 0; i < 12; i++)
+        {
+            if (bytes[i] != 0)
+            {
+                isCompatible = false;
+                break;
+            }
+        }
+
+        if (isCompatible && (bytes[12] | bytes[13] | bytes[14] | bytes[15]) != 0)
+        {
+            ipv4 = new IPAddress(bytes.AsSpan(12, 4));
+            return true;
+        }
+
+        if (bytes[0] == 0x00 && bytes[1] == 0x64 && bytes[2] == 0xff && bytes[3] == 0x9b
+            && bytes[4] == 0 && bytes[5] == 0
+            && bytes[6] == 0 && bytes[7] == 0
+            && bytes[8] == 0 && bytes[9] == 0
+            && bytes[10] == 0 && bytes[11] == 0)
+        {
+            ipv4 = new IPAddress(bytes.AsSpan(12, 4));
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string DescribeUrlHost(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            ? $"{uri.Scheme}://{uri.IdnHost}"
+            : "(invalid-url)";
 
     private static async ValueTask<Stream> ConnectToPinnedAddressAsync(
         SocketsHttpConnectionContext context,
         CancellationToken cancellationToken)
     {
-        var pins = WebhookDnsPin.Addresses;
+        var pins = DnsPin.Addresses;
         if (pins is not { Length: > 0 })
         {
             throw new HttpRequestException(
@@ -91,129 +427,6 @@ public sealed class RaiseEventActivities
             last);
     }
 
-    [Activity]
-    public async Task DeliverRaiseEventsAsync(RaiseEventsRequest request)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        ArgumentNullException.ThrowIfNull(request.Result);
-
-        if (request.Events is not { Count: > 0 })
-            return;
-
-        var logger = GetLogger();
-        var variables = ExecutionVariablesBuilder.Merge(
-            request.UrlVariables,
-            request.Result,
-            request.CorrelationId);
-
-        // One vault round-trip set for the whole activity — shared secrets across events.
-        var allEntries = request.Events.SelectMany(spec =>
-            spec.WithHeaders.Concat(spec.WithUrlVars));
-        var secrets = await WebhookEntryResolver
-            .PrefetchSecretsAsync(allEntries, logger, _secretFetcher)
-            .ConfigureAwait(false);
-
-        var http = _httpClientFactory();
-        try
-        {
-            var caller = new RaiseEventCaller(http, logger, _resolveHost);
-
-            // Bound concurrent POSTs (same ceiling as vault prefetch) to protect sockets/DNS.
-            using var gate = new SemaphoreSlim(MaxConcurrentDeliveries);
-            var deliveries = request.Events.Select(spec => DeliverOneGuardedAsync(
-                spec, request, variables, secrets, caller, logger, gate));
-            await Task.WhenAll(deliveries).ConfigureAwait(false);
-        }
-        finally
-        {
-            if (_disposeHttpClient)
-                http.Dispose();
-        }
-    }
-
-    private static async Task DeliverOneGuardedAsync(
-        RaiseEventSpec spec,
-        RaiseEventsRequest request,
-        IReadOnlyDictionary<string, string> variables,
-        IReadOnlyDictionary<string, string?> secrets,
-        RaiseEventCaller caller,
-        ILogger logger,
-        SemaphoreSlim gate)
-    {
-        await gate.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            await DeliverOneAsync(spec, request, variables, secrets, caller, logger)
-                .ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            logger.LogWarning(ex,
-                "Failed to deliver raise-event '{Event}' for execution '{Execution}'. The call is non-critical.",
-                spec.Name,
-                request.ExecutionName ?? "—");
-        }
-        finally
-        {
-            gate.Release();
-        }
-    }
-
-    private static async Task DeliverOneAsync(
-        RaiseEventSpec spec,
-        RaiseEventsRequest request,
-        IReadOnlyDictionary<string, string> variables,
-        IReadOnlyDictionary<string, string?> secrets,
-        RaiseEventCaller caller,
-        ILogger logger)
-    {
-        var (urlVarsOk, urlVars) = WebhookEntryResolver.ResolveMap(
-            spec.WithUrlVars, secrets, logger, validateAsHttpHeaders: false);
-        if (!urlVarsOk)
-            return;
-
-        // URL vars apply only to the URL template — never overwrite payload metrics keys
-        // (model, tokens, costUsd, …) that ExecutionVariablesBuilder already set.
-        IReadOnlyDictionary<string, string> urlRenderVars = variables;
-        if (urlVars.Count > 0)
-        {
-            var merged = new Dictionary<string, string>(variables, StringComparer.OrdinalIgnoreCase);
-            foreach (var (key, value) in urlVars)
-                WebhookPlaceholders.SetWithAliases(merged, key, value);
-            urlRenderVars = merged;
-        }
-
-        var (headersOk, headers) = WebhookEntryResolver.ResolveMap(
-            spec.WithHeaders, secrets, logger, validateAsHttpHeaders: true);
-        if (!headersOk)
-            return;
-
-        var url = WebhookUrlRenderer.TryRender(spec.Url, urlRenderVars, out var missingUrl);
-        if (url is null)
-        {
-            logger.LogWarning(
-                "raise-event '{Event}' URL for '{Execution}' has unresolved placeholder(s): {Missing}. Skipping.",
-                spec.Name,
-                request.ExecutionName ?? "—",
-                missingUrl);
-            return;
-        }
-
-        string? payload = null;
-        if (!string.IsNullOrWhiteSpace(spec.PayloadJson))
-        {
-            payload = WebhookPayloadRenderer.TryRenderOmitMissing(spec.PayloadJson, variables);
-            if (payload is null)
-            {
-                logger.LogWarning(
-                    "raise-event '{Event}' payload template is empty or invalid JSON; sending without a body.",
-                    spec.Name);
-            }
-        }
-
-        await caller.PostAsync(url, payload, headers).ConfigureAwait(false);
-    }
-
     private static ILogger GetLogger()
     {
         try
@@ -225,58 +438,35 @@ public sealed class RaiseEventActivities
             return Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
         }
     }
-}
 
-public sealed class RaiseEventsRequest
-{
-    public required IReadOnlyList<RaiseEventSpec> Events { get; init; }
-    public string? ExecutionName { get; init; }
-    public string? CorrelationId { get; init; }
-    public IReadOnlyDictionary<string, string>? UrlVariables { get; init; }
-    public required ContainerExecutionResult Result { get; init; }
-
-    /// <summary>
-    /// Builds the activity request from a completed processing run (testable without Temporal).
-    /// </summary>
-    internal static RaiseEventsRequest FromProcessing(
-        IReadOnlyList<RaiseEventSpec> raiseEvents,
-        string? executionBlockName,
-        string correlationId,
-        IReadOnlyDictionary<string, object?>? inputs,
-        IEnumerable<PluginEntry>? plugins,
-        ContainerExecutionResult result) =>
-        new()
-        {
-            Events = raiseEvents,
-            ExecutionName = executionBlockName,
-            CorrelationId = correlationId,
-            UrlVariables = WebhookUrlVariables.From(inputs, correlationId, plugins),
-            Result = result,
-        };
-}
-
-/// <summary>
-/// Non-critical raise-event reporting helper (testable without a Temporal workflow runtime).
-/// </summary>
-internal static class RaiseEventReporting
-{
-    internal static async Task TryDeliverAsync(
-        RaiseEventsRequest request,
-        Func<RaiseEventsRequest, Task> deliver,
-        ILogger logger,
-        string? orchestrationName,
-        string? executionBlockName)
+    /// <summary>Carries DNS-validated addresses into <see cref="SocketsHttpHandler.ConnectCallback"/>.</summary>
+    private static class DnsPin
     {
-        try
+        private static readonly AsyncLocal<IPAddress[]?> Current = new();
+
+        public static IPAddress[]? Addresses => Current.Value;
+
+        public static IDisposable Use(IPAddress[] addresses)
         {
-            await deliver(request).ConfigureAwait(false);
+            var prior = Current.Value;
+            Current.Value = addresses;
+            return new Restore(prior);
         }
-        catch (Exception ex)
+
+        private sealed class Restore(IPAddress[]? prior) : IDisposable
         {
-            logger.LogWarning(ex,
-                "Failed to deliver raise-events for '{Name}', block '{Block}'. The calls are non-critical.",
-                orchestrationName ?? "—",
-                executionBlockName ?? "—");
+            public void Dispose() => Current.Value = prior;
         }
     }
+}
+
+/// <summary>Input for one raise-event activity invocation (one external HTTPS POST).</summary>
+public sealed class RaiseEventRequest
+{
+    public required RaiseEventSpec Event { get; init; }
+    public string? ExecutionName { get; init; }
+    public string? CorrelationId { get; init; }
+    public IReadOnlyDictionary<string, object?>? Inputs { get; init; }
+    public IReadOnlyList<PluginEntry>? Plugins { get; init; }
+    public required ContainerExecutionResult Result { get; init; }
 }

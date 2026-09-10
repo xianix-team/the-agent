@@ -362,15 +362,6 @@ public sealed class RaiseEventEntry
     public List<EnvEntry> WithHeaders { get; init; } = [];
 
     /// <summary>
-    /// Optional URL template variables resolved like <see cref="WithHeaders"/>
-    /// (<c>host.*</c>, <c>secrets.*</c>, or <c>constant: true</c>). Use these for
-    /// tenant-specific path segments (e.g. AI Hub node IDs) instead of hard-coding them
-    /// in <see cref="Url"/>.
-    /// </summary>
-    [JsonPropertyName("with-url-vars")]
-    public List<EnvEntry> WithUrlVars { get; init; } = [];
-
-    /// <summary>
     /// Optional JSON body template. Placeholders use <c>{{name}}</c> with optional
     /// <c>:number</c>, <c>:array</c>, or <c>:boolean</c> suffixes. Unresolved keys
     /// are omitted from the rendered payload.
