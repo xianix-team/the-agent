@@ -47,11 +47,13 @@ public sealed class RaiseEventActivities
 
             if (request.Event.Payload is not null)
             {
-                var payload = RaiseEventTemplate.RenderPayload(
-                    request.Event.Payload.ToJsonString(),
-                    request.Variables ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+                var payload = request.Event.Payload.ToJsonString();
                 if (!string.IsNullOrWhiteSpace(payload) && payload != "null")
                 {
+                    foreach (var variable in request.Variables)
+                    {
+                        payload = payload.Replace($"{{{{{variable.Key}}}}}", variable.Value);
+                    }
                     message.Content = new StringContent(payload, Encoding.UTF8, "application/json");
                 }
             }
@@ -75,7 +77,7 @@ public sealed class RaiseEventActivities
             _logger.LogWarning(
                 "raise-events rejected: {StatusCode} {Url}",
                 (int)response.StatusCode, request.Event.Url);
-            throw new ApplicationFailureException( $"raise-events rejected: {(int)response.StatusCode} {request.Event.Url}",nonRetryable: true);
+            throw new ApplicationFailureException($"raise-events rejected: {(int)response.StatusCode} {request.Event.Url}", nonRetryable: true);
         }
         catch (OperationCanceledException)
         {
@@ -88,5 +90,5 @@ public sealed class RaiseEventRequest
 {
     public required RaiseEventEntry Event { get; init; }
     public string? ExecutionName { get; init; }
-    public IReadOnlyDictionary<string, string>? Variables { get; init; }
+    public IReadOnlyDictionary<string, string> Variables { get; init; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 }
