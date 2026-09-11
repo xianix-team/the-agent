@@ -1,20 +1,17 @@
-using System.Net.Http;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Temporalio.Activities;
-using Xians.Lib.Agents.Core;
 using Xianix.Rules;
 using Xianix.Utills;
+using Xians.Lib.Logging;
+using Temporalio.Exceptions;
 
 namespace Xianix.Activities;
 
-/// <summary>
-/// Delivers one <c>raise-events</c> HTTPS POST. External I/O lives here —
-/// workflows only schedule this activity.
-/// </summary>
 public sealed class RaiseEventActivities
 {
     private static readonly HttpClient Client = new();
+    private static readonly ILogger _logger = XiansLogger.GetLogger<RaiseEventActivities>();
 
     [Activity]
     public async Task DeliverRaiseEventAsync(RaiseEventRequest request)
@@ -23,52 +20,70 @@ public sealed class RaiseEventActivities
         ArgumentNullException.ThrowIfNull(request.Event);
         ArgumentException.ThrowIfNullOrEmpty(request.Event.Url);
 
-        var logger = ActivityExecutionContext.Current.Logger;
-
-        using var message = new HttpRequestMessage(HttpMethod.Post, request.Event.Url);
-
-        foreach (var header in request.Event.WithHeaders)
-        {
-            if (string.IsNullOrWhiteSpace(header.Name))
-                continue;
-
-            message.Headers.Add(header.Name, await EnvResolver.ResolveAsync(header, logger) ?? string.Empty);
-        }
-
-        if (request.Event.Payload is not null)
-        {
-            var payload = RaiseEventTemplate.RenderPayload(
-                request.Event.Payload.ToJsonString(),
-                request.Variables ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
-            if (!string.IsNullOrWhiteSpace(payload) && payload != "null")
-            {
-                message.Content = new StringContent(payload, Encoding.UTF8, "application/json");
-            }
-        }
-
         try
         {
+            using var message = new HttpRequestMessage(HttpMethod.Post, request.Event.Url);
+
+            foreach (var header in request.Event.WithHeaders)
+            {
+                if (string.IsNullOrWhiteSpace(header.Name))
+                    continue;
+
+                var value = await EnvResolver.ResolveAsync(header, _logger);
+                if (string.IsNullOrEmpty(value))
+                {
+                    if (header.Mandatory)
+                    {
+                        throw new ApplicationFailureException(
+                            $"raise-events header '{header.Name}' is mandatory but resolved empty for {request.Event.Url}.",
+                            nonRetryable: true);
+                    }
+
+                    continue;
+                }
+
+                message.Headers.TryAddWithoutValidation(header.Name, value);
+            }
+
+            if (request.Event.Payload is not null)
+            {
+                var payload = RaiseEventTemplate.RenderPayload(
+                    request.Event.Payload.ToJsonString(),
+                    request.Variables ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+                if (!string.IsNullOrWhiteSpace(payload) && payload != "null")
+                {
+                    message.Content = new StringContent(payload, Encoding.UTF8, "application/json");
+                }
+            }
             using var response = await Client.SendAsync(message);
 
             if (response.IsSuccessStatusCode)
             {
-                logger.LogInformation(
+                _logger.LogInformation(
                     "raise-events accepted: {StatusCode} {Url}",
                     (int)response.StatusCode, request.Event.Url);
                 return;
             }
 
-            //throw an exception to fail the activity and retry
-            throw new HttpRequestException($"raise-events rejected with {(int)response.StatusCode} from {request.Event.Url}");
+            if ((int)response.StatusCode >= 500)
+            {
+                throw new ApplicationFailureException(
+                    $"raise-events rejected with {(int)response.StatusCode} from {request.Event.Url}",
+                    nonRetryable: false);
+            }
+
+            _logger.LogWarning(
+                "raise-events rejected: {StatusCode} {Url}",
+                (int)response.StatusCode, request.Event.Url);
+            throw new ApplicationFailureException( $"raise-events rejected: {(int)response.StatusCode} {request.Event.Url}",nonRetryable: true);
         }
         catch (OperationCanceledException)
         {
-            throw new TimeoutException($"POST timed out: {request.Event.Url}");
+            throw new ApplicationFailureException($"POST timed out: {request.Event.Url}", nonRetryable: false);
         }
     }
 }
 
-/// <summary>Input for one raise-event activity invocation (one external HTTPS POST).</summary>
 public sealed class RaiseEventRequest
 {
     public required RaiseEventEntry Event { get; init; }
