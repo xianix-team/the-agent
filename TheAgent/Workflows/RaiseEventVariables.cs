@@ -36,6 +36,9 @@ internal static class RaiseEventVariables
                 vars["plugin-name"] = string.Join(",", names);
         }
 
+        if (!vars.ContainsKey("plugin-name"))
+            vars["plugin-name"] = "xianix-agent";
+
         if (inputs is not null)
         {
             foreach (var (key, value) in inputs)

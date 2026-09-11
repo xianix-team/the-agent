@@ -198,10 +198,12 @@
               "payload": [
                 {
                   "correlationId": "{{correlationId}}",
-                  "actors": "{{plugin-name:array}}",
+                  "actors": [
+                    "{{plugin-name}}"
+                  ],
                   "dimensions": {
-                    "tokens": "{{metrics.tokens.total:number}}",
-                    "costUsd": "{{metrics.cost-usd:number}}",
+                    "tokens": "{{metrics.tokens.total}}",
+                    "costUsd": "{{metrics.cost-usd}}",
                     "model": "{{metrics.model}}",
                     "status": "{{metrics.status}}"
                   }
@@ -276,10 +278,12 @@
               "payload": [
                 {
                   "correlationId": "{{correlationId}}",
-                  "actors": "{{plugin-name:array}}",
+                  "actors": [
+                    "{{plugin-name}}"
+                  ],
                   "dimensions": {
-                    "tokens": "{{metrics.tokens.total:number}}",
-                    "costUsd": "{{metrics.cost-usd:number}}",
+                    "tokens": "{{metrics.tokens.total}}",
+                    "costUsd": "{{metrics.cost-usd}}",
                     "model": "{{metrics.model}}",
                     "status": "{{metrics.status}}"
                   }

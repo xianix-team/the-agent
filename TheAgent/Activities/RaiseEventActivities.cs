@@ -1,17 +1,17 @@
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Temporalio.Activities;
+using Temporalio.Exceptions;
 using Xianix.Rules;
 using Xianix.Utills;
 using Xians.Lib.Logging;
-using Temporalio.Exceptions;
 
 namespace Xianix.Activities;
 
 public sealed class RaiseEventActivities
 {
     private static readonly HttpClient Client = new();
-    private static readonly ILogger _logger = XiansLogger.GetLogger<RaiseEventActivities>();
+    private static readonly ILogger Logger = XiansLogger.GetLogger<RaiseEventActivities>();
 
     [Activity]
     public async Task DeliverRaiseEventAsync(RaiseEventRequest request)
@@ -29,7 +29,7 @@ public sealed class RaiseEventActivities
                 if (string.IsNullOrWhiteSpace(header.Name))
                     continue;
 
-                var value = await EnvResolver.ResolveAsync(header, _logger);
+                var value = await EnvResolver.ResolveAsync(header, Logger);
                 if (string.IsNullOrEmpty(value))
                 {
                     if (header.Mandatory)
@@ -50,34 +50,45 @@ public sealed class RaiseEventActivities
                 var payload = request.Event.Payload.ToJsonString();
                 if (!string.IsNullOrWhiteSpace(payload) && payload != "null")
                 {
-                    foreach (var variable in request.Variables)
-                    {
-                        payload = payload.Replace($"{{{{{variable.Key}}}}}", variable.Value);
-                    }
+                    foreach (var (key, value) in request.Variables)
+                        payload = payload.Replace($"{{{{{key}}}}}", value, StringComparison.OrdinalIgnoreCase);
+
+                    Logger.LogInformation(
+                        "raise-events POST body for {Url}: {Payload}",
+                        request.Event.Url, payload);
                     message.Content = new StringContent(payload, Encoding.UTF8, "application/json");
                 }
             }
+
             using var response = await Client.SendAsync(message);
 
             if (response.IsSuccessStatusCode)
             {
-                _logger.LogInformation(
+                Logger.LogInformation(
                     "raise-events accepted: {StatusCode} {Url}",
                     (int)response.StatusCode, request.Event.Url);
                 return;
             }
 
-            if ((int)response.StatusCode >= 500)
+            var body = await response.Content.ReadAsStringAsync();
+            if (body.Length > 500)
+                body = body[..500] + "…";
+
+            var status = (int)response.StatusCode;
+            if (status >= 500)
             {
                 throw new ApplicationFailureException(
-                    $"raise-events rejected with {(int)response.StatusCode} from {request.Event.Url}",
+                    $"raise-events rejected with {status} from {request.Event.Url}: {body}",
                     nonRetryable: false);
             }
 
-            _logger.LogWarning(
-                "raise-events rejected: {StatusCode} {Url}",
-                (int)response.StatusCode, request.Event.Url);
-            throw new ApplicationFailureException($"raise-events rejected: {(int)response.StatusCode} {request.Event.Url}", nonRetryable: true);
+            Logger.LogWarning(
+                "raise-events rejected: {StatusCode} {Url} body={Body}",
+                status, request.Event.Url, string.IsNullOrWhiteSpace(body) ? "(empty)" : body);
+
+            throw new ApplicationFailureException(
+                $"raise-events rejected: {status} {request.Event.Url} body={body}",
+                nonRetryable: true);
         }
         catch (OperationCanceledException)
         {
@@ -90,5 +101,6 @@ public sealed class RaiseEventRequest
 {
     public required RaiseEventEntry Event { get; init; }
     public string? ExecutionName { get; init; }
-    public IReadOnlyDictionary<string, string> Variables { get; init; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    public IReadOnlyDictionary<string, string> Variables { get; init; } =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 }
