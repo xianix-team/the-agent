@@ -49,4 +49,13 @@ public static class ContainerWorkflowOptions
         StartToCloseTimeout = TimeSpan.FromMinutes(2),
         RetryPolicy = new() { MaximumAttempts = 1 },
     };
+
+    /// <summary>
+    /// One external HTTPS raise-event POST. Retries are Temporal's responsibility.
+    /// </summary>
+    public static readonly ActivityOptions RaiseEvents = new()
+    {
+        StartToCloseTimeout = TimeSpan.FromSeconds(30),
+        RetryPolicy = new() { MaximumAttempts = 10 },
+    };
 }

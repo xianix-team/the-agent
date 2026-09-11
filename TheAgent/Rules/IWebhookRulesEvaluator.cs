@@ -31,7 +31,8 @@ public sealed record EvaluationResult(
     IReadOnlyList<string>? AllowedTools = null,
     IReadOnlyList<string>? DisallowedTools = null,
     double? MaxBudgetUsd = null,
-    bool ResumeSessions = false);
+    bool ResumeSessions = false,
+    IReadOnlyList<RaiseEventEntry>? RaiseEvents = null);
 
 /// <summary>
 /// Outcome of a rules evaluation: zero or more matching execution blocks, or a skip reason.

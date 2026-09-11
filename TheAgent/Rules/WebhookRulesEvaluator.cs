@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 
 namespace Xianix.Rules;
@@ -209,6 +210,7 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             var prompt = InterpolatePrompt(execution.Prompt, dict);
             var hasPrompt = !string.IsNullOrWhiteSpace(prompt);
             var blockName = string.IsNullOrWhiteSpace(execution.Name) ? null : execution.Name.Trim();
+            var raiseEvents = BuildRaiseEvents(execution);
 
             // Merge rule-set common envs with the execution's own envs. Execution-level
             // entries win on name collisions — same "common defaults, executions may
@@ -241,7 +243,8 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
                 AllowedTools:         execution.AllowedTools,
                 DisallowedTools:      execution.DisallowedTools,
                 MaxBudgetUsd:         execution.MaxBudgetUsd,
-                ResumeSessions:       execution.ResumeSessions));
+                ResumeSessions:       execution.ResumeSessions,
+                RaiseEvents:          raiseEvents.Count > 0 ? raiseEvents : null));
         }
 
         if (matches.Count > 0)
@@ -632,6 +635,29 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
         }
 
         return merged;
+    }
+
+    private static List<RaiseEventEntry> BuildRaiseEvents(WebhookExecution execution)
+    {
+        if (execution.RaiseEvents.Count == 0)
+            return [];
+
+        var entries = new List<RaiseEventEntry>(execution.RaiseEvents.Count);
+        foreach (var entry in execution.RaiseEvents)
+        {
+            if (string.IsNullOrWhiteSpace(entry.Url))
+                continue;
+
+            entries.Add(new RaiseEventEntry
+            {
+                Name = string.IsNullOrWhiteSpace(entry.Name) ? "raise-event" : entry.Name.Trim(),
+                Url = entry.Url.Trim(),
+                WithHeaders = entry.WithHeaders,
+                Payload = entry.Payload,
+            });
+        }
+
+        return entries;
     }
 
     /// <summary>

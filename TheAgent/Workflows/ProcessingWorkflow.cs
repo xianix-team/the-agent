@@ -103,6 +103,7 @@ public class ProcessingWorkflow
             ContainerOutputParser.Parse(executionResult);
             LogOutcome(executionResult, executionLabel, executionId, orchestrationResult.TenantId, repoLabel, keyInputs);
             await ReportExecutionMetricsAsync(orchestrationResult, executionResult);
+            await ReportRaiseEventsAsync(orchestrationResult, executionResult);
         }
         finally
         {
@@ -307,6 +308,52 @@ public class ProcessingWorkflow
                 "Failed to report execution metrics for '{Name}', block '{Block}'. Metrics are non-critical.",
                 orchestrationResult.Name,
                 orchestrationResult.ExecutionBlockName ?? "—");
+        }
+    }
+
+    private static async Task ReportRaiseEventsAsync(
+        ProcessingRequest orchestrationResult,
+        ContainerExecutionResult executionResult)
+    {
+        var raiseEvents = orchestrationResult.RaiseEvents;
+        if (raiseEvents is not { Count: > 0 })
+            return;
+
+        var variables = RaiseEventVariables.Build(
+            orchestrationResult.Inputs,
+            orchestrationResult.Execution?.Plugins,
+            executionResult);
+
+        // Prefer the configured execution model when the run didn't report one.
+        if (!variables.ContainsKey("metrics.model")
+            && !string.IsNullOrWhiteSpace(orchestrationResult.Execution?.Model))
+        {
+            variables["metrics.model"] = orchestrationResult.Execution.Model.Trim();
+        }
+
+        foreach (var raiseEvent in raiseEvents)
+        {
+            try
+            {
+                var request = new RaiseEventRequest
+                {
+                    Event = raiseEvent,
+                    ExecutionName = orchestrationResult.ExecutionBlockName,
+                    Variables = variables,
+                };
+
+                await Workflow.ExecuteActivityAsync(
+                    (RaiseEventActivities a) => a.DeliverRaiseEventAsync(request),
+                    ContainerWorkflowOptions.RaiseEvents);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Workflow.Logger.LogWarning(ex,
+                    "Failed to deliver raise-event '{Event}' for '{Name}', block '{Block}'. The call is non-critical.",
+                    raiseEvent.Name,
+                    orchestrationResult.Name,
+                    orchestrationResult.ExecutionBlockName ?? "—");
+            }
         }
     }
 
