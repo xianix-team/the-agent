@@ -49,7 +49,16 @@ A **fresh activation** starts from this skeleton (no installed plugins):
 ]
 ```
 
-Rules Optimizer loads phase-specific **skills** (under `Knowledge/skills/rules-optimizer/`) via `LoadRulesOptimizerSkill`; low-level C# tools remain the implementation layer.
+Rules Optimizer uses four layers:
+
+| Mechanism | Role | Where |
+|-----------|------|--------|
+| **Rules** | Always-on must / must-not constraints | `rules-optimizer-prompt.md` § Rules |
+| **Skills** | Reusable phase workflows (how to proceed) | `Skills/rules-optimizer/*/SKILL.md` via `LoadRulesOptimizerSkill` (not under Knowledge) |
+| **Tools** | Capabilities that perform actions | C# tools (`InstallPlugins`, `SaveRules`, `RemoveRulesEntries`, webhook/GitHub, …) |
+| **Subagent prompt** | Task-specific context and expected output | `rules-optimizer-prompt.md` (scope, catalog, style, first reply) |
+
+Skills teach; tools do; prompt rules constrain. Do not fold workflow teaching into tool APIs.
 
 ---
 

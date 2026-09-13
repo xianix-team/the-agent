@@ -186,15 +186,41 @@ public sealed class SupervisorSubagent
         if (string.IsNullOrWhiteSpace(context.Message.Text))
             return "I didn't receive any message. Please send a message.";
 
-        // Resolve the agent (and its API key) lazily inside the workflow context so
-        // the rules.json knowledge document and the tenant's Xians Secret Vault are
-        // both reachable. The cache is keyed by tenant ID — see EnsureAgentForTenantAsync
-        // — so each tenant gets their own AIAgent built against theirsaftly own credentials.
-        var agent = await EnsureAgentForTenantAsync(
-            context.Message.TenantId, cancellationToken).ConfigureAwait(false);
-
         var baseInstructions = await GetSystemPromptAsync().ConfigureAwait(false);
         var tools = new SupervisorSubagentTools(context, _toolsLogger);
+        IList<AITool> aiTools =
+        [
+            AIFunctionFactory.Create(tools.GetCurrentDateTime),
+            AIFunctionFactory.Create(tools.ListTenantRepositories),
+            AIFunctionFactory.Create(tools.ListAvailablePlugins),
+            AIFunctionFactory.Create(tools.OnboardRepository),
+            AIFunctionFactory.Create(tools.OffboardRepository),
+            AIFunctionFactory.Create(tools.RunClaudeCodeOnRepository),
+        ];
+
+        return await RunTurnAsync(context, baseInstructions, aiTools, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Shared chat turn used by the supervisor and Rules Optimizer. Callers supply
+    /// instructions and tools; history + empty-reply retries stay here.
+    /// </summary>
+    internal async Task<string> RunTurnAsync(
+        UserMessageContext context,
+        string baseInstructions,
+        IList<AITool> tools,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseInstructions);
+        ArgumentNullException.ThrowIfNull(tools);
+
+        if (string.IsNullOrWhiteSpace(context.Message.Text))
+            return "I didn't receive any message. Please send a message.";
+
+        var agent = await EnsureAgentForTenantAsync(
+            context.Message.TenantId, cancellationToken).ConfigureAwait(false);
 
         // Anthropic (especially Haiku) sometimes deterministically returns a turn with
         // zero content blocks for a given (history, system prompt, message, tools) tuple.
@@ -205,15 +231,13 @@ public sealed class SupervisorSubagent
         //   Attempt 3: NO history + stronger nudge — escapes any poisoned context
         var attempts = new[]
         {
-            new RunAttempt(baseInstructions,                   IncludeHistory: true,  Label: "normal"),
-            new RunAttempt(baseInstructions + EmptyResponseNudge,      IncludeHistory: true,  Label: "with-nudge"),
+            new RunAttempt(baseInstructions, IncludeHistory: true, Label: "normal"),
+            new RunAttempt(baseInstructions + EmptyResponseNudge, IncludeHistory: true, Label: "with-nudge"),
             new RunAttempt(baseInstructions + EmptyResponseLastResort, IncludeHistory: false, Label: "no-history"),
         };
 
         AgentResponse? lastResponse = null;
 
-        // Token usage is summed across attempts: each attempt is a billed Claude call, so an
-        // empty-response retry that eventually succeeds still consumed tokens on every try.
         long? inputTokens = null, outputTokens = null, cacheReadTokens = null, cacheCreationTokens = null;
 
         for (var i = 0; i < attempts.Length; i++)
@@ -224,21 +248,11 @@ public sealed class SupervisorSubagent
             var session = await agent.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
             if (attempt.IncludeHistory)
                 _historyProvider.PrimeSession(session, context);
-            // else: leaving the session unprimed makes ProvideChatHistoryAsync return an
-            // empty enumerable, so the model only sees the current user message.
 
             var runOptions = new ChatClientAgentRunOptions(new ChatOptions
             {
                 Instructions = attempt.Instructions,
-                Tools =
-                [
-                    AIFunctionFactory.Create(tools.GetCurrentDateTime),
-                    AIFunctionFactory.Create(tools.ListTenantRepositories),
-                    AIFunctionFactory.Create(tools.ListAvailablePlugins),
-                    AIFunctionFactory.Create(tools.OnboardRepository),
-                    AIFunctionFactory.Create(tools.OffboardRepository),
-                    AIFunctionFactory.Create(tools.RunClaudeCodeOnRepository),
-                ],
+                Tools = tools,
             });
 
             lastResponse = await agent
@@ -246,9 +260,9 @@ public sealed class SupervisorSubagent
                 .ConfigureAwait(false);
 
             var (attemptIn, attemptOut, attemptCacheRead, attemptCacheCreate) = ExtractUsage(lastResponse.Usage);
-            if (attemptIn.HasValue)          inputTokens         = (inputTokens         ?? 0) + attemptIn.Value;
-            if (attemptOut.HasValue)         outputTokens        = (outputTokens        ?? 0) + attemptOut.Value;
-            if (attemptCacheRead.HasValue)   cacheReadTokens     = (cacheReadTokens     ?? 0) + attemptCacheRead.Value;
+            if (attemptIn.HasValue) inputTokens = (inputTokens ?? 0) + attemptIn.Value;
+            if (attemptOut.HasValue) outputTokens = (outputTokens ?? 0) + attemptOut.Value;
+            if (attemptCacheRead.HasValue) cacheReadTokens = (cacheReadTokens ?? 0) + attemptCacheRead.Value;
             if (attemptCacheCreate.HasValue) cacheCreationTokens = (cacheCreationTokens ?? 0) + attemptCacheCreate.Value;
 
             var text = lastResponse.Text;
@@ -298,26 +312,23 @@ public sealed class SupervisorSubagent
         await ReportTurnAsync(succeeded: false, attemptsMade: attempts.Length).ConfigureAwait(false);
         return EmptyResponseFallback;
 
-        // Reports the turn's aggregate Claude usage to Xians. Local function so it closes over
-        // the accumulated token sums and the final response metadata. Never throws: metrics
-        // are non-critical and must not break the user's reply.
         async Task ReportTurnAsync(bool succeeded, int attemptsMade)
         {
             try
             {
                 await ExecutionMetrics.ReportConversationAsync(new ConversationMetricsContext
                 {
-                    CustomIdentifier    = ExecutionMetrics.ChatSource,
-                    TenantId            = context.Message.TenantId,
-                    ParticipantId       = context.Message.ParticipantId,
-                    Succeeded           = succeeded,
-                    Attempts            = attemptsMade,
-                    FinishReason        = lastResponse?.FinishReason?.ToString() ?? string.Empty,
-                    ResponseId          = lastResponse?.ResponseId ?? string.Empty,
-                    Model               = _modelName,
-                    InputTokens         = inputTokens,
-                    OutputTokens        = outputTokens,
-                    CacheReadTokens     = cacheReadTokens,
+                    CustomIdentifier = ExecutionMetrics.ChatSource,
+                    TenantId = context.Message.TenantId,
+                    ParticipantId = context.Message.ParticipantId,
+                    Succeeded = succeeded,
+                    Attempts = attemptsMade,
+                    FinishReason = lastResponse?.FinishReason?.ToString() ?? string.Empty,
+                    ResponseId = lastResponse?.ResponseId ?? string.Empty,
+                    Model = _modelName,
+                    InputTokens = inputTokens,
+                    OutputTokens = outputTokens,
+                    CacheReadTokens = cacheReadTokens,
                     CacheCreationTokens = cacheCreationTokens,
                 }).ConfigureAwait(false);
             }

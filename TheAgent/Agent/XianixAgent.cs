@@ -71,17 +71,15 @@ public class XianixAgent(
             supervisorLogger,
             supervisorToolsLogger,
             loggerFactory);
+        var rulesOptimizer = new RulesOptimizerSubagent(subagent);
 
         conversationWorkflow.OnUserChatMessage(async (context) =>
         {
-            if (context.Message.Scope == "setup")
-            {
-                await context.ReplyAsync("Hello, how can I help you with your setup????");
-                return;
-            }
             try
             {
-                var reply = await subagent.RunAsync(context, cancellationToken);
+                var reply = RulesOptimizerSubagent.IsScope(context.Message.Scope)
+                    ? await rulesOptimizer.RunAsync(context, cancellationToken)
+                    : await subagent.RunAsync(context, cancellationToken);
 
                 // Defence-in-depth: SupervisorSubagent already substitutes a fallback
                 // message for empty model output, but guard here too so we never publish
@@ -89,7 +87,7 @@ public class XianixAgent(
                 if (string.IsNullOrWhiteSpace(reply))
                 {
                     logger.LogWarning(
-                        "Supervisor returned empty reply for tenant '{TenantId}', participant '{ParticipantId}'. " +
+                        "Chat subagent returned empty reply for tenant '{TenantId}', participant '{ParticipantId}'. " +
                         "Sending generic retry prompt instead.",
                         context.Message.TenantId, context.Message.ParticipantId);
                     reply = SupervisorSubagent.EmptyResponseFallback;
@@ -104,8 +102,8 @@ public class XianixAgent(
             catch (Exception ex)
             {
                 logger.LogError(ex,
-                    "SupervisorSubagent failed for tenant '{TenantId}', participant '{ParticipantId}'.",
-                    context.Message.TenantId, context.Message.ParticipantId);
+                    "Chat subagent failed for tenant '{TenantId}', participant '{ParticipantId}', scope '{Scope}'.",
+                    context.Message.TenantId, context.Message.ParticipantId, context.Message.Scope);
 
                 // Surface the root cause to the user so actionable failures (e.g. a
                 // missing ANTHROPIC-API-KEY for this tenant) can be fixed without
@@ -137,6 +135,16 @@ public class XianixAgent(
             .DefineCustom<OnboardRepositoryWorkflow>(new WorkflowOptions { Activable = false },
             typeName: EnvConfig.AgentName + ":OnboardRepository Workflow")
             .AddActivity<ContainerActivities>();
+
+        xiansAgent.Workflows
+            .DefineCustom<RegisterGitHubWebhookWorkflow>(new WorkflowOptions { Activable = false },
+            typeName: EnvConfig.AgentName + ":RegisterGitHubWebhook Workflow")
+            .AddActivity<GitHubWebhookActivities>();
+
+        xiansAgent.Workflows
+            .DefineCustom<VerifyGitHubWebhookPingWorkflow>(new WorkflowOptions { Activable = false },
+            typeName: EnvConfig.AgentName + ":VerifyGitHubWebhookPing Workflow")
+            .AddActivity<GitHubWebhookActivities>();
 
         xiansAgent.Workflows
             .DefineCustom<CognitiveDispatcher>(new WorkflowOptions { Activable = true },
@@ -273,6 +281,12 @@ public class XianixAgent(
         await xiansAgent.Knowledge.UploadEmbeddedResourceAsync(
             resourcePath: "Knowledge/system-prompt.md",
             knowledgeName: Constants.SystemPromptKnowledgeName,
+            knowledgeType: "markdown"
+        );
+
+        await xiansAgent.Knowledge.UploadEmbeddedResourceAsync(
+            resourcePath: "Knowledge/rules-optimizer-prompt.md",
+            knowledgeName: Constants.RulesOptimizerSystemPromptKnowledgeName,
             knowledgeType: "markdown"
         );
     }

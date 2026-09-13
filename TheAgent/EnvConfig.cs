@@ -160,4 +160,7 @@ public static class EnvConfig
     /// Defaults to the cheapest tier so building context never becomes a meaningful cost line.
     /// </summary>
     public static string ExecutorContextLlmModel => Get("EXECUTOR-CONTEXT-LLM-MODEL", "claude-haiku-4-5");
+    
+    public static int MarketplaceJsonCacheTtlSeconds =>
+        int.TryParse(Get("MARKETPLACE-JSON-CACHE-TTL-SECONDS", "3600"), out var v) && v > 0 ? v : 3600;
 }
