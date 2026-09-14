@@ -9,6 +9,9 @@ namespace Xianix.Workflows;
 /// </summary>
 public static class GitHubWebhookWorkflowOptions
 {
+    /// <summary>
+    /// Retriable reads/updates/ping (idempotent or safely repeatable).
+    /// </summary>
     public static readonly ActivityOptions Http = new()
     {
         StartToCloseTimeout = TimeSpan.FromSeconds(45),
@@ -19,13 +22,31 @@ public static class GitHubWebhookWorkflowOptions
             MaximumAttempts = 3,
         },
     };
+
+    /// <summary>
+    /// Non-idempotent GitHub webhook <c>POST /hooks</c> create — no Temporal retries.
+    /// A lost response after GitHub accepted the create would otherwise duplicate hooks.
+    /// The create activity recovers by listing and reusing a matching hook after failure.
+    /// </summary>
+    public static readonly ActivityOptions HttpCreate = new()
+    {
+        StartToCloseTimeout = TimeSpan.FromSeconds(45),
+        RetryPolicy = new()
+        {
+            MaximumAttempts = 1,
+        },
+    };
 }
 
+/// <summary>
+/// Workflow input for GitHub webhook registration. Passes only the vault token key name —
+/// never a raw PAT (Temporal persists inputs in history).
+/// </summary>
 public sealed record RegisterGitHubWebhookRequest(
     string Owner,
     string Repo,
     string PayloadUrl,
-    string GithubToken,
+    string GithubTokenSecretKey,
     IReadOnlyList<string> Events);
 
 public sealed record RegisterGitHubWebhookResult(
@@ -43,11 +64,15 @@ public sealed record RegisterGitHubWebhookResult(
         new(false, null, null, false, error);
 }
 
+/// <summary>
+/// Workflow input for GitHub webhook ping verification. Passes only a vault
+/// <see cref="GithubTokenSecretKey"/> — never the raw PAT.
+/// </summary>
 public sealed record VerifyGitHubWebhookPingRequest(
     string Owner,
     string Repo,
     string HookId,
-    string GithubToken);
+    string GithubTokenSecretKey);
 
 public sealed record VerifyGitHubWebhookPingResult(
     bool Established,
@@ -67,7 +92,7 @@ public sealed record VerifyGitHubWebhookPingResult(
 
 /// <summary>
 /// Registers (or updates) a GitHub repo webhook via <see cref="GitHubWebhookActivities"/>.
-/// All POSTs run inside activities (PostAsJsonAsync).
+/// All POSTs run inside activities (PostAsJsonAsync). Token is resolved inside activities.
 /// </summary>
 [Workflow]
 public class RegisterGitHubWebhookWorkflow
@@ -77,6 +102,10 @@ public class RegisterGitHubWebhookWorkflow
     {
         ArgumentNullException.ThrowIfNull(req);
 
+        var tokenKey = string.IsNullOrWhiteSpace(req.GithubTokenSecretKey)
+            ? GitHubWebhookActivities.DefaultGithubTokenSecretKey
+            : req.GithubTokenSecretKey.Trim();
+
         var events = (req.Events is { Count: > 0 } ? req.Events : ["push"])
             .Select(e => e.Trim().ToLowerInvariant())
             .Where(e => e.Length > 0)
@@ -84,7 +113,7 @@ public class RegisterGitHubWebhookWorkflow
             .ToArray();
 
         var list = await Workflow.ExecuteActivityAsync(
-            (GitHubWebhookActivities a) => a.ListRepoWebhooksAsync(req.Owner, req.Repo, req.GithubToken),
+            (GitHubWebhookActivities a) => a.ListRepoWebhooksAsync(req.Owner, req.Repo, tokenKey),
             GitHubWebhookWorkflowOptions.Http);
 
         if (!list.Success)
@@ -102,7 +131,7 @@ public class RegisterGitHubWebhookWorkflow
                     req.Owner,
                     req.Repo,
                     matched.Id,
-                    req.GithubToken,
+                    tokenKey,
                     req.PayloadUrl,
                     events),
                 GitHubWebhookWorkflowOptions.Http);
@@ -117,10 +146,10 @@ public class RegisterGitHubWebhookWorkflow
             (GitHubWebhookActivities a) => a.CreateRepoWebhookAsync(
                 req.Owner,
                 req.Repo,
-                req.GithubToken,
+                tokenKey,
                 req.PayloadUrl,
                 events),
-            GitHubWebhookWorkflowOptions.Http);
+            GitHubWebhookWorkflowOptions.HttpCreate);
 
         if (!created.Success)
             return RegisterGitHubWebhookResult.Failed(created.Error ?? "GitHub webhook create failed.");
@@ -130,8 +159,9 @@ public class RegisterGitHubWebhookWorkflow
 }
 
 /// <summary>
-/// Triggers a GitHub webhook ping and polls last_response until 2xx or timeout.
-/// POST ping runs in an activity; polling delays stay in the workflow.
+/// Triggers a GitHub webhook ping and waits for a <em>new</em> ping delivery via the
+/// deliveries API (not stale <c>last_response</c>). POST ping runs in an activity;
+/// polling delays stay in the workflow. Token is resolved inside activities from the vault key only.
 /// </summary>
 [Workflow]
 public class VerifyGitHubWebhookPingWorkflow
@@ -144,45 +174,70 @@ public class VerifyGitHubWebhookPingWorkflow
     {
         ArgumentNullException.ThrowIfNull(req);
 
+        var secretKey = string.IsNullOrWhiteSpace(req.GithubTokenSecretKey)
+            ? GitHubWebhookActivities.DefaultGithubTokenSecretKey
+            : req.GithubTokenSecretKey.Trim();
+
+        // Baseline before ping — ignore older deliveries (including prior 2xx / failures).
+        var baseline = await Workflow.ExecuteActivityAsync(
+            (GitHubWebhookActivities a) => a.GetNewestWebhookDeliveryIdAsync(
+                req.Owner, req.Repo, req.HookId, secretKey),
+            GitHubWebhookWorkflowOptions.Http);
+
+        if (!baseline.Success)
+        {
+            return VerifyGitHubWebhookPingResult.Failed(
+                baseline.Error ?? "Failed to read GitHub webhook delivery baseline.");
+        }
+
         var ping = await Workflow.ExecuteActivityAsync(
             (GitHubWebhookActivities a) => a.PingRepoWebhookAsync(
-                req.Owner, req.Repo, req.HookId, req.GithubToken),
+                req.Owner, req.Repo, req.HookId, secretKey),
             GitHubWebhookWorkflowOptions.Http);
 
         if (!ping.Success)
             return VerifyGitHubWebhookPingResult.Failed(ping.Error ?? "Failed to trigger GitHub webhook ping.");
 
         var deadline = Workflow.UtcNow + PingTimeout;
-        GitHubHookLastResponse? last = null;
+        GitHubHookDeliverySummary? delivery = null;
 
         while (Workflow.UtcNow < deadline)
         {
-            last = await Workflow.ExecuteActivityAsync(
-                (GitHubWebhookActivities a) => a.GetRepoWebhookLastResponseAsync(
-                    req.Owner, req.Repo, req.HookId, req.GithubToken),
+            var lookup = await Workflow.ExecuteActivityAsync(
+                (GitHubWebhookActivities a) => a.FindPingDeliveryAfterAsync(
+                    req.Owner, req.Repo, req.HookId, secretKey, baseline.DeliveryId),
                 GitHubWebhookWorkflowOptions.Http);
 
-            if (last?.Code is >= 200 and < 300)
-            {
-                return VerifyGitHubWebhookPingResult.Succeeded(last.Code.Value, last.Status);
-            }
-
-            if (last?.Code is not null)
+            if (lookup.IsPermanentFailure)
             {
                 return VerifyGitHubWebhookPingResult.Failed(
-                    $"GitHub ping delivery failed with HTTP {last.Code}" +
-                    (string.IsNullOrWhiteSpace(last.Message) ? "." : $": {last.Message}"),
-                    last.Code,
-                    last.Status);
+                    lookup.Error ?? "GitHub API error while waiting for ping delivery.");
+            }
+
+            delivery = lookup.Delivery;
+            if (delivery is not null && delivery.StatusCode is not null)
+            {
+                if (delivery.StatusCode is >= 200 and < 300)
+                {
+                    return VerifyGitHubWebhookPingResult.Succeeded(
+                        delivery.StatusCode.Value,
+                        delivery.Status);
+                }
+
+                return VerifyGitHubWebhookPingResult.Failed(
+                    $"GitHub ping delivery failed with HTTP {delivery.StatusCode}" +
+                    (string.IsNullOrWhiteSpace(delivery.Status) ? "." : $": {delivery.Status}"),
+                    delivery.StatusCode,
+                    delivery.Status);
             }
 
             await Workflow.DelayAsync(PollInterval);
         }
 
         return VerifyGitHubWebhookPingResult.Failed(
-            "Timed out waiting for GitHub ping delivery. Check that the public webhook URL " +
+            "Timed out waiting for a new GitHub ping delivery. Check that the public webhook URL " +
             "(Cloudflare tunnel) is reachable from the internet.",
-            last?.Code,
-            last?.Status);
+            delivery?.StatusCode,
+            delivery?.Status);
     }
 }

@@ -15,8 +15,25 @@ public sealed class RulesOptimizerSubagent(SupervisorSubagent supervisor)
     private readonly SupervisorSubagent _supervisor =
         supervisor ?? throw new ArgumentNullException(nameof(supervisor));
 
-    public static bool IsScope(string? scope) =>
-        string.Equals(scope, Constants.RulesOptimizerScope, StringComparison.OrdinalIgnoreCase);
+    /// <summary>
+    /// True when Studio topic/scope should use Rules Optimizer tools.
+    /// Canonical value is <see cref="Constants.RulesOptimizerScope"/> (<c>rules-optimizer</c>);
+    /// also accepts display-name forms such as <c>Rules Optimizer</c> / <c>rules_optimizer</c>.
+    /// </summary>
+    public static bool IsScope(string? scope)
+    {
+        if (string.IsNullOrWhiteSpace(scope))
+            return false;
+
+        var normalized = scope.Trim()
+            .Replace(' ', '-')
+            .Replace('_', '-');
+
+        return string.Equals(
+            normalized,
+            Constants.RulesOptimizerScope,
+            StringComparison.OrdinalIgnoreCase);
+    }
 
     public async Task<string> RunAsync(
         UserMessageContext context,

@@ -6,5 +6,5 @@ public static class Constants
     public const string RulesKnowledgeName = "Rules";
     public const string SystemPromptKnowledgeName = "System Prompt";
     public const string RulesOptimizerScope = "rules-optimizer";
-    public const string RulesOptimizerSystemPromptKnowledgeName = "Rules Optimizer System Prompt";
+    public const string RulesOptimizerSystemPromptKnowledgeName = "Rules Optimizer Prompt";
 }

@@ -30,10 +30,10 @@ Phase skills live under `Skills/rules-optimizer/` (separate from Knowledge). Loa
 {SKILL_INDEX}
 
 Typical flow:
-1. `pr-agent-greeting`
-2. `plugin-marketplace` → `plugin-config` → `env-setup` → `rules-manager`
-3. `webhook-setup` → `connection-test`
-4. Cleanup / remove → `plugin-uninstall` or `rules-manager` surgical path
+1. `getting-started` (greeting + marketplace)
+2. `plugin-setup` (repo / match-any + secrets)
+3. `rules-manager` (install / cleanup)
+4. `webhook-setup` (Default webhook + SCM connection)
 
 ## Tools (capabilities)
 
@@ -43,7 +43,7 @@ Typical flow:
 - Skills: `LoadRulesOptimizerSkill`
 - Secrets: `CheckTenantSecretExists` (exists flags only — never values)
 - Webhook: `CreateWebhookConnection` (Default)
-- GitHub: `RegisterGitHubRepositoryWebhook` (register + ping; no GitHub `config.secret`)
+- GitHub: `RegisterGitHubRepositoryWebhook` (register + ping)
 
 There is **no** `VerifyInstalledPlugins`, `MaterializePluginRules`, `UpdateTriggerLabel`,
 `GetPluginSetupGuide`, `BeginRulesOptimizer`, `ConnectScm`, or `skipExecutions`.
@@ -72,9 +72,7 @@ Do not invent them.
   to add the exact key in Studio → Settings → Secrets, then say "done".
 - Never claim install / webhook / GitHub success without tool `ok=true` (and
   `claimAllowed=true` / `connectionStatus=established` where applicable).
-- Never invent marketplace plugins or webhook URLs.
-- Do not auto-write `github-webhook-verification-secret` into Rules; do not set
-  GitHub hook `config.secret`.
+- Do not invent marketplace plugins or webhook URLs.
 
 ## Style (task output)
 
@@ -83,4 +81,4 @@ before moving to the next step.
 
 ## First reply (task)
 
-Load `pr-agent-greeting` and follow it.
+Load `getting-started` and follow it.

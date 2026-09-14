@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Xianix.Activities;
 using Xianix.Containers;
 using Xianix.Rules;
 using Xians.Lib.Agents.Core;
@@ -16,7 +17,7 @@ public sealed partial class RulesOptimizerSubagentTools
         "Load a Rules Optimizer phase skill by name (progressive disclosure). " +
         "Skills teach workflows; tools perform actions. Call silently when entering a phase.")]
     public Task<string> LoadRulesOptimizerSkill(
-        [Description("Skill name, e.g. pr-agent-greeting, env-setup, webhook-setup, connection-test.")]
+        [Description("Skill name: getting-started, plugin-setup, rules-manager, or webhook-setup.")]
         string skillName)
     {
         if (!RulesOptimizerSkillCatalog.TryGet(skillName, out var skill))
@@ -101,8 +102,7 @@ public sealed partial class RulesOptimizerSubagentTools
         {
             "GITHUB-TOKEN",
             "AZURE-DEVOPS-TOKEN",
-            "ANTHROPIC-API-KEY",
-            RulesGitHubWebhookSecret.VaultKey,
+            "ANTHROPIC-API-KEY"
         };
         var secrets = new List<object>(secretKeys.Length);
         foreach (var key in secretKeys)
@@ -179,7 +179,7 @@ public sealed partial class RulesOptimizerSubagentTools
         "NEVER ask the user whether a secret exists. If exists=false, tell them to add the key in " +
         "Studio → Settings → Secrets and say 'done'. NEVER ask the user to paste a secret value into chat.")]
     public async Task<string> CheckTenantSecretExists(
-        [Description("Vault key name, e.g. GITHUB-TOKEN, ANTHROPIC-API-KEY, GITHUB-WEBHOOK-SECRET.")]
+        [Description("Vault key name, e.g. GITHUB-TOKEN, ANTHROPIC-API-KEY.")]
         string key)
     {
         var normalizedKey = NormalizeSecretKey(key);
@@ -189,7 +189,7 @@ public sealed partial class RulesOptimizerSubagentTools
             {
                 ok = false,
                 error = "Invalid secret key. Use GITHUB-TOKEN, AZURE-DEVOPS-TOKEN, " +
-                        "ANTHROPIC-API-KEY, or GITHUB-WEBHOOK-SECRET.",
+                        "or ANTHROPIC-API-KEY.",
             });
         }
 
@@ -410,9 +410,11 @@ public sealed partial class RulesOptimizerSubagentTools
 
         try
         {
-            var vault = XiansContext.CurrentAgent.Secrets.TenantScope();
-            var fetched = await vault.FetchByKeyAsync("GITHUB-TOKEN").ConfigureAwait(false);
-            if (fetched is null || string.IsNullOrWhiteSpace(fetched.Value))
+            // Existence check only — never fetch the PAT into chat/tool memory or Temporal inputs.
+            var tokenExists = await _platform
+                .SecretExistsAsync(GitHubWebhookActivities.DefaultGithubTokenSecretKey)
+                .ConfigureAwait(false);
+            if (!tokenExists)
             {
                 return JsonSerializer.Serialize(new
                 {
@@ -420,7 +422,7 @@ public sealed partial class RulesOptimizerSubagentTools
                     registrationStatus = "failed",
                     connectionStatus = "not_established",
                     connectionCheck = "github_ping",
-                    missingSecret = "GITHUB-TOKEN",
+                    missingSecret = GitHubWebhookActivities.DefaultGithubTokenSecretKey,
                     error = "GITHUB-TOKEN is not set in the tenant vault.",
                     userFacingMessage =
                         "GITHUB-TOKEN is missing. Add it in Studio → Settings → Secrets (exact key name), then say \"done\".",
@@ -439,8 +441,8 @@ public sealed partial class RulesOptimizerSubagentTools
             var result = await _platform.RegisterGitHubWebhookAsync(
                     repositoryUrl,
                     allowedPayloadUrl,
-                    fetched.Value,
-                    eventList)
+                    eventList,
+                    GitHubWebhookActivities.DefaultGithubTokenSecretKey)
                 .ConfigureAwait(false);
 
             if (!result.Success || string.IsNullOrWhiteSpace(result.HookId))
@@ -458,7 +460,7 @@ public sealed partial class RulesOptimizerSubagentTools
             var ping = await _platform.VerifyGitHubWebhookConnectionViaPingAsync(
                     repositoryUrl,
                     result.HookId!,
-                    fetched.Value)
+                    GitHubWebhookActivities.DefaultGithubTokenSecretKey)
                 .ConfigureAwait(false);
 
             if (!ping.Established)
@@ -527,7 +529,7 @@ public sealed partial class RulesOptimizerSubagentTools
         return trimmed.ToUpperInvariant() switch
         {
             "GITHUB-TOKEN" or "AZURE-DEVOPS-TOKEN" or "ANTHROPIC-API-KEY"
-                or "GITHUB-WEBHOOK-SECRET" => trimmed.ToUpperInvariant(),
+                => trimmed.ToUpperInvariant(),
             _ => null,
         };
     }

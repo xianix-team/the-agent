@@ -1,5 +1,6 @@
 ﻿using Xians.Lib.Agents.Core;
 using Xians.Lib.Agents.Workflows;
+using Xianix.Activities;
 using Xianix.Rules;
 using Xianix.Workflows;
 
@@ -127,18 +128,21 @@ internal sealed class RulesOptimizerPlatformClient
     /// <summary>
     /// Registers <paramref name="payloadUrl"/> as a repository webhook on GitHub.
     /// Runs <see cref="RegisterGitHubWebhookWorkflow"/> so the create POST uses a Temporal
-    /// activity (<c>PostAsJsonAsync</c>) — never raw HttpClient from the chat tool path.
+    /// activity (<c>PostAsJsonAsync</c>). Passes only the vault token key name into the
+    /// workflow — the PAT is resolved inside the activity (never in Temporal history).
     /// </summary>
     public async Task<GitHubWebhookResult> RegisterGitHubWebhookAsync(
         string repositoryCloneUrl,
         string payloadUrl,
-        string githubToken,
-        IReadOnlyList<string> events)
+        IReadOnlyList<string> events,
+        string githubTokenSecretKey = GitHubWebhookActivities.DefaultGithubTokenSecretKey)
     {
-        if (string.IsNullOrWhiteSpace(githubToken))
-            return GitHubWebhookResult.Failed("GITHUB-TOKEN value is empty.");
         if (string.IsNullOrWhiteSpace(payloadUrl))
             return GitHubWebhookResult.Failed("Webhook payload URL is required.");
+
+        var tokenKey = string.IsNullOrWhiteSpace(githubTokenSecretKey)
+            ? GitHubWebhookActivities.DefaultGithubTokenSecretKey
+            : githubTokenSecretKey.Trim();
 
         var repo = GitHubWebhookUrl.ParseGitHubOwnerRepo(repositoryCloneUrl);
         if (repo is null)
@@ -167,7 +171,7 @@ internal sealed class RulesOptimizerPlatformClient
                         owner,
                         name,
                         payloadUrl,
-                        githubToken,
+                        tokenKey,
                         events))
                 .ConfigureAwait(false);
 
@@ -188,16 +192,19 @@ internal sealed class RulesOptimizerPlatformClient
     /// <summary>
     /// Triggers a GitHub webhook ping and waits for a 2xx last_response via
     /// <see cref="VerifyGitHubWebhookPingWorkflow"/> (POST ping in an activity).
+    /// Passes only the vault secret key name — PAT resolved inside the activity.
     /// </summary>
     public async Task<GitHubPingResult> VerifyGitHubWebhookConnectionViaPingAsync(
         string repositoryCloneUrl,
         string hookId,
-        string githubToken)
+        string githubTokenSecretKey = GitHubWebhookActivities.DefaultGithubTokenSecretKey)
     {
         if (string.IsNullOrWhiteSpace(hookId))
             return GitHubPingResult.Failed("Hook id is required to verify the connection via ping.");
-        if (string.IsNullOrWhiteSpace(githubToken))
-            return GitHubPingResult.Failed("GITHUB-TOKEN value is empty.");
+
+        var secretKey = string.IsNullOrWhiteSpace(githubTokenSecretKey)
+            ? GitHubWebhookActivities.DefaultGithubTokenSecretKey
+            : githubTokenSecretKey.Trim();
 
         var repo = GitHubWebhookUrl.ParseGitHubOwnerRepo(repositoryCloneUrl);
         if (repo is null)
@@ -222,7 +229,7 @@ internal sealed class RulesOptimizerPlatformClient
                 .ExecuteAsync<VerifyGitHubWebhookPingWorkflow, VerifyGitHubWebhookPingResult>(
                     uniqueKeys,
                     TimeSpan.FromMinutes(2),
-                    new VerifyGitHubWebhookPingRequest(owner, name, hookId, githubToken))
+                    new VerifyGitHubWebhookPingRequest(owner, name, hookId, secretKey))
                 .ConfigureAwait(false);
 
             if (!result.Established)

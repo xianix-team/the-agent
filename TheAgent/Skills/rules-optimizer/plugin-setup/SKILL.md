@@ -1,15 +1,17 @@
 ---
-name: plugin-config
-description: Confirm repo from GetTenantState; discuss match-any using ListAvailablePlugins; then env-setup.
+name: plugin-setup
+description: Confirm repo + match-any; auto-check vault secrets; then rules-manager. Never ask if secrets exist.
 ---
 
-# Plugin configuration
+# Plugin setup (config + secrets)
 
-This skill teaches the **workflow**. Tools only read state / marketplace — do not save Rules here.
+Follow **context → action → evidence**. Plugins are already chosen.
+This skill covers repository / match-any **and** secrets. Do **not** load separate config/env skills.
+Do **not** ask “GitHub or Azure DevOps?”. Do **not** save `rules.json` here.
 
-Follow **context → action → evidence**. Plugins are already chosen. Do **not** ask “GitHub or Azure DevOps?”.
+## Part A — Repository + match-any
 
-## Context
+### Context
 
 1. Call `GetTenantState` **silently**.
 2. Repository selection — use `repositories.distinct` (deduped configured + onboarded; **`…/repo` and `…/repo.git` are the same repo**):
@@ -53,7 +55,7 @@ Briefly confirm: `Got it — GitHub repo.` / `Got it — Azure DevOps repo.`
 
 Then call `ListAvailablePlugins` **with the inferred platform**. Confirm each chosen plugin is Ready to install.
 
-## Action — executions + match-any (mandatory)
+### Action — executions + match-any (mandatory)
 
 For each chosen plugin, use that platform’s marketplace fields (`suggestedTriggers` /
 execution wording when present). Do not invent labels from memory.
@@ -94,9 +96,9 @@ Keep this as-is, change it, or skip it?
 
 Same pattern in ADO wording — **not** GitHub label names.
 
-## Evidence / Verify
+### Evidence / Verify (Part A)
 
-Before leaving this skill, **restate the agreed setup** and get a clear yes:
+Before secrets, **restate the agreed setup** and get a clear yes:
 
 ```
 2. Confirm repository: ✅ {url}
@@ -116,6 +118,51 @@ Only after they confirm:
 - Do **not** update `rules.json` in this skill (that is `rules-manager` + tools).
 - Never store a concrete URL with `constant: false`. Do not add `repository.ref`.
 
-## Next
+---
 
-Only after verified match-any acceptance → load `env-setup` (silently).
+## Part B — Environment / secrets
+
+Tools: `CheckTenantSecretExists` / `GetTenantState`. Never accept pasted secret values.
+
+**You check secrets yourself.** Call tools — never ask the user whether a secret exists.
+
+**Forbidden** (never say these):
+- "Do you have GITHUB-TOKEN set up?"
+- "Do you have this set up in Studio → Settings → Secrets?"
+- "Is ANTHROPIC-API-KEY configured?"
+- Any yes/no question about whether a vault key exists
+
+**Context source:** platform from the repo URL (GitHub → `GITHUB-TOKEN`; Azure DevOps →
+`AZURE-DEVOPS-TOKEN`), plus always `ANTHROPIC-API-KEY`, plus `GetTenantState.secrets`.
+
+Typical keys (always auto-check these when required by platform/plugins):
+- GitHub → `GITHUB-TOKEN`
+- Azure DevOps → `AZURE-DEVOPS-TOKEN`
+- Models → **`ANTHROPIC-API-KEY`** (always required for plugin runs)
+
+**Always include `ANTHROPIC-API-KEY` in the silent check.** Call
+`CheckTenantSecretExists("ANTHROPIC-API-KEY")` (or use `GetTenantState.secrets`).
+Only if `exists: false`, tell them to add it.
+
+### Context / Action
+
+1. Call `GetTenantState` (silent) — use `secrets[].exists` when present.
+2. Call `CheckTenantSecretExists` for **every** required key (confirm live; do not trust chat memory).
+3. If all `exists: true` → evidence line and continue — **do not mention secrets** to the user.
+4. If any `exists: false` → state the fact only (no question):
+
+```
+4. Check secrets: ❌ missing {KEY}
+
+{KEY} is missing. Add it in Studio → Settings → Secrets (exact key name), then say "done".
+```
+
+### Evidence
+
+5. On "done", re-check **only** the missing keys with `CheckTenantSecretExists`.
+6. Do not continue until every required key returns `exists: true`.
+7. When all present: `4. Check secrets: ✅ {keys}` (optional one short line — no interrogation).
+
+### Next
+
+When Part A and Part B evidence pass → load `rules-manager` (silently).

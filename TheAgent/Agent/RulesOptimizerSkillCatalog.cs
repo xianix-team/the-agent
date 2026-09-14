@@ -75,16 +75,17 @@ internal static class RulesOptimizerSkillCatalog
                 skills.Add(skill);
         }
 
+        // Prefer Skills/ over any accidental Knowledge embeds; keep one entry per name.
         return skills
+            .GroupBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
             .OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
     private static bool IsRulesOptimizerSkillResource(string resourceName) =>
         resourceName.Contains("Skills.rules_optimizer", StringComparison.OrdinalIgnoreCase)
-        || resourceName.Contains("Skills.rules-optimizer", StringComparison.OrdinalIgnoreCase)
-        || resourceName.Contains(".skills.rules_optimizer", StringComparison.OrdinalIgnoreCase)
-        || resourceName.Contains(".skills.rules-optimizer", StringComparison.OrdinalIgnoreCase);
+        || resourceName.Contains("Skills.rules-optimizer", StringComparison.OrdinalIgnoreCase);
 
     internal static bool TryParse(string markdown, out RulesOptimizerSkill skill)
     {
