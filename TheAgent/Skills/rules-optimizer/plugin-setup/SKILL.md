@@ -16,11 +16,13 @@ Do **not** ask “GitHub or Azure DevOps?”. Do **not** save `rules.json` here.
 1. Call `GetTenantState` **silently**.
 2. Repository selection — use `repositories.distinct` (deduped configured + onboarded; **`…/repo` and `…/repo.git` are the same repo**):
 
-   - **0 distinct** → ask once for a clone URL:
+   - **0 distinct** → ask once for a repository URL (`.git` optional on GitHub):
 
 ```
-What is the repository URL? (e.g. https://github.com/org/repo.git or https://dev.azure.com/org/project/_git/repo)
+What is the repository URL? (e.g. https://github.com/org/repo or https://github.com/org/repo.git, or https://dev.azure.com/org/project/_git/repo)
 ```
+
+Accept browser and clone forms as the same repo — never ask the user to add or remove `.git`.
 
    - **1 distinct** → confirm that single URL (do not show a numbered multi-choice list):
 
@@ -57,8 +59,10 @@ Then call `ListAvailablePlugins` **with the inferred platform**. Confirm each ch
 
 ### Action — executions + match-any (mandatory)
 
-For each chosen plugin, use that platform’s marketplace fields (`suggestedTriggers` /
-execution wording when present). Do not invent labels from memory.
+For each chosen plugin, use that plugin’s live README on plugins-official (and the
+marketplace description) for execution names and typical triggers on the inferred
+platform. Do not invent labels from memory. `ListAvailablePlugins` does not return
+recipe fields — read the README yourself when you need trigger wording.
 
 **Webhook executions only.** Do **not** list `chat` or slash-command as an execution.
 

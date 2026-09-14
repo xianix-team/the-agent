@@ -205,7 +205,7 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         var scope         = context.Message.Scope;
 
         var existing = await TenantVolumeReader.ListAsync(tenantId);
-        if (existing.Any(r => string.Equals(r.Url, repositoryUrl, StringComparison.Ordinal)))
+        if (existing.Any(r => RepositoryNaming.AreSameCloneUrl(r.Url, repositoryUrl)))
         {
             return $"Repository `{repositoryUrl}` is already onboarded for this tenant. " +
                    "Call `RunClaudeCodeOnRepository` directly to operate on it.";
@@ -304,7 +304,11 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         var scope         = context.Message.Scope;
 
         var repos = await TenantVolumeReader.ListAsync(tenantId);
-        var isKnownRepo = repos.Any(r => string.Equals(r.Url, repositoryUrl, StringComparison.Ordinal));
+        var knownMatch = repos.FirstOrDefault(r => RepositoryNaming.AreSameCloneUrl(r.Url, repositoryUrl));
+        var isKnownRepo = knownMatch is not null;
+        // Prefer the onboarded label URL so with/without ".git" hit the same volume.
+        if (knownMatch is not null)
+            repositoryUrl = knownMatch.Url;
 
         // Accepting any well-formed URL on a standard host is what makes lazy-cloning work,
         // but it also means a URL the model *constructed* is indistinguishable from a repo the
@@ -511,18 +515,20 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
         var tenantId = context.Message.TenantId;
 
         var existing = await TenantVolumeReader.ListAsync(tenantId);
-        if (!existing.Any(r => string.Equals(r.Url, repositoryUrl, StringComparison.Ordinal)))
+        var match = existing.FirstOrDefault(r => RepositoryNaming.AreSameCloneUrl(r.Url, repositoryUrl));
+        if (match is null)
         {
             return $"Repository `{repositoryUrl}` is not onboarded for this tenant — nothing to remove.";
         }
 
-        var repoName = RepositoryNaming.DeriveName(repositoryUrl);
+        var storedUrl = match.Url;
+        var repoName = RepositoryNaming.DeriveName(storedUrl);
 
         _logger.LogInformation(
             "Offboarding repository: tenant={TenantId} repo={RepoName} url={RepositoryUrl}",
-            tenantId, repoName, repositoryUrl);
+            tenantId, repoName, storedUrl);
 
-        var result = await TenantVolumeReader.DeleteAsync(tenantId, repositoryUrl);
+        var result = await TenantVolumeReader.DeleteAsync(tenantId, storedUrl);
 
         return result switch
         {

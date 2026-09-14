@@ -124,7 +124,7 @@ Do **not** ask for the repo URL or platform here.
 - Named or chosen short name must appear in `readyToInstall` / `installable: true` before continuing.
 - Evidence line: `1. Choose plugin(s): ✅ {short-names}` (only after marketplace confirms installable).
 - If Coming soon / missing: say so and show Ready-to-install options — do not mark step complete.
-- There is no `GetPluginSetupGuide` tool — use `ListAvailablePlugins` fields only.
+- Use `ListAvailablePlugins` fields only for marketplace facts.
 
 ### Next
 

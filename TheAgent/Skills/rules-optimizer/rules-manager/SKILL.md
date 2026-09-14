@@ -23,9 +23,6 @@ You apply every rules change with tools. When TenantState installed plugins disa
 with system-scoped `GetCurrentRules`, that means agent scope is missing — call
 `InstallPlugins` after permission, then progressively `SaveRules` for executions.
 
-There is no `MaterializePluginRules`, `UpdateTriggerLabel`, `VerifyInstalledPlugins`,
-`GetPluginSetupGuide`, or `skipExecutions` tool — do not call or invent them.
-
 ---
 
 ## Part A — Install / update plugin set

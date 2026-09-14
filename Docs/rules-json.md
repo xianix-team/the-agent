@@ -26,9 +26,10 @@ Rules Optimizer no longer treats `rules.json` as both the plugin catalog and the
 | Concern | Source | Notes |
 | --------- | -------- | ------- |
 | **Available plugins** | Official marketplace only ([`marketplace.json`](https://github.com/xianix-team/plugins-official/blob/main/.claude-plugin/marketplace.json)), fetched live — no alternate catalog fallback | Full listing shown to the user. Test copies live under `TheAgent.Tests/Fixtures/marketplace.json` only. |
-| **Ready to install** | Marketplace entry **and** a live plugin [`README.md`](https://github.com/xianix-team/plugins-official/blob/main/plugins/pr-reviewer/README.md) at `plugins/<folder>/README.md` (folder from marketplace `source`) **and** a local execution recipe | Secrets, triggers, webhook events, and execution templates come from `TheAgent.Tests/Fixtures/agent-setup/<name>/agent-setup.json` (copied to the agent as `PluginRecipes/`). Do **not** fetch remote `.xianix/agent-setup.json`. |
-| **Coming soon** | Marketplace entry without a fetchable README, or without a local execution recipe | Listed but not installable |
+| **Ready to install** | Marketplace entry **and** a live plugin [`README.md`](https://github.com/xianix-team/plugins-official/blob/main/plugins/pr-reviewer/README.md) at `plugins/<folder>/README.md` (folder from marketplace `source`) | `ListAvailablePlugins` sets `installable=true` when the README is fetchable. Do **not** use local execution recipes, `PluginRecipes/`, or remote `.xianix/agent-setup.json`. |
+| **Coming soon** | Marketplace entry without a fetchable README | Listed but not installable |
 | **Installed plugins** | Agent-scoped `rules.json` `use-plugins` entries (Studio: Agent = activation override; webhook root + executions + chat rule sets) | Deduplicated union; system seed stays empty until first save |
+| **Executions / match-any** | User-confirmed chat draft saved via `SaveRules` | Not materialized from recipes. The agent discusses triggers from the plugin README, then writes execution blocks after explicit confirmation. |
 
 A **fresh activation** starts from this skeleton (no installed plugins):
 
@@ -59,6 +60,30 @@ Rules Optimizer uses four layers:
 | **Subagent prompt** | Task-specific context and expected output | `rules-optimizer-prompt.md` (scope, catalog, style, first reply) |
 
 Skills teach; tools do; prompt rules constrain. Do not fold workflow teaching into tool APIs.
+
+### Progressive install workflow (Rules Optimizer)
+
+Rules Optimizer chat (`scope: rules-optimizer`) uses `RulesOptimizerSubagent` only.
+Installs are progressive (plugins first, then user-confirmed executions) — not a
+deterministic recipe dump.
+
+Typical phase flow (via `LoadRulesOptimizerSkill`):
+
+1. **`getting-started`** — marketplace + plugin choice (`ListAvailablePlugins`)
+2. **`plugin-setup`** — repository, match-any discussion, secrets check (no `rules.json` write yet)
+3. **`rules-manager`** — `InstallPlugins` (registers `use-plugins` + seeds rule-set `with-envs` commons), then `SaveRules` with the user-confirmed execution JSON
+4. **`webhook-setup`** — Default webhook + SCM connection
+
+Tool boundaries:
+
+| Step | Tool | What it writes |
+|------|------|----------------|
+| Register plugins | `InstallPlugins` | `use-plugins` on Default webhook + chat rule sets; seeds commons (`GITHUB-TOKEN`, `AZURE-DEVOPS-TOKEN`, `ANTHROPIC-API-KEY`) when missing |
+| Add executions | `SaveRules` | Full `rules.json` text including agreed webhook `executions` (after `ValidateRulesJson`) |
+| Remove blocks | `RemoveRulesEntries` or `InstallPlugins` with `replaceExistingSet=true` | Surgical deletes or plugin-set replacement |
+
+Use only the tools listed above. Canonical prompt: `Knowledge/rules-optimizer-prompt.md`.
+Skills live under `Skills/rules-optimizer/` only.
 
 ---
 

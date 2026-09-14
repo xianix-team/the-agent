@@ -236,7 +236,7 @@ public class VerifyGitHubWebhookPingWorkflow
 
         return VerifyGitHubWebhookPingResult.Failed(
             "Timed out waiting for a new GitHub ping delivery. Check that the public webhook URL " +
-            "(Cloudflare tunnel) is reachable from the internet.",
+            "is reachable from the internet.",
             delivery?.StatusCode,
             delivery?.Status);
     }

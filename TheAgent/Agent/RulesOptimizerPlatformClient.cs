@@ -48,7 +48,7 @@ internal sealed class RulesOptimizerPlatformClient
             .Select(w => new BuiltinWebhookInfo(
                 w.Id,
                 w.WebhookName ?? "Default",
-                w.WebhookUrl))
+                WebhookPublicUrl.ToPublicUrl(w.WebhookUrl) ?? w.WebhookUrl))
             .ToArray();
     }
 
@@ -69,7 +69,7 @@ internal sealed class RulesOptimizerPlatformClient
         {
             return WebhookCreateResult.Succeeded(
                 matched.Id,
-                matched.WebhookUrl,
+                WebhookPublicUrl.ToPublicUrl(matched.WebhookUrl) ?? matched.WebhookUrl,
                 created: false,
                 webhookName: normalizedWebhookName);
         }
@@ -82,7 +82,7 @@ internal sealed class RulesOptimizerPlatformClient
 
             return WebhookCreateResult.Succeeded(
                 created.Id,
-                created.WebhookUrl,
+                WebhookPublicUrl.ToPublicUrl(created.WebhookUrl) ?? created.WebhookUrl,
                 created: true,
                 webhookName: normalizedWebhookName);
         }
@@ -96,6 +96,8 @@ internal sealed class RulesOptimizerPlatformClient
     /// Returns the server-side public URL for an activation webhook only when
     /// <paramref name="requestedUrl"/> matches a known builtin webhook for that activation.
     /// LLM-supplied URLs that do not match are rejected (prevents PAT-backed hook hijack).
+    /// Always rewrites loopback / relative SDK URLs onto <c>XIANS-WEBHOOK-PUBLIC-URL</c>
+    /// before returning (required for GitHub <c>config.url</c>).
     /// </summary>
     public async Task<string?> ResolveAllowedWebhookPayloadUrlAsync(
         string? requestedUrl,
@@ -115,10 +117,14 @@ internal sealed class RulesOptimizerPlatformClient
             if (string.IsNullOrWhiteSpace(webhook.WebhookUrl))
                 continue;
 
+            var publicStored = WebhookPublicUrl.ToPublicUrl(webhook.WebhookUrl) ?? webhook.WebhookUrl;
+
             if (string.Equals(webhook.WebhookUrl, requested, StringComparison.OrdinalIgnoreCase)
-                || GitHubWebhookUrl.IsSameXiansWebhookIdentity(webhook.WebhookUrl, requested))
+                || string.Equals(publicStored, requested, StringComparison.OrdinalIgnoreCase)
+                || GitHubWebhookUrl.IsSameXiansWebhookIdentity(webhook.WebhookUrl, requested)
+                || GitHubWebhookUrl.IsSameXiansWebhookIdentity(publicStored, requested))
             {
-                return webhook.WebhookUrl;
+                return publicStored;
             }
         }
 
@@ -149,7 +155,7 @@ internal sealed class RulesOptimizerPlatformClient
         {
             return GitHubWebhookResult.Failed(
                 $"Could not parse a GitHub owner/repo from '{repositoryCloneUrl}'. " +
-                "Expected a URL like https://github.com/owner/repo.git.");
+                "Expected a URL like https://github.com/owner/repo or https://github.com/owner/repo.git.");
         }
 
         var (owner, name) = repo.Value;

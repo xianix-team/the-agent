@@ -347,7 +347,10 @@ public sealed partial class RulesOptimizerSubagentTools
         "Does not set a GitHub hook config.secret. " +
         "Call after CreateWebhookConnection succeeds for a GitHub repo.")]
     public async Task<string> RegisterGitHubRepositoryWebhook(
-        [Description("The repository clone URL, e.g. https://github.com/org/repo.git")] string repositoryUrl,
+        [Description(
+            "Repository URL — https://github.com/org/repo and https://github.com/org/repo.git " +
+            "are both accepted (same repo).")]
+        string repositoryUrl,
         [Description("The public Xians webhook URL returned by CreateWebhookConnection.")] string webhookUrl,
         [Description(
             "Comma-separated GitHub event names, e.g. issues,pull_request,issue_comment,push. " +
@@ -407,6 +410,28 @@ public sealed partial class RulesOptimizerSubagentTools
                         "(from CreateWebhookConnection). Arbitrary URLs are rejected.",
             });
         }
+
+        if (WebhookPublicUrl.IsUnusableAsGitHubPayloadUrl(allowedPayloadUrl))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                ok = false,
+                registrationStatus = "failed",
+                connectionStatus = "not_established",
+                connectionCheck = "github_ping",
+                error = "Webhook payload URL is still localhost or relative — GitHub cannot call it. " +
+                        "Set XIANS-WEBHOOK-PUBLIC-URL to a publicly reachable base URL " +
+                        "for the Xians server, restart the agent, then retry.",
+                payloadUrl = allowedPayloadUrl,
+            });
+        }
+
+        _logger.LogInformation(
+            "Registering GitHub webhook for {Repo} with public payload host {Host}",
+            repoLabel,
+            Uri.TryCreate(allowedPayloadUrl, UriKind.Absolute, out var payloadUri)
+                ? payloadUri.Host
+                : "(unparsed)");
 
         try
         {

@@ -82,6 +82,8 @@ public static class RepositoryNaming
     /// <summary>
     /// Normalize a clone URL for equality checks (scheme + host + path without trailing
     /// <c>.git</c> / slash). Empty when the input is blank.
+    /// Treats browser and clone forms as the same repo, e.g.
+    /// <c>https://github.com/org/repo</c> and <c>https://github.com/org/repo.git</c>.
     /// </summary>
     public static string NormalizeCloneUrlKey(string? repositoryUrl)
     {
@@ -96,7 +98,22 @@ public static class RepositoryNaming
         if (path.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
             path = path[..^4];
 
-        return $"{uri.Scheme}://{uri.Host.ToLowerInvariant()}{path}".ToLowerInvariant();
+        var host = uri.Host.ToLowerInvariant();
+        if (host is "www.github.com")
+            host = "github.com";
+
+        return $"{uri.Scheme}://{host}{path}".ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// True when two URLs refer to the same repository ignoring trailing <c>.git</c>,
+    /// slash, and <c>www.</c> on github.com.
+    /// </summary>
+    public static bool AreSameCloneUrl(string? left, string? right)
+    {
+        var a = NormalizeCloneUrlKey(left);
+        var b = NormalizeCloneUrlKey(right);
+        return a.Length > 0 && string.Equals(a, b, StringComparison.Ordinal);
     }
 
     /// <summary>

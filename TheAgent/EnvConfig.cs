@@ -65,6 +65,7 @@ public static class EnvConfig
     // Xians Platform
     public static string XiansServerUrl => GetRequired("XIANS-SERVER-URL");
     public static string XiansApiKey    => GetRequired("XIANS-API-KEY");
+    public static string XiansWebhookPublicUrl => Get("XIANS-WEBHOOK-PUBLIC-URL");
 
     // Agent identity (display name shown when registering with the Xians platform).
     // Note: workflow type names still derive from <see cref="Xianix.Constants.AgentName"/>

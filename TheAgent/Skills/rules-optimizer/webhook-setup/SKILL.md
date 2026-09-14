@@ -19,7 +19,8 @@ This skill covers Default webhook **and** SCM connection. Do **not** load a sepa
 1. Call `GetTenantState` (silent) — reuse existing Default webhook if already present.
 2. Briefly restate install success (one line) if just confirmed.
 3. Tell the user how to trigger each installed plugin **before** the webhook question.
-   Prefer the label/trigger they already chose. Otherwise call `ListAvailablePlugins` with the configured platform for `suggestedTriggers` only — never invent.
+   Prefer the match-any / triggers the user already confirmed in `plugin-setup`. If
+   needed, re-read `GetCurrentRules` for saved execution names and match-any — never invent.
 
 ```
 pr-reviewer is installed and saved to rules.json.
@@ -30,7 +31,7 @@ How to trigger on GitHub:
 Create the Xians webhook (Default) for this activation now?
 ```
 
-For Azure DevOps, use ADO wording from `suggestedTriggers` — **not** GitHub label names.
+For Azure DevOps, use ADO wording from the agreed setup — **not** GitHub label names.
 
 If `GetTenantState.webhooks.items` already has Default with a URL, say it exists and ask whether to reuse it (still call `CreateWebhookConnection` to reuse/ensure — do not invent the URL).
 
@@ -157,7 +158,9 @@ Do **not** claim the connection is established. No invented ping or "HTTP 200".
 
 ### How to trigger (platform-specific)
 
-Context: `ListAvailablePlugins` with the configured platform if needed. For each installed plugin, show **How to trigger** from that platform's `suggestedTriggers` only. Never invent. Never show the other platform's labels/tags.
+Context: restate **How to trigger** from the match-any the user confirmed in
+`plugin-setup` (or from saved executions in `GetCurrentRules`). Never invent. Never
+show the other platform's labels/tags.
 
 ### Final status (mandatory)
 

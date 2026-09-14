@@ -61,8 +61,11 @@ internal static class GitHubWebhookUrl
 
         var trimmed = cloneUrl.Trim();
 
+        // Browser HTML URLs (no .git) and clone URLs (.git) are both accepted.
         var httpsMatch = Regex.Match(
-            trimmed, @"^https?://github\.com/([^/]+)/([^/]+?)(\.git)?/?$", RegexOptions.IgnoreCase);
+            trimmed,
+            @"^https?://(?:www\.)?github\.com/([^/]+)/([^/]+?)(\.git)?/?$",
+            RegexOptions.IgnoreCase);
         if (httpsMatch.Success)
             return (httpsMatch.Groups[1].Value, httpsMatch.Groups[2].Value);
 

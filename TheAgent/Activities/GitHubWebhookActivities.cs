@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 using Temporalio.Activities;
 using Xianix.Rules;
 using Xians.Lib.Agents.Core;
@@ -77,13 +78,22 @@ public sealed class GitHubWebhookActivities
                 var id = doc.RootElement.TryGetProperty("id", out var idProp)
                     ? idProp.GetInt64().ToString()
                     : null;
+                ActivityExecutionContext.Current.Logger.LogInformation(
+                    "GitHub webhook created for {Owner}/{Repo} hookId={HookId} payloadHost={Host}",
+                    owner,
+                    repo,
+                    id,
+                    Uri.TryCreate(payloadUrl, UriKind.Absolute, out var createdUri)
+                        ? createdUri.Host
+                        : "(unparsed)");
                 return GitHubHttpResult.Ok(hookId: id);
             }
 
             postError =
                 $"GitHub API rejected webhook creation for {owner}/{repo}: " +
-                $"HTTP {(int)response.StatusCode} {SanitizeHttpErrorBody(body)}";
-        }
+                $"HTTP {(int)response.StatusCode} {SanitizeHttpErrorBody(body)} " +
+                $"(payloadHost={(Uri.TryCreate(payloadUrl, UriKind.Absolute, out var failUri) ? failUri.Host : "unparsed")})";
+            ActivityExecutionContext.Current.Logger.LogWarning("{Error}", postError);        }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException)
         {
             // Ambiguous: GitHub may have created the hook before the response was lost.
@@ -514,7 +524,7 @@ public sealed class GitHubWebhookActivities
                     $"{key} is not set in the tenant Secret Vault (or the value is empty).");
             }
 
-            return (true, fetched.Value, null);
+            return (true, fetched.Value.Trim(), null);
         }
         catch (Exception ex)
         {

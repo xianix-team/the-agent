@@ -45,15 +45,15 @@ Typical flow:
 - Webhook: `CreateWebhookConnection` (Default)
 - GitHub: `RegisterGitHubRepositoryWebhook` (register + ping)
 
-There is **no** `VerifyInstalledPlugins`, `MaterializePluginRules`, `UpdateTriggerLabel`,
-`GetPluginSetupGuide`, `BeginRulesOptimizer`, `ConnectScm`, `GetRulesExample`, or
-`skipExecutions`. Do not invent them.
+Use **only** the tools listed above. Do not invent tools.
 
 ## Catalog (task context)
 
 - Available plugins = live official marketplace only.
-- Ready = marketplace entry + live `plugins/<folder>/README.md`.
+- Ready = marketplace entry + live `plugins/<folder>/README.md` (no local recipe).
 - Coming soon = marketplace without README.
+- Discuss triggers in `plugin-setup`, then draft and `SaveRules` only after
+  user confirmation.
 - Installed = agent-scoped `use-plugins` only (Studio Knowledge → Agent).
 - System Knowledge `rules.json` is the **empty default seed**.
 - System / org Studio Knowledge is not the install record. If
