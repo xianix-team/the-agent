@@ -53,16 +53,35 @@ public class XianixAgent(
         //      — constant / host.VAR / secrets.KEY all supported. Operators normally
         //      declare it once at the top of rules.json (same pattern they already
         //      use for GITHUB-TOKEN).
-        //   2. Host env `ANTHROPIC-API-KEY` (or `ANTHROPIC_API_KEY`) — fallback when
-        //      the rules.json entry is absent, points at an unset host var, or the
-        //      tenant's Secret Vault has no entry under the configured key.
-        //   3. Empty — SupervisorSubagent surfaces a loud, tenant-tagged error which
+        //   2. Tenant vault key `ANTHROPIC-API-KEY` — used when activation-scoped
+        //      Rules overrides omit the seed with-envs entry (common after Rules
+        //      Optimizer saves), so Studio secrets still work for chat.
+        //   3. Host env `ANTHROPIC-API-KEY` (or `ANTHROPIC_API_KEY`) — last resort.
+        //   4. Empty — SupervisorSubagent surfaces a loud, tenant-tagged error which
         //      OnUserChatMessage's catch logs and replies to the user.
         async Task<string> ResolveAnthropicApiKeyAsync()
         {
             var resolved = await StartupEnvResolver.TryResolveValueAsync("ANTHROPIC-API-KEY", logger)
                 .ConfigureAwait(false);
-            return resolved ?? EnvConfig.AnthropicApiKey;
+            if (!string.IsNullOrWhiteSpace(resolved))
+                return resolved;
+
+            try
+            {
+                var fetched = await XiansContext.CurrentAgent.Secrets.TenantScope()
+                    .FetchByKeyAsync("ANTHROPIC-API-KEY")
+                    .ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(fetched?.Value))
+                    return fetched.Value;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(
+                    ex,
+                    "Tenant vault lookup for ANTHROPIC-API-KEY failed — falling back to host env.");
+            }
+
+            return EnvConfig.AnthropicApiKey;
         }
 
         var subagent = new SupervisorSubagent(

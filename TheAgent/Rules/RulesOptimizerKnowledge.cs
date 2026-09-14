@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using Xianix;
 using Xians.Lib.Agents.Core;
@@ -59,17 +60,23 @@ internal static class RulesOptimizerKnowledge
         if (agent is null)
             return RulesOptimizerSaveResult.Failed("No current agent bound — cannot save Rules.");
 
+        // Template agents: UploadTextResourceAsync always inherits agent.SystemScoped=true
+        // (no systemScoped override on that public helper). KnowledgeCollection.UpdateAsync
+        // accepts systemScoped:false but is internal to Xians.Lib — invoke it so we write
+        // a tenant/activation override instead of mutating the system seed.
+        // See Xians Docs concepts/knowledge (Upload* = seed) + KnowledgeCollection.UpdateAsync.
         try
         {
-            var uploaded = await agent.Knowledge.UploadTextResourceAsync(
-                    knowledgeName: Constants.RulesKnowledgeName,
-                    content: content,
+            var uploaded = await UpdateKnowledgeOverrideAsync(
+                    agent.Knowledge,
+                    Constants.RulesKnowledgeName,
+                    content,
                     knowledgeType: "json",
-                    cancellationToken: cancellationToken)
+                    cancellationToken)
                 .ConfigureAwait(false);
 
             if (!uploaded)
-                return RulesOptimizerSaveResult.Failed("SDK rejected Rules knowledge upload.");
+                return RulesOptimizerSaveResult.Failed("SDK rejected Rules knowledge update.");
         }
         catch (Exception ex)
         {
@@ -83,13 +90,71 @@ internal static class RulesOptimizerKnowledge
                 .GetAsync(Constants.RulesKnowledgeName, cancellationToken)
                 .ConfigureAwait(false);
             id = doc?.Id;
+
+            if (doc is null || string.IsNullOrWhiteSpace(doc.Content))
+            {
+                return RulesOptimizerSaveResult.Failed(
+                    "Rules update returned success but re-read found no document.");
+            }
+
+            if (doc.SystemScoped)
+            {
+                return RulesOptimizerSaveResult.Failed(
+                    "Rules update still resolved as system-scoped after write. " +
+                    "Agent-level override was not created.");
+            }
         }
-        catch
+        catch (Exception ex)
         {
-            // Non-fatal: write succeeded.
+            return RulesOptimizerSaveResult.Failed(
+                $"Rules update ran but re-read/verify failed: {ex.Message}");
         }
 
         return RulesOptimizerSaveResult.Succeeded(id);
+    }
+
+    /// <summary>
+    /// Writes tenant/activation-scoped knowledge via Xians.Lib's internal
+    /// <c>KnowledgeCollection.UpdateAsync(..., systemScoped: false)</c>.
+    /// </summary>
+    private static async Task<bool> UpdateKnowledgeOverrideAsync(
+        KnowledgeCollection knowledge,
+        string knowledgeName,
+        string content,
+        string knowledgeType,
+        CancellationToken cancellationToken)
+    {
+        // Xians.Lib keeps UpdateAsync internal; signature confirmed on Lib main + 3.36.0:
+        // UpdateAsync(string, string, string?, bool?, string?, bool, CancellationToken)
+        var update = typeof(KnowledgeCollection)
+            .GetMethods(BindingFlags.Instance | BindingFlags.NonPublic)
+            .SingleOrDefault(m =>
+                m.Name == "UpdateAsync"
+                && m.GetParameters() is { Length: 7 } p
+                && p[0].ParameterType == typeof(string)
+                && p[1].ParameterType == typeof(string)
+                && p[3].ParameterType == typeof(bool?));
+
+        if (update is null)
+        {
+            throw new MissingMethodException(
+                typeof(KnowledgeCollection).FullName,
+                "UpdateAsync(string, string, string?, bool?, string?, bool, CancellationToken)");
+        }
+
+        var task = (Task<bool>)update.Invoke(
+            knowledge,
+            [
+                knowledgeName,
+                content,
+                knowledgeType,
+                (bool?)false, // agent/activation override — not template seed
+                null,         // description
+                true,         // visible
+                cancellationToken,
+            ])!;
+
+        return await task.ConfigureAwait(false);
     }
 
     /// <summary>

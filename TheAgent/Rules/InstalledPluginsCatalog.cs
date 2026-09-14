@@ -9,7 +9,8 @@ namespace Xianix.Rules;
 internal static class InstalledPluginsCatalog
 {
     /// <summary>
-    /// Fresh activation skeleton: empty webhook + empty chat plugin lists.
+    /// Fresh activation skeleton: empty webhook + empty chat plugin lists
+    /// (same shape as default <c>Knowledge/rules.json</c>).
     /// </summary>
     public const string FreshActivationRulesJson =
         """
@@ -52,7 +53,6 @@ internal static class InstalledPluginsCatalog
                 if (item.ValueKind != JsonValueKind.Object)
                     continue;
 
-                // Webhook rule-set root use-plugins (optional future / explicit manifest).
                 CollectPlugins(item, installed);
 
                 if (item.TryGetProperty("executions", out var executions)
@@ -65,8 +65,6 @@ internal static class InstalledPluginsCatalog
         }
         catch (JsonException)
         {
-            // Unparseable rules.json means "no installed plugins" at this layer.
-            // Callers that own ILogger (InstallPlugins / SaveRules) report the failure.
             return [];
         }
 
@@ -127,7 +125,6 @@ internal static class InstalledPluginsCatalog
             return;
         }
 
-        // Prefer the entry that carries a slash-command.
         if (string.IsNullOrWhiteSpace(existing.SlashCommand)
             && !string.IsNullOrWhiteSpace(plugin.SlashCommand))
         {

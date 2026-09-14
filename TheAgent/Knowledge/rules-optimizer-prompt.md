@@ -39,7 +39,7 @@ Typical flow:
 
 - Snapshot: `GetTenantState`, `GetCurrentRules`
 - Marketplace / rules: `ListAvailablePlugins`, `ValidateRulesJson`, `InstallPlugins`,
-  `SaveRules`, `RemoveRulesEntries`
+  `SaveRules`, `RemoveRulesEntries`, `GetRulesExample`
 - Skills: `LoadRulesOptimizerSkill`
 - Secrets: `CheckTenantSecretExists` (exists flags only — never values)
 - Webhook: `CreateWebhookConnection` (Default)
@@ -54,10 +54,25 @@ Do not invent them.
 - Available plugins = live official marketplace only.
 - Ready = marketplace entry + live `plugins/<folder>/README.md`.
 - Coming soon = marketplace without README.
-- Installed = agent-scoped `use-plugins` only.
+- Installed = agent-scoped `use-plugins` only (Studio Knowledge → Agent).
+- System Knowledge `rules.json` is the **empty default seed**.
+- `GetRulesExample` loads `Knowledge/rules-example.json` for progressive drafting —
+  reference only; never dump the whole example without user confirmation.
+- System / org Studio Knowledge is not the install record. If
+  `GetCurrentRules.scope` is `system` while TenantState shows fewer plugins, call
+  `InstallPlugins` (then progressively add executions).
 
 ## Rules (mandatory constraints)
 
+- **Canonical `rules.json` shape** is a JSON array of rule sets with discriminators
+  `webhook` / `chat` / `schedule`, plus `with-envs`, `use-plugins`, and `executions`
+  as documented. There is **no** “old format” to migrate.
+- **Progressive installs:** `InstallPlugins` registers `use-plugins` only. After
+  match-any confirm in `plugin-setup`, use `GetRulesExample` + `SaveRules` to add
+  the chosen executions / with-envs. Never auto-dump every example execution.
+- **Never ask the user which environment variables to add** (no open-ended env menus).
+  Prefer commons from `GetRulesExample` Default `with-envs` when drafting. For vault
+  keys, only auto-check with `CheckTenantSecretExists` / `GetTenantState`.
 - **Never ask the user to edit Studio → Knowledge / rules.json by hand.** You own
   agent-scoped Rules. Always change them yourself with tools:
   - Plugin add/remove (full set): `InstallPlugins` (`replaceExistingSet=true` when

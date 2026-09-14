@@ -115,8 +115,11 @@ Does that look right?
 Only after they confirm:
 
 - Never invent labels/tags or mix platforms.
-- Do **not** update `rules.json` in this skill (that is `rules-manager` + tools).
+- Do **not** update `rules.json` in this skill yet — that is `rules-manager` + tools.
+- After confirm, `rules-manager` should `InstallPlugins` then progressively
+  `GetRulesExample` + `SaveRules` for the agreed executions only.
 - Never store a concrete URL with `constant: false`. Do not add `repository.ref`.
+- Never dump every block from `rules-example.json` without confirmation.
 
 ---
 
@@ -131,6 +134,9 @@ Tools: `CheckTenantSecretExists` / `GetTenantState`. Never accept pasted secret 
 - "Do you have this set up in Studio → Settings → Secrets?"
 - "Is ANTHROPIC-API-KEY configured?"
 - Any yes/no question about whether a vault key exists
+- "What environment variables do you want to add?"
+- Any open-ended menu of optional env vars / PR criteria / custom config for
+  `with-envs` — keep seed defaults; only report missing vault keys
 
 **Context source:** platform from the repo URL (GitHub → `GITHUB-TOKEN`; Azure DevOps →
 `AZURE-DEVOPS-TOKEN`), plus always `ANTHROPIC-API-KEY`, plus `GetTenantState.secrets`.

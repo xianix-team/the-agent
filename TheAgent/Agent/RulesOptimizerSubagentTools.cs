@@ -56,7 +56,9 @@ public sealed partial class RulesOptimizerSubagentTools
             scopeHint = scope switch
             {
                 "agent" => "Agent-scoped Rules (activation override). System seed is unchanged.",
-                "system" => "System-scoped seed (no agent override yet). InstallPlugins/SaveRules writes agent scope.",
+                "system" => "Empty system default seed (Docs fresh activation shape). " +
+                            "Installed plugins need agent scope — InstallPlugins then " +
+                            "progressively GetRulesExample + SaveRules for executions.",
                 "missing" => "No Rules document found — showing fresh activation skeleton for drafting.",
                 _ => "Could not read Rules Knowledge.",
             },
@@ -520,8 +522,9 @@ public sealed partial class RulesOptimizerSubagentTools
 
     [Description(
         "Install one or more Ready marketplace plugins into activation-scoped rules.json by " +
-        "merging use-plugins into the Default webhook + chat skeleton (fresh Docs shape when no " +
-        "agent Rules exist yet). Does not materialize webhook executions in this slice. " +
+        "progressively merging use-plugins onto the Default webhook + chat skeleton (or existing " +
+        "agent Rules). Does not dump every example execution — add executions later via " +
+        "GetRulesExample + SaveRules after the user confirms match-any. " +
         "By default keeps already-installed agent plugins and adds pluginNames. " +
         "Set replaceExistingSet=true to treat pluginNames as the complete set. " +
         "ONLY call after the user confirmed which Ready plugins to install. " +
@@ -626,9 +629,9 @@ public sealed partial class RulesOptimizerSubagentTools
             });
         }
 
-        var baseJson = replaceExistingSet || string.IsNullOrWhiteSpace(agentExisting)
-            ? InstalledPluginsCatalog.FreshActivationRulesJson
-            : agentExisting!;
+        var baseJson = !string.IsNullOrWhiteSpace(agentExisting)
+            ? agentExisting!
+            : InstalledPluginsCatalog.FreshActivationRulesJson;
 
         var draft = MergeUsePluginsIntoSkeleton(baseJson, resolvedEntries, replaceExistingSet);
         var fullSetCsv = string.Join(",", fullSet);
@@ -683,11 +686,37 @@ public sealed partial class RulesOptimizerSubagentTools
             installedShortNames = installedShort,
             agentName = resolvedAgent,
             activationName = resolvedActivation,
-            message = "Plugins installed into agent-scoped Rules (use-plugins on Default webhook + chat). " +
+            message = "Plugins registered in agent-scoped use-plugins (progressive). " +
+                      "Add executions next via GetRulesExample + SaveRules after match-any confirm. " +
                       "claimAllowed=true — you may report these installedShortNames.",
-            hint = "Webhook executions are not materialized in this slice — use-plugins listing only. " +
-                   "Never claim install without ok=true + claimAllowed=true from this tool.",
+            hint = "Never claim install without ok=true + claimAllowed=true from this tool.",
         });
+    }
+
+    [Description(
+        "Load Knowledge/rules-example.json — reference executions, with-envs, and prompts for " +
+        "progressive drafting. This is NOT live Rules and does not install anything. " +
+        "After the user confirms match-any / executions, copy the needed blocks into SaveRules.")]
+    public Task<string> GetRulesExample()
+    {
+        var example = RulesExampleCatalog.LoadEmbeddedExampleJson();
+        if (string.IsNullOrWhiteSpace(example))
+        {
+            return Task.FromResult(JsonSerializer.Serialize(new
+            {
+                ok = false,
+                error = "Embedded Knowledge/rules-example.json was not found.",
+            }));
+        }
+
+        return Task.FromResult(JsonSerializer.Serialize(new
+        {
+            ok = true,
+            source = "Knowledge/rules-example.json",
+            hint = "Reference only. Progressive: pick confirmed executions / with-envs, then SaveRules. " +
+                   "Do not dump the entire example into agent Rules without user confirmation.",
+            content = example,
+        }));
     }
 
     /// <summary>Pure validation used by <see cref="ValidateRulesJson"/>.</summary>

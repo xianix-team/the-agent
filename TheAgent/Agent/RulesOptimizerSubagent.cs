@@ -57,6 +57,7 @@ public sealed class RulesOptimizerSubagent(SupervisorSubagent supervisor)
             AIFunctionFactory.Create(tools.SaveRules),
             AIFunctionFactory.Create(tools.RemoveRulesEntries),
             AIFunctionFactory.Create(tools.InstallPlugins),
+            AIFunctionFactory.Create(tools.GetRulesExample),
             AIFunctionFactory.Create(tools.CreateWebhookConnection),
             AIFunctionFactory.Create(tools.RegisterGitHubRepositoryWebhook),
         ];

@@ -13,8 +13,15 @@ and **always** pass `rulesJson`. Prefer `RemoveRulesEntries` for named execution
 **Do not write `rules.json` until the user explicitly agrees** after seeing the plan —
 except when they already asked you to remove specific blocks (then confirm briefly and act).
 
-**Forbidden:** “Go to Studio → Knowledge and delete these executions yourself.”
-You apply every rules change with tools.
+**Forbidden:**
+- “Go to Studio → Knowledge and delete these executions yourself.”
+- Claiming the empty default seed is an “old format” / inventing a schema migration.
+- Asking which env vars to put in `with-envs` — draft commons from `GetRulesExample` after confirm.
+- Dumping the entire `rules-example.json` into agent Rules without user confirmation.
+
+You apply every rules change with tools. When TenantState installed plugins disagree
+with system-scoped `GetCurrentRules`, that means agent scope is missing — call
+`InstallPlugins` after permission, then progressively add executions.
 
 There is no `MaterializePluginRules`, `UpdateTriggerLabel`, `VerifyInstalledPlugins`,
 `GetPluginSetupGuide`, or `skipExecutions` tool — do not call or invent them.
@@ -40,8 +47,12 @@ Update rules.json with this now?
 
 ### Action
 
-5. On confirm → `InstallPlugins` with the full desired short names.
+5. On confirm → `InstallPlugins` with the full desired short names
+   (registers `use-plugins` only — progressive).
    - Removing plugins from the set: pass the kept names with `replaceExistingSet=true`.
+   - After match-any was confirmed in `plugin-setup`, call `GetRulesExample`, copy
+     only the agreed executions / with-envs into a draft, then `SaveRules`.
+   - Never dump the entire example document without confirmation.
 
 ### Evidence
 
