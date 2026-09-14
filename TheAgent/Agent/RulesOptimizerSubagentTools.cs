@@ -58,7 +58,7 @@ public sealed partial class RulesOptimizerSubagentTools
                 "agent" => "Agent-scoped Rules (activation override). System seed is unchanged.",
                 "system" => "Empty system default seed (Docs fresh activation shape). " +
                             "Installed plugins need agent scope — InstallPlugins then " +
-                            "progressively GetRulesExample + SaveRules for executions.",
+                            "progressively SaveRules for confirmed executions.",
                 "missing" => "No Rules document found — showing fresh activation skeleton for drafting.",
                 _ => "Could not read Rules Knowledge.",
             },
@@ -255,6 +255,9 @@ public sealed partial class RulesOptimizerSubagentTools
             });
         }
 
+        // Progressive drafts often omit rule-set commons; seed vault refs when plugins/executions exist.
+        rulesJson = RulesCommonWithEnvs.EnsureInRulesJson(rulesJson);
+
         var validation = await ValidateRulesJson(rulesJson, requiredPlugins).ConfigureAwait(false);
         using var validationDoc = JsonDocument.Parse(validation);
         if (!validationDoc.RootElement.TryGetProperty("ok", out var okProp) || !okProp.GetBoolean())
@@ -303,6 +306,8 @@ public sealed partial class RulesOptimizerSubagentTools
             var toSave = replaceExisting || string.IsNullOrWhiteSpace(agentExisting)
                 ? rulesJson
                 : RulesOptimizerKnowledge.MergeRulesJson(agentExisting, rulesJson);
+
+            toSave = RulesCommonWithEnvs.EnsureInRulesJson(toSave);
 
             var revalidation = await ValidateRulesJson(toSave, requiredCsv).ConfigureAwait(false);
             using var revalidationDoc = JsonDocument.Parse(revalidation);
@@ -523,11 +528,11 @@ public sealed partial class RulesOptimizerSubagentTools
     [Description(
         "Install one or more Ready marketplace plugins into activation-scoped rules.json by " +
         "progressively merging use-plugins onto the Default webhook + chat skeleton (or existing " +
-        "agent Rules). Does not dump every example execution — add executions later via " +
-        "GetRulesExample + SaveRules after the user confirms match-any. " +
-        "By default keeps already-installed agent plugins and adds pluginNames. " +
-        "Set replaceExistingSet=true to treat pluginNames as the complete set. " +
-        "ONLY call after the user confirmed which Ready plugins to install. " +
+        "agent Rules). Also seeds rule-set with-envs commons (GITHUB-TOKEN, AZURE-DEVOPS-TOKEN, " +
+        "ANTHROPIC-API-KEY) when missing. Does not invent executions — add those later via " +
+        "SaveRules after the user confirms match-any. By default keeps already-installed agent " +
+        "plugins and adds pluginNames. Set replaceExistingSet=true to treat pluginNames as the " +
+        "complete set. ONLY call after the user confirmed which Ready plugins to install. " +
         "Never claim success unless ok=true and claimAllowed=true.")]
     public async Task<string> InstallPlugins(
         [Description("Comma-separated plugin short names to install, e.g. pr-reviewer,perf-optimizer.")]
@@ -686,37 +691,12 @@ public sealed partial class RulesOptimizerSubagentTools
             installedShortNames = installedShort,
             agentName = resolvedAgent,
             activationName = resolvedActivation,
-            message = "Plugins registered in agent-scoped use-plugins (progressive). " +
-                      "Add executions next via GetRulesExample + SaveRules after match-any confirm. " +
+            message = "Plugins registered in agent-scoped use-plugins (progressive) with " +
+                      "rule-set with-envs commons seeded when missing. " +
+                      "Add executions next via SaveRules after match-any confirm. " +
                       "claimAllowed=true — you may report these installedShortNames.",
             hint = "Never claim install without ok=true + claimAllowed=true from this tool.",
         });
-    }
-
-    [Description(
-        "Load Knowledge/rules-example.json — reference executions, with-envs, and prompts for " +
-        "progressive drafting. This is NOT live Rules and does not install anything. " +
-        "After the user confirms match-any / executions, copy the needed blocks into SaveRules.")]
-    public Task<string> GetRulesExample()
-    {
-        var example = RulesExampleCatalog.LoadEmbeddedExampleJson();
-        if (string.IsNullOrWhiteSpace(example))
-        {
-            return Task.FromResult(JsonSerializer.Serialize(new
-            {
-                ok = false,
-                error = "Embedded Knowledge/rules-example.json was not found.",
-            }));
-        }
-
-        return Task.FromResult(JsonSerializer.Serialize(new
-        {
-            ok = true,
-            source = "Knowledge/rules-example.json",
-            hint = "Reference only. Progressive: pick confirmed executions / with-envs, then SaveRules. " +
-                   "Do not dump the entire example into agent Rules without user confirmation.",
-            content = example,
-        }));
     }
 
     /// <summary>Pure validation used by <see cref="ValidateRulesJson"/>.</summary>
@@ -991,6 +971,11 @@ public sealed partial class RulesOptimizerSubagentTools
             webhook["executions"] = Array.Empty<object>();
         if (!webhook.ContainsKey("with-envs"))
             webhook["with-envs"] = Array.Empty<object>();
+        if (!chat.ContainsKey("with-envs"))
+            chat["with-envs"] = Array.Empty<object>();
+
+        RulesCommonWithEnvs.EnsureOnRuleSet(webhook);
+        RulesCommonWithEnvs.EnsureOnRuleSet(chat);
 
         return JsonSerializer.Serialize(ruleSets);
     }

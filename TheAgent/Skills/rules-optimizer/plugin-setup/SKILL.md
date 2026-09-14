@@ -117,9 +117,10 @@ Only after they confirm:
 - Never invent labels/tags or mix platforms.
 - Do **not** update `rules.json` in this skill yet — that is `rules-manager` + tools.
 - After confirm, `rules-manager` should `InstallPlugins` then progressively
-  `GetRulesExample` + `SaveRules` for the agreed executions only.
+  `SaveRules` for the agreed executions only (commons are seeded by tools).
 - Never store a concrete URL with `constant: false`. Do not add `repository.ref`.
-- Never dump every block from `rules-example.json` without confirmation.
+- Never invent executions the user did not confirm.
+- Never leave rule-set `with-envs` empty when plugins/executions are present.
 
 ---
 

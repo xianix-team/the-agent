@@ -16,12 +16,12 @@ except when they already asked you to remove specific blocks (then confirm brief
 **Forbidden:**
 - “Go to Studio → Knowledge and delete these executions yourself.”
 - Claiming the empty default seed is an “old format” / inventing a schema migration.
-- Asking which env vars to put in `with-envs` — draft commons from `GetRulesExample` after confirm.
-- Dumping the entire `rules-example.json` into agent Rules without user confirmation.
+- Asking which env vars to put in `with-envs` — tools seed commons
+  (`GITHUB-TOKEN`, `AZURE-DEVOPS-TOKEN`, `ANTHROPIC-API-KEY`); only report missing vault keys.
 
 You apply every rules change with tools. When TenantState installed plugins disagree
 with system-scoped `GetCurrentRules`, that means agent scope is missing — call
-`InstallPlugins` after permission, then progressively add executions.
+`InstallPlugins` after permission, then progressively `SaveRules` for executions.
 
 There is no `MaterializePluginRules`, `UpdateTriggerLabel`, `VerifyInstalledPlugins`,
 `GetPluginSetupGuide`, or `skipExecutions` tool — do not call or invent them.
@@ -48,11 +48,11 @@ Update rules.json with this now?
 ### Action
 
 5. On confirm → `InstallPlugins` with the full desired short names
-   (registers `use-plugins` only — progressive).
+   (registers `use-plugins` + seeds rule-set `with-envs` commons — progressive).
    - Removing plugins from the set: pass the kept names with `replaceExistingSet=true`.
-   - After match-any was confirmed in `plugin-setup`, call `GetRulesExample`, copy
-     only the agreed executions / with-envs into a draft, then `SaveRules`.
-   - Never dump the entire example document without confirmation.
+   - After match-any was confirmed in `plugin-setup`, draft the agreed executions and
+     call `SaveRules` (keep commons; never save empty `with-envs` when plugins exist).
+   - Never invent a full rules document without confirmation.
 
 ### Evidence
 
