@@ -20,3 +20,10 @@ them exactly):
   and extract required / optional env and secret variables (name, platform,
   purpose). Pass the marketplace short name (e.g. `pr-reviewer`). Never invent
   env names; if the README is missing, say so.
+- `InstallPlugins` — install Ready marketplace plugins into agent-scoped
+  `rules.json` (`use-plugins` on Default webhook + chat). Seeds common
+  `with-envs` vault refs. Does not invent executions. Never claim success
+  unless `ok=true` and `claimAllowed=true`.
+- `SaveRules` — save a complete validated `rules.json` at agent scope only
+  (never system/org). Prefer `InstallPlugins` for installs. Never tell the
+  user to edit Studio Knowledge by hand.
