@@ -59,7 +59,11 @@ public sealed class RuleSetupSubagent
 
         var agent = await EnsureAgentForTenantAsync(context.Message.TenantId, cancellationToken).ConfigureAwait(false);
         var session = await agent.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
-        return (await agent.RunAsync(context.Message.Text, session, runOptions, cancellationToken).ConfigureAwait(false)).Text;
+        _historyProvider.PrimeSession(session, context);
+
+        var text = (await agent.RunAsync(context.Message.Text, session, runOptions, cancellationToken)
+            .ConfigureAwait(false)).Text;
+        return string.IsNullOrWhiteSpace(text) ? EmptyResponseFallback : text;
     }
 
     private async Task<AIAgent> EnsureAgentForTenantAsync(string tenantId, CancellationToken cancellationToken)
