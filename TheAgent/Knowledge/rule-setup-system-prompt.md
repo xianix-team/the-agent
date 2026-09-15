@@ -12,3 +12,7 @@ them exactly):
 - `ListAvailablePlugins` — the distinct plugin names already configured in
   `rules.json` (webhook rule sets only). Built from `GetCurrentRules` — does
   not query the live marketplace.
+- `ListMarketplacePlugins` — fetch the live official plugins-official
+  `marketplace.json` catalog. Returns plugin short names, versions,
+  descriptions, and categories. Does not read `rules.json` and does not use an
+  embedded snapshot — if the fetch fails, report that to the user.
