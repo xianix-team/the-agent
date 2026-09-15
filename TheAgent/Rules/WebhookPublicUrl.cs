@@ -68,31 +68,6 @@ internal static class WebhookPublicUrl
         return builder.Uri.AbsoluteUri;
     }
 
-    /// <summary>
-    /// True when the URL is still a relative path or points at loopback — GitHub will reject
-    /// these as webhook <c>config.url</c> values.
-    /// </summary>
-    public static bool IsUnusableAsGitHubPayloadUrl(string? webhookUrl)
-    {
-        if (string.IsNullOrWhiteSpace(webhookUrl))
-            return true;
-
-        var trimmed = webhookUrl.Trim();
-        if (trimmed.StartsWith('/'))
-            return true;
-
-        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
-            return true;
-
-        if (!string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(uri.Scheme, "http", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return IsLoopbackHost(uri.Host);
-    }
-
     private static bool IsLoopbackHost(string host)
     {
         var h = host.Trim().ToLowerInvariant();

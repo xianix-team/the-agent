@@ -1,7 +1,6 @@
 using System.ComponentModel;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
-using Xianix.Activities;
 using Xianix.Containers;
 using Xianix.Rules;
 using Xians.Lib.Agents.Core;
@@ -9,7 +8,7 @@ using Xians.Lib.Agents.Core;
 namespace Xianix.Agent;
 
 /// <summary>
-/// Skills loader + secrets / webhook / GitHub connection tools for Rules Optimizer.
+/// Skills loader + secrets / Xians webhook tools for Rules Optimizer.
 /// </summary>
 public sealed partial class RulesOptimizerSubagentTools
 {
@@ -225,7 +224,8 @@ public sealed partial class RulesOptimizerSubagentTools
         "Create (or reuse) a builtin webhook integration for the current agent activation. " +
         "Refuses unless agent-scoped rules.json already has at least one installed plugin and a " +
         "matching webhook rule set. Call after InstallPlugins / SaveRules succeeds. " +
-        "Returns the full public webhook URL. For GitHub call RegisterGitHubRepositoryWebhook next.")]
+        "Returns the full public webhook URL. SCM (GitHub / Azure DevOps) hooks are created " +
+        "manually by the user — there is no tool that registers them.")]
     public async Task<string> CreateWebhookConnection(
         [Description("Webhook name from rules.json (default: Default).")] string webhookName = "Default")
     {
@@ -324,8 +324,8 @@ public sealed partial class RulesOptimizerSubagentTools
                     ? "Xians webhook created successfully."
                     : "Xians webhook already exists — reusing it.",
                 hint = "Report full details: webhook name, URL (markdown link), integration id. " +
-                       "GitHub: call RegisterGitHubRepositoryWebhook next. " +
-                       "Azure DevOps: show webhookUrl for manual Service Hooks — do not ping.",
+                       "GitHub and Azure DevOps: show webhookUrl for manual SCM hook setup — " +
+                       "do not register or ping from tools.",
             });
         }
         catch (Exception ex)
@@ -336,208 +336,6 @@ public sealed partial class RulesOptimizerSubagentTools
                 ok = false,
                 webhookStatus = "failed",
                 error = $"Failed to create webhook: {ex.Message}",
-            });
-        }
-    }
-
-    [Description(
-        "Register the Xians webhook URL as a repository webhook on GitHub, then verify the " +
-        "connection by triggering a GitHub webhook PING and confirming a 2xx last_response. " +
-        "Uses the tenant's stored GITHUB-TOKEN (fetched server-side — never shown). " +
-        "Does not set a GitHub hook config.secret. " +
-        "Call after CreateWebhookConnection succeeds for a GitHub repo.")]
-    public async Task<string> RegisterGitHubRepositoryWebhook(
-        [Description(
-            "Repository URL — https://github.com/org/repo and https://github.com/org/repo.git " +
-            "are both accepted (same repo).")]
-        string repositoryUrl,
-        [Description("The public Xians webhook URL returned by CreateWebhookConnection.")] string webhookUrl,
-        [Description(
-            "Comma-separated GitHub event names, e.g. issues,pull_request,issue_comment,push. " +
-            "Do not use 'label'.")]
-        string events = "issues,pull_request,issue_comment,push")
-    {
-        if (string.IsNullOrWhiteSpace(repositoryUrl) || string.IsNullOrWhiteSpace(webhookUrl))
-        {
-            return JsonSerializer.Serialize(new
-            {
-                ok = false,
-                registrationStatus = "failed",
-                connectionStatus = "not_established",
-                connectionCheck = "github_ping",
-                error = "repositoryUrl and webhookUrl are required.",
-            });
-        }
-
-        var repoRef = GitHubWebhookUrl.ParseGitHubOwnerRepo(repositoryUrl);
-        var repoLabel = repoRef is { } r ? $"{r.Owner}/{r.Repo}" : repositoryUrl;
-
-        var (resolvedAgent, resolvedActivation) = RulesOptimizerKnowledge.ResolveContext();
-        if (string.IsNullOrWhiteSpace(resolvedAgent) || string.IsNullOrWhiteSpace(resolvedActivation))
-        {
-            return JsonSerializer.Serialize(new
-            {
-                ok = false,
-                registrationStatus = "failed",
-                connectionStatus = "not_established",
-                connectionCheck = "github_ping",
-                error = "Could not resolve agent/activation for GitHub webhook registration.",
-            });
-        }
-
-        var allowedPayloadUrl = await _platform
-            .ResolveAllowedWebhookPayloadUrlAsync(webhookUrl)
-            .ConfigureAwait(false);
-
-        if (string.IsNullOrWhiteSpace(allowedPayloadUrl)
-            || !GitHubWebhookUrl.IsXiansBuiltinWebhookUrl(allowedPayloadUrl))
-        {
-            _logger.LogWarning(
-                "Rules Optimizer refused GitHub webhook registration for tenant {TenantId} repo {Repo}: " +
-                "webhookUrl did not match a known Xians builtin webhook for {Agent}/{Activation}",
-                _context.Message.TenantId,
-                repoLabel,
-                resolvedAgent,
-                resolvedActivation);
-
-            return JsonSerializer.Serialize(new
-            {
-                ok = false,
-                registrationStatus = "failed",
-                connectionStatus = "not_established",
-                connectionCheck = "github_ping",
-                error = "webhookUrl must match a Xians builtin webhook for this activation " +
-                        "(from CreateWebhookConnection). Arbitrary URLs are rejected.",
-            });
-        }
-
-        if (WebhookPublicUrl.IsUnusableAsGitHubPayloadUrl(allowedPayloadUrl))
-        {
-            return JsonSerializer.Serialize(new
-            {
-                ok = false,
-                registrationStatus = "failed",
-                connectionStatus = "not_established",
-                connectionCheck = "github_ping",
-                error = "Webhook payload URL is still localhost or relative — GitHub cannot call it. " +
-                        "Set XIANS-WEBHOOK-PUBLIC-URL to a publicly reachable base URL " +
-                        "for the Xians server, restart the agent, then retry.",
-                payloadUrl = allowedPayloadUrl,
-            });
-        }
-
-        _logger.LogInformation(
-            "Registering GitHub webhook for {Repo} with public payload host {Host}",
-            repoLabel,
-            Uri.TryCreate(allowedPayloadUrl, UriKind.Absolute, out var payloadUri)
-                ? payloadUri.Host
-                : "(unparsed)");
-
-        try
-        {
-            // Existence check only — never fetch the PAT into chat/tool memory or Temporal inputs.
-            var tokenExists = await _platform
-                .SecretExistsAsync(GitHubWebhookActivities.DefaultGithubTokenSecretKey)
-                .ConfigureAwait(false);
-            if (!tokenExists)
-            {
-                return JsonSerializer.Serialize(new
-                {
-                    ok = false,
-                    registrationStatus = "failed",
-                    connectionStatus = "not_established",
-                    connectionCheck = "github_ping",
-                    missingSecret = GitHubWebhookActivities.DefaultGithubTokenSecretKey,
-                    error = "GITHUB-TOKEN is not set in the tenant vault.",
-                    userFacingMessage =
-                        "GITHUB-TOKEN is missing. Add it in Studio → Settings → Secrets (exact key name), then say \"done\".",
-                });
-            }
-
-            var eventList = events
-                .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-                .Where(e => !string.Equals(e, "label", StringComparison.OrdinalIgnoreCase))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-
-            if (eventList.Length == 0)
-                eventList = ["issues", "pull_request", "issue_comment", "push"];
-
-            var result = await _platform.RegisterGitHubWebhookAsync(
-                    repositoryUrl,
-                    allowedPayloadUrl,
-                    eventList,
-                    GitHubWebhookActivities.DefaultGithubTokenSecretKey)
-                .ConfigureAwait(false);
-
-            if (!result.Success || string.IsNullOrWhiteSpace(result.HookId))
-            {
-                return JsonSerializer.Serialize(new
-                {
-                    ok = false,
-                    registrationStatus = "failed",
-                    connectionStatus = "not_established",
-                    connectionCheck = "github_ping",
-                    error = result.Error ?? "GitHub webhook registration failed.",
-                });
-            }
-
-            var ping = await _platform.VerifyGitHubWebhookConnectionViaPingAsync(
-                    repositoryUrl,
-                    result.HookId!,
-                    GitHubWebhookActivities.DefaultGithubTokenSecretKey)
-                .ConfigureAwait(false);
-
-            if (!ping.Established)
-            {
-                return JsonSerializer.Serialize(new
-                {
-                    ok = false,
-                    registrationStatus = "registered",
-                    connectionStatus = "not_established",
-                    connectionCheck = "github_ping",
-                    created = result.Created,
-                    repo = repoLabel,
-                    hookId = result.HookId,
-                    events = result.Events,
-                    lastResponseCode = ping.LastResponseCode,
-                    lastResponseStatus = ping.LastResponseStatus,
-                    error = ping.Error,
-                });
-            }
-
-            return JsonSerializer.Serialize(new
-            {
-                ok = true,
-                claimAllowed = true,
-                registrationStatus = "registered",
-                connectionStatus = "established",
-                connectionCheck = "github_ping",
-                created = result.Created,
-                repo = repoLabel,
-                hookId = result.HookId,
-                events = result.Events,
-                lastResponseCode = ping.LastResponseCode,
-                lastResponseStatus = ping.LastResponseStatus,
-                message = result.Created
-                    ? "Registered the webhook on GitHub and confirmed connectivity via ping."
-                    : "Reused an existing GitHub webhook and confirmed connectivity via ping.",
-            });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(
-                ex,
-                "Failed to register GitHub webhook during Rules Optimizer for tenant {TenantId} repo {Repo}",
-                _context.Message.TenantId,
-                repoLabel);
-            return JsonSerializer.Serialize(new
-            {
-                ok = false,
-                registrationStatus = "failed",
-                connectionStatus = "not_established",
-                connectionCheck = "github_ping",
-                error = $"Failed to register webhook: {ex.Message}",
             });
         }
     }

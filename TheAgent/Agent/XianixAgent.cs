@@ -156,16 +156,6 @@ public class XianixAgent(
             .AddActivity<ContainerActivities>();
 
         xiansAgent.Workflows
-            .DefineCustom<RegisterGitHubWebhookWorkflow>(new WorkflowOptions { Activable = false },
-            typeName: EnvConfig.AgentName + ":RegisterGitHubWebhook Workflow")
-            .AddActivity<GitHubWebhookActivities>();
-
-        xiansAgent.Workflows
-            .DefineCustom<VerifyGitHubWebhookPingWorkflow>(new WorkflowOptions { Activable = false },
-            typeName: EnvConfig.AgentName + ":VerifyGitHubWebhookPing Workflow")
-            .AddActivity<GitHubWebhookActivities>();
-
-        xiansAgent.Workflows
             .DefineCustom<CognitiveDispatcher>(new WorkflowOptions { Activable = true },
             typeName: EnvConfig.AgentName + ":CognitiveDispatcher Workflow");
 
