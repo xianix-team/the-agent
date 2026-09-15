@@ -47,7 +47,8 @@ public sealed class RuleSetupSubagent
             Instructions = instructions,
             Tools =
                [
-                   AIFunctionFactory.Create(tools.GetTESTTime)
+                   AIFunctionFactory.Create(tools.GetCurrentRules),
+                   AIFunctionFactory.Create(tools.ListAvailablePlugins)
                ],
         });
 

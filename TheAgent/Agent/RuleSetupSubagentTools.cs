@@ -1,21 +1,38 @@
 using System.ComponentModel;
+using Xianix.Rules;
 
 namespace Xianix.Agent;
 
 public sealed class RuleSetupSubagentTools
 {
-
+    [Description(
+        "Fetch the currently saved rules.json document (webhook rule sets only) for this " +
+        "tenant. Returns null when the document is missing, or an empty list when it exists " +
+        "but is blank/unparseable. No agent/system scope resolution — this is the raw " +
+        "knowledge document as-is.")]
+    public async Task<List<WebhookRuleSet>?> GetCurrentRules()
+    {
+        return await RulesKnowledge.LoadAsync().ConfigureAwait(false);
+    }
 
     [Description(
-        "Get the current UTC date and time. " +
-        "Call only when the user explicitly asks for the date/time or the task genuinely " +
-        "needs an absolute timestamp. Never call it for greetings or ordinary chat.")]
-    public Task<string> GetTESTTime()
+        "List the distinct plugin names already configured in this tenant's rules.json " +
+        "(webhook rule sets only). Returns an empty array when no rules / no plugins are " +
+        "configured. Does not query the live marketplace — only plugins already wired into " +
+        "rules.json via GetCurrentRules.")]
+    public async Task<List<string>> ListAvailablePlugins()
     {
-        // Return only — let the model phrase the user-facing reply itself. Calling
-        // ReplyAsync here would race with the model's own response and frequently
-        // cause it to end its turn with no text content (empty bubble for the user).
-        var formatted = $"The current date and time is: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC";
-        return Task.FromResult(formatted);
+        var ruleSets = await GetCurrentRules().ConfigureAwait(false);
+        if (ruleSets is null)
+            return [];
+
+        return ruleSets
+            .SelectMany(ruleSet => ruleSet.Executions)
+            .SelectMany(execution => execution.Plugins)
+            .Select(plugin => plugin.PluginName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToList();
     }
 }
