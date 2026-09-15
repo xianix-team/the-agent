@@ -359,6 +359,196 @@ public sealed class RuleSetupSubagentTools
     }
 
     [Description(
+        "Uninstall one or more plugins from activation-scoped rules.json. Removes them from " +
+        "every use-plugins list (webhook root, executions, chat) and drops executions that " +
+        "reference only those plugins. Pass comma-separated short names (e.g. pr-reviewer). " +
+        "Set uninstallAll=true to clear to a fresh empty skeleton (ignores pluginNames). " +
+        "ONLY call after the user confirmed. Never claim success unless ok=true and " +
+        "claimAllowed=true. Do not use merge-only SaveRules for uninstall.")]
+    public async Task<object> UninstallPlugins(
+        [Description("Comma-separated plugin short names to remove, e.g. pr-reviewer,perf-optimizer.")]
+        string? pluginNames = null,
+        [Description(
+            "When true, remove every installed plugin and reset to the fresh activation skeleton.")]
+        bool uninstallAll = false)
+    {
+        var toRemove = ParsePluginNameList(pluginNames);
+        if (!uninstallAll && toRemove.Length == 0)
+        {
+            return new
+            {
+                ok = false,
+                error = "Provide pluginNames to uninstall, or set uninstallAll=true.",
+            };
+        }
+
+        var (agentName, activationName) = ResolveAgentContext();
+        if (string.IsNullOrWhiteSpace(agentName) || string.IsNullOrWhiteSpace(activationName))
+        {
+            return new
+            {
+                ok = false,
+                error = "Could not resolve agent/activation for UninstallPlugins.",
+                agentName,
+                activationName,
+            };
+        }
+
+        if (uninstallAll)
+        {
+            var clear = await SaveRules(
+                    FreshActivationRulesJson,
+                    requiredPlugins: null,
+                    replaceExisting: true)
+                .ConfigureAwait(false);
+
+            var clearJson = JsonSerializer.Serialize(clear);
+            using var clearDoc = JsonDocument.Parse(clearJson);
+            if (!clearDoc.RootElement.TryGetProperty("ok", out var clearOk) || !clearOk.GetBoolean())
+            {
+                return new
+                {
+                    ok = false,
+                    claimAllowed = false,
+                    error = "UninstallPlugins refused — could not reset to fresh skeleton.",
+                    save = clear,
+                };
+            }
+
+            return new
+            {
+                ok = true,
+                claimAllowed = true,
+                uninstalled = true,
+                uninstallAll = true,
+                removedShortNames = Array.Empty<string>(),
+                remainingShortNames = Array.Empty<string>(),
+                scope = "agent",
+                agentName,
+                activationName,
+                message = "All plugins removed. Agent-scoped Rules reset to the fresh activation skeleton.",
+                hint = "Never claim uninstall without ok=true + claimAllowed=true from this tool.",
+            };
+        }
+
+        var (existing, scope) = await GetEffectiveRulesContentAsync().ConfigureAwait(false);
+        if (scope is not "agent" || string.IsNullOrWhiteSpace(existing))
+        {
+            return new
+            {
+                ok = false,
+                error = "No agent-scoped Rules to uninstall from. System seed is never modified.",
+                scope,
+            };
+        }
+
+        var before = CollectInstalledShortNames(existing);
+        var missing = toRemove
+            .Where(n => !before.Contains(n, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+        var actuallyRemoving = toRemove
+            .Where(n => before.Contains(n, StringComparer.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (actuallyRemoving.Length == 0)
+        {
+            return new
+            {
+                ok = false,
+                error = "None of the requested plugins are installed in agent-scoped Rules.",
+                requested = toRemove,
+                missing,
+                installedShortNames = before,
+            };
+        }
+
+        string edited;
+        string[] removedExecutions;
+        try
+        {
+            (edited, removedExecutions) = RemovePluginsFromRulesJson(existing!, actuallyRemoving);
+        }
+        catch (Exception ex)
+        {
+            return new
+            {
+                ok = false,
+                error = $"Failed to edit Rules for uninstall: {ex.Message}",
+            };
+        }
+
+        var remaining = before
+            .Where(n => !actuallyRemoving.Contains(n, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+
+        // Clearing the last plugins → fresh skeleton keeps with-envs empty per docs.
+        if (remaining.Length == 0)
+        {
+            edited = FreshActivationRulesJson;
+        }
+
+        var save = await SaveRules(
+                edited,
+                requiredPlugins: remaining.Length > 0 ? string.Join(",", remaining) : null,
+                replaceExisting: true)
+            .ConfigureAwait(false);
+
+        var saveJson = JsonSerializer.Serialize(save);
+        using var saveDoc = JsonDocument.Parse(saveJson);
+        if (!saveDoc.RootElement.TryGetProperty("ok", out var saveOk) || !saveOk.GetBoolean())
+        {
+            return new
+            {
+                ok = false,
+                claimAllowed = false,
+                error = "UninstallPlugins refused — SaveRules failed. Rules.json was not updated.",
+                save,
+                requested = toRemove,
+                attemptedRemoval = actuallyRemoving,
+            };
+        }
+
+        var afterContent = saveDoc.RootElement.TryGetProperty("content", out var contentProp)
+            && contentProp.ValueKind == JsonValueKind.String
+                ? contentProp.GetString()
+                : null;
+        var after = CollectInstalledShortNames(afterContent);
+        var stillPresent = actuallyRemoving
+            .Where(n => after.Contains(n, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+
+        if (stillPresent.Length > 0)
+        {
+            return new
+            {
+                ok = false,
+                claimAllowed = false,
+                error = "Save succeeded but some plugins are still present: " +
+                        string.Join(", ", stillPresent),
+                stillPresent,
+                remainingShortNames = after,
+            };
+        }
+
+        return new
+        {
+            ok = true,
+            claimAllowed = true,
+            uninstalled = true,
+            removedShortNames = actuallyRemoving,
+            missingFromInstall = missing,
+            removedExecutions,
+            remainingShortNames = after,
+            scope = "agent",
+            agentName,
+            activationName,
+            message = "Requested plugins removed from agent-scoped Rules.",
+            hint = "Never claim uninstall without ok=true + claimAllowed=true from this tool.",
+        };
+    }
+
+    [Description(
         "Save a validated rules.json document at AGENT scope (Studio Knowledge label \"Agent\"). " +
         "Never writes system or organization scope — the system seed stays untouched. " +
         "rulesJson is REQUIRED — pass the COMPLETE JSON text. " +
@@ -1149,6 +1339,140 @@ public sealed class RuleSetupSubagentTools
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+    /// <summary>
+    /// Removes plugin short names from every use-plugins list and drops executions
+    /// whose remaining use-plugins list is empty afterward.
+    /// </summary>
+    private static (string EditedJson, string[] RemovedExecutions) RemovePluginsFromRulesJson(
+        string rulesJson,
+        IReadOnlyList<string> shortNamesToRemove)
+    {
+        var remove = shortNamesToRemove
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Select(n => n.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        using var doc = JsonDocument.Parse(rulesJson, new JsonDocumentOptions
+        {
+            CommentHandling = JsonCommentHandling.Skip,
+            AllowTrailingCommas = true,
+        });
+
+        if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException("rules.json must be a JSON array.");
+
+        var ruleSets = new List<object?>();
+        var removedExecutions = new List<string>();
+
+        foreach (var item in doc.RootElement.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                ruleSets.Add(JsonSerializer.Deserialize<object>(item.GetRawText()));
+                continue;
+            }
+
+            var obj = JsonSerializer.Deserialize<Dictionary<string, object?>>(item.GetRawText())
+                      ?? new Dictionary<string, object?>(StringComparer.Ordinal);
+
+            if (obj.TryGetValue("use-plugins", out var rootPlugins) && rootPlugins is not null)
+                obj["use-plugins"] = FilterUsePlugins(rootPlugins, remove);
+
+            if (obj.TryGetValue("executions", out var executionsObj) && executionsObj is not null)
+            {
+                var keptExecutions = new List<object?>();
+                using var execDoc = JsonDocument.Parse(JsonSerializer.Serialize(executionsObj));
+                if (execDoc.RootElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var ex in execDoc.RootElement.EnumerateArray())
+                    {
+                        if (ex.ValueKind != JsonValueKind.Object)
+                        {
+                            keptExecutions.Add(JsonSerializer.Deserialize<object>(ex.GetRawText()));
+                            continue;
+                        }
+
+                        var exObj = JsonSerializer.Deserialize<Dictionary<string, object?>>(ex.GetRawText())
+                                    ?? new Dictionary<string, object?>(StringComparer.Ordinal);
+
+                        if (exObj.TryGetValue("use-plugins", out var exPlugins) && exPlugins is not null)
+                            exObj["use-plugins"] = FilterUsePlugins(exPlugins, remove);
+
+                        var remainingPluginCount = CountUsePlugins(exObj.TryGetValue("use-plugins", out var filtered)
+                            ? filtered
+                            : null);
+
+                        // Drop executions that no longer reference any plugin after the uninstall.
+                        if (remainingPluginCount == 0
+                            && ex.TryGetProperty("use-plugins", out var originalPlugins)
+                            && originalPlugins.ValueKind == JsonValueKind.Array
+                            && originalPlugins.GetArrayLength() > 0)
+                        {
+                            var exName = ex.TryGetProperty("name", out var nameProp)
+                                ? nameProp.GetString() ?? "(unnamed)"
+                                : "(unnamed)";
+                            removedExecutions.Add(exName);
+                            continue;
+                        }
+
+                        keptExecutions.Add(exObj);
+                    }
+                }
+
+                obj["executions"] = keptExecutions;
+            }
+
+            ruleSets.Add(obj);
+        }
+
+        return (JsonSerializer.Serialize(ruleSets), removedExecutions.ToArray());
+    }
+
+    private static List<Dictionary<string, object?>> FilterUsePlugins(
+        object pluginsObj,
+        HashSet<string> shortNamesToRemove)
+    {
+        var kept = new List<Dictionary<string, object?>>();
+        using var arrDoc = JsonDocument.Parse(JsonSerializer.Serialize(pluginsObj));
+        if (arrDoc.RootElement.ValueKind != JsonValueKind.Array)
+            return kept;
+
+        foreach (var el in arrDoc.RootElement.EnumerateArray())
+        {
+            if (el.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var name = el.TryGetProperty("plugin-name", out var n) ? n.GetString() : null;
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            if (shortNamesToRemove.Contains(ShortPluginName(name!)))
+                continue;
+
+            kept.Add(JsonSerializer.Deserialize<Dictionary<string, object?>>(el.GetRawText())!);
+        }
+
+        return kept;
+    }
+
+    private static int CountUsePlugins(object? pluginsObj)
+    {
+        if (pluginsObj is null)
+            return 0;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(JsonSerializer.Serialize(pluginsObj));
+            return doc.RootElement.ValueKind == JsonValueKind.Array
+                ? doc.RootElement.GetArrayLength()
+                : 0;
+        }
+        catch (JsonException)
+        {
+            return 0;
+        }
+    }
 
     private static IReadOnlyList<PluginEntry> CollectInstalledPlugins(string? rulesJsonContent)
     {

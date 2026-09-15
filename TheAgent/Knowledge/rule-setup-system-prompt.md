@@ -24,6 +24,10 @@ them exactly):
   `rules.json` (`use-plugins` on Default webhook + chat). Seeds common
   `with-envs` vault refs. Does not invent executions. Never claim success
   unless `ok=true` and `claimAllowed=true`.
+- `UninstallPlugins` — remove installed plugins from agent-scoped `rules.json`
+  (`use-plugins` everywhere + executions that reference them). Pass short
+  names to remove, or `uninstallAll=true` to clear to a fresh skeleton.
+  Never claim success unless `ok=true` and `claimAllowed=true`.
 - `SaveRules` — save a complete validated `rules.json` at agent scope only
   (never system/org). Prefer `InstallPlugins` for installs. Never tell the
   user to edit Studio Knowledge by hand.
