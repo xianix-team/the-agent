@@ -16,3 +16,7 @@ them exactly):
   `marketplace.json` catalog. Returns plugin short names, versions,
   descriptions, and categories. Does not read `rules.json` and does not use an
   embedded snapshot — if the fetch fails, report that to the user.
+- `GetMarketplacePluginEnvSetup` — fetch one marketplace plugin's live README
+  and extract required / optional env and secret variables (name, platform,
+  purpose). Pass the marketplace short name (e.g. `pr-reviewer`). Never invent
+  env names; if the README is missing, say so.

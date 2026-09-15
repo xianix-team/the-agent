@@ -50,6 +50,7 @@ public sealed class RuleSetupSubagent
                    AIFunctionFactory.Create(tools.GetCurrentRules),
                    AIFunctionFactory.Create(tools.ListAvailablePlugins),
                    AIFunctionFactory.Create(tools.ListMarketplacePlugins),
+                   AIFunctionFactory.Create(tools.GetMarketplacePluginEnvSetup),
                ],
         });
 
