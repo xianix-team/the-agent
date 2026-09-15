@@ -23,8 +23,7 @@ public sealed class RuleSetupSubagentTools
     public async Task<List<string>> ListAvailablePlugins()
     {
         var ruleSets = await GetCurrentRules().ConfigureAwait(false);
-        if (ruleSets is null)
-            return [];
+        if (ruleSets is null) return [];
 
         return ruleSets
             .SelectMany(ruleSet => ruleSet.Executions)

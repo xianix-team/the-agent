@@ -295,6 +295,12 @@ public class XianixAgent(
             knowledgeName: Constants.SystemPromptKnowledgeName,
             knowledgeType: "markdown"
         );
+
+        await xiansAgent.Knowledge.UploadEmbeddedResourceAsync(
+            resourcePath: "Knowledge/rule-setup-system-prompt.md",
+            knowledgeName: Constants.RuleSetupSystemPromptKnowledgeName,
+            knowledgeType: "markdown"
+        );
     }
 
     private void LogWebhookVerificationFailure(
