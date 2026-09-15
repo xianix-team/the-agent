@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Xianix;
+using Xianix.Containers;
 using Xianix.Rules;
 using Xians.Lib.Agents.Core;
 using Xians.Lib.Agents.Knowledge;
@@ -37,33 +38,77 @@ public sealed class RuleSetupSubagentTools
         RegexOptions.Compiled);
 
     [Description(
-        "Fetch the currently saved rules.json document (webhook rule sets only) for this " +
-        "tenant. Returns null when the document is missing, or an empty list when it exists " +
-        "but is blank/unparseable. No agent/system scope resolution — this is the raw " +
-        "knowledge document as-is.")]
-    public async Task<List<WebhookRuleSet>?> GetCurrentRules()
+        "Fetch the currently saved rules.json for this activation. Returns scope " +
+        "(agent|system|missing), raw content, installedShortNames (from every use-plugins " +
+        "list including webhook root + executions + chat), and parsed webhook rule sets. " +
+        "Prefer installedShortNames / content over chat memory when deciding if an install " +
+        "stuck. Never claim plugins are installed unless installedShortNames contains them " +
+        "and scope is agent.")]
+    public async Task<object> GetCurrentRules()
     {
-        return await RulesKnowledge.LoadAsync().ConfigureAwait(false);
+        var (content, scope) = await GetEffectiveRulesContentAsync().ConfigureAwait(false);
+        if (scope is "missing" or "error" || string.IsNullOrWhiteSpace(content))
+        {
+            return new
+            {
+                ok = scope is not "error",
+                scope,
+                content = (string?)null,
+                installedShortNames = Array.Empty<string>(),
+                webhookRuleSets = (List<WebhookRuleSet>?)null,
+                hint = scope is "error"
+                    ? "Failed to read Rules knowledge."
+                    : "No Rules document yet — call InstallPlugins after the user confirms plugins.",
+            };
+        }
+
+        List<WebhookRuleSet>? webhookRuleSets = null;
+        try
+        {
+            webhookRuleSets = JsonSerializer.Deserialize<List<WebhookRuleSet>>(
+                    content,
+                    RulesKnowledge.RulesJsonOptions)
+                ?.Where(e => !string.IsNullOrWhiteSpace(e.WebhookName))
+                .ToList() ?? [];
+        }
+        catch (JsonException)
+        {
+            webhookRuleSets = [];
+        }
+
+        var installed = CollectInstalledShortNames(content);
+        return new
+        {
+            ok = true,
+            scope,
+            content,
+            installedShortNames = installed,
+            webhookRuleSets,
+            hint = scope is "system"
+                ? "Reading the system seed — agent-scoped install has not been created yet. " +
+                  "Call InstallPlugins; do not claim plugins are installed."
+                : "Use installedShortNames as the source of truth for what is installed.",
+        };
     }
 
     [Description(
-        "List the distinct plugin names already configured in this tenant's rules.json " +
-        "(webhook rule sets only). Returns an empty array when no rules / no plugins are " +
-        "configured. Does not query the live marketplace — only plugins already wired into " +
-        "rules.json via GetCurrentRules.")]
-    public async Task<List<string>> ListAvailablePlugins()
+        "List the distinct plugin short names already configured in this tenant's rules.json " +
+        "(webhook root use-plugins, executions, and chat). Empty when none are configured. " +
+        "Does not query the live marketplace.")]
+    public async Task<object> ListAvailablePlugins()
     {
-        var ruleSets = await GetCurrentRules().ConfigureAwait(false);
-        if (ruleSets is null) return [];
-
-        return ruleSets
-            .SelectMany(ruleSet => ruleSet.Executions)
-            .SelectMany(execution => execution.Plugins)
-            .Select(plugin => plugin.PluginName)
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Distinct(StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal)
-            .ToList();
+        var (content, scope) = await GetEffectiveRulesContentAsync().ConfigureAwait(false);
+        var installed = CollectInstalledShortNames(content);
+        return new
+        {
+            ok = true,
+            scope,
+            plugins = installed,
+            count = installed.Length,
+            hint = scope is "system"
+                ? "These names are from the system seed (or empty). Agent installs require scope=agent."
+                : null,
+        };
     }
 
     [Description(
@@ -211,21 +256,95 @@ public sealed class RuleSetupSubagentTools
     }
 
     [Description(
-        "Install one or more Ready marketplace plugins into activation-scoped rules.json by " +
-        "progressively merging use-plugins onto the Default webhook + chat skeleton (or existing " +
-        "agent Rules). Also seeds rule-set with-envs commons (GITHUB-TOKEN, AZURE-DEVOPS-TOKEN, " +
-        "ANTHROPIC-API-KEY) when missing. Does not invent executions — add those later via " +
-        "SaveRules after the user confirms match-any. By default keeps already-installed agent " +
-        "plugins and adds pluginNames. Set replaceExistingSet=true to treat pluginNames as the " +
-        "complete set. ONLY call after the user confirmed which Ready plugins to install. " +
-        "Never claim success unless ok=true and claimAllowed=true.")]
+        "List suggested webhook trigger options (seed execution name + match-any rules) for " +
+        "the given plugins and repository. Infer platform from repositoryUrl (github.com → " +
+        "github, dev.azure.com → azuredevops) unless platformOverride is set. Call this AFTER " +
+        "the user gave a repo URL and chose plugins, THEN ask which execution names / triggers " +
+        "to enable before InstallPlugins. Never invent triggers — only returns seed options.")]
+    public object ListPluginTriggerOptions(
+        [Description("Comma-separated plugin short names, e.g. pr-reviewer.")]
+        string pluginNames,
+        [Description("Absolute clone URL, e.g. https://github.com/org/repo.git")]
+        string repositoryUrl,
+        [Description("Optional platform override: github | azuredevops. Leave empty to infer from URL.")]
+        string? platformOverride = null)
+    {
+        var requested = ParsePluginNameList(pluginNames);
+        if (requested.Length == 0)
+        {
+            return new
+            {
+                ok = false,
+                error = "pluginNames is required.",
+            };
+        }
+
+        if (string.IsNullOrWhiteSpace(repositoryUrl))
+        {
+            return new
+            {
+                ok = false,
+                error = "repositoryUrl is required (ask the user for the clone URL first).",
+            };
+        }
+
+        string platform;
+        try
+        {
+            platform = ResolvePlatform(repositoryUrl, platformOverride);
+        }
+        catch (ArgumentException ex)
+        {
+            return new
+            {
+                ok = false,
+                error = ex.Message,
+                repositoryUrl = repositoryUrl.Trim(),
+            };
+        }
+
+        var options = ListSeedTriggerOptions(requested, platform);
+        return new
+        {
+            ok = true,
+            repositoryUrl = repositoryUrl.Trim(),
+            platform,
+            plugins = requested,
+            triggers = options,
+            count = options.Count,
+            hint = "Show these options to the user. After they pick, call InstallPlugins with " +
+                   "repositoryUrl + selectedExecutionNames (comma-separated execution name values). " +
+                   "Do not install webhook executions until the user confirms triggers.",
+        };
+    }
+
+    [Description(
+        "Install Ready marketplace plugins into agent-scoped rules.json. Requires repositoryUrl " +
+        "(stored as constant repository.url). Platform is inferred from the URL unless " +
+        "platformOverride is set. Copies seed executions ONLY for selectedExecutionNames the " +
+        "user confirmed (from ListPluginTriggerOptions) — never invents match-any. Seeds " +
+        "with-envs for the inferred platform. ONLY call after the user confirmed plugins AND " +
+        "triggers (or set skipWebhookTriggers=true for use-plugins only). Never claim success " +
+        "unless ok=true and claimAllowed=true.")]
     public async Task<object> InstallPlugins(
         [Description("Comma-separated plugin short names to install, e.g. pr-reviewer,perf-optimizer.")]
         string pluginNames,
+        [Description("Absolute repository clone URL. Stored as constant repository.url on executions.")]
+        string repositoryUrl,
         [Description(
-            "When true, pluginNames is the complete desired set — omitted installed plugins are removed. " +
-            "Pass empty pluginNames with replaceExistingSet=true to clear to a fresh skeleton.")]
-        bool replaceExistingSet = false)
+            "Comma-separated seed execution names the user confirmed " +
+            "(from ListPluginTriggerOptions.triggers[].executionName). Required unless " +
+            "skipWebhookTriggers=true.")]
+        string? selectedExecutionNames = null,
+        [Description("Optional platform override: github | azuredevops. Empty = infer from repositoryUrl.")]
+        string? platformOverride = null,
+        [Description(
+            "When true, pluginNames is the complete desired set — omitted installed plugins are removed.")]
+        bool replaceExistingSet = false,
+        [Description(
+            "When true, install use-plugins only (empty executions). Use only if the user " +
+            "explicitly deferred webhook triggers.")]
+        bool skipWebhookTriggers = false)
     {
         var requested = ParsePluginNameList(pluginNames);
         if (requested.Length == 0 && !replaceExistingSet)
@@ -233,13 +352,61 @@ public sealed class RuleSetupSubagentTools
             return new
             {
                 ok = false,
+                claimAllowed = false,
                 error = "Provide at least one plugin short name to install.",
             };
         }
 
+        if (string.IsNullOrWhiteSpace(repositoryUrl) && requested.Length > 0)
+        {
+            return new
+            {
+                ok = false,
+                claimAllowed = false,
+                error = "repositoryUrl is required. Ask the user for the GitHub or Azure DevOps clone URL first.",
+            };
+        }
+
+        string platform;
+        try
+        {
+            platform = string.IsNullOrWhiteSpace(repositoryUrl)
+                ? "both"
+                : ResolvePlatform(repositoryUrl, platformOverride);
+        }
+        catch (ArgumentException ex)
+        {
+            return new
+            {
+                ok = false,
+                claimAllowed = false,
+                error = ex.Message,
+            };
+        }
+
+        var commonEnvs = ResolveCommonEnvNames(platform);
+        var selectedExecutions = ParsePluginNameList(selectedExecutionNames);
+
+        if (requested.Length > 0 && !skipWebhookTriggers && selectedExecutions.Length == 0)
+        {
+            return new
+            {
+                ok = false,
+                claimAllowed = false,
+                error = "selectedExecutionNames is required (user must confirm triggers). " +
+                        "Call ListPluginTriggerOptions, ask the user which triggers to enable, " +
+                        "then retry — or pass skipWebhookTriggers=true if they deferred triggers.",
+                repositoryUrl = repositoryUrl?.Trim(),
+                platform,
+            };
+        }
+
         if (requested.Length == 0 && replaceExistingSet)
-            return await SaveRules(FreshActivationRulesJson, requiredPlugins: null, replaceExisting: true)
+        {
+            var cleared = EnsureCommonWithEnvs(FreshActivationRulesJson, commonEnvs);
+            return await SaveRules(cleared, requiredPlugins: null, replaceExisting: true)
                 .ConfigureAwait(false);
+        }
 
         var (agentName, activationName) = ResolveAgentContext();
         if (string.IsNullOrWhiteSpace(agentName) || string.IsNullOrWhiteSpace(activationName))
@@ -247,6 +414,7 @@ public sealed class RuleSetupSubagentTools
             return new
             {
                 ok = false,
+                claimAllowed = false,
                 error = "Could not resolve agent/activation for InstallPlugins.",
                 agentName,
                 activationName,
@@ -284,7 +452,7 @@ public sealed class RuleSetupSubagentTools
             {
                 PluginName = $"{plugin.Name}@{catalog.MarketplaceName}",
                 Marketplace = MarketplaceRepo,
-                SlashCommand = "/" + plugin.Name,
+                SlashCommand = ResolveSlashCommandFromSeed(plugin.Name) ?? "/" + plugin.Name,
             });
         }
 
@@ -293,6 +461,7 @@ public sealed class RuleSetupSubagentTools
             return new
             {
                 ok = false,
+                claimAllowed = false,
                 error = "One or more plugins are not Ready to install from the live marketplace.",
                 unknown,
                 notReady,
@@ -300,15 +469,26 @@ public sealed class RuleSetupSubagentTools
             };
         }
 
-        var baseJson = !string.IsNullOrWhiteSpace(agentExisting)
-            ? agentExisting!
-            : FreshActivationRulesJson;
+        var fromFresh = string.IsNullOrWhiteSpace(agentExisting);
+        var baseJson = fromFresh ? FreshActivationRulesJson : agentExisting!;
 
-        var draft = MergeUsePluginsIntoSkeleton(baseJson, resolvedEntries, replaceExistingSet);
+        var draft = MergeUsePluginsIntoSkeleton(baseJson, resolvedEntries, replaceExistingSet, commonEnvs);
+        if (!skipWebhookTriggers)
+        {
+            draft = MergeSeedExecutionsForPlugins(
+                draft,
+                fullSet,
+                platform,
+                repositoryUrl.Trim(),
+                selectedExecutions);
+        }
+
+        draft = EnsureCommonWithEnvs(draft, commonEnvs);
+
         var save = await SaveRules(
                 draft,
                 requiredPlugins: string.Join(",", fullSet),
-                replaceExisting: replaceExistingSet)
+                replaceExisting: replaceExistingSet || fromFresh)
             .ConfigureAwait(false);
 
         var saveJson = JsonSerializer.Serialize(save);
@@ -324,6 +504,8 @@ public sealed class RuleSetupSubagentTools
                 requiredPlugins = fullSet,
                 newlyRequested = requested,
                 replaceExistingSet,
+                repositoryUrl = repositoryUrl.Trim(),
+                platform,
             };
         }
 
@@ -336,6 +518,28 @@ public sealed class RuleSetupSubagentTools
                 .ToArray()
             : Array.Empty<string>();
 
+        var missingRequested = requested
+            .Where(r => !installedShort.Contains(r, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+        if (missingRequested.Length > 0)
+        {
+            return new
+            {
+                ok = false,
+                claimAllowed = false,
+                error = "Save reported success but re-read is missing requested plugins: " +
+                        string.Join(", ", missingRequested),
+                installedShortNames = installedShort,
+                missingRequested,
+                save,
+            };
+        }
+
+        var savedContent = saveDoc.RootElement.TryGetProperty("content", out var contentEl)
+            && contentEl.ValueKind == JsonValueKind.String
+                ? contentEl.GetString()
+                : null;
+
         return new
         {
             ok = true,
@@ -344,17 +548,22 @@ public sealed class RuleSetupSubagentTools
             persisted = true,
             scope = "agent",
             replaceExistingSet,
+            repositoryUrl = repositoryUrl.Trim(),
+            platform,
+            selectedExecutionNames = selectedExecutions,
+            skipWebhookTriggers,
+            seededEnvNames = commonEnvs,
             requiredPlugins = fullSet,
             newlyRequested = requested,
             installedShortNames = installedShort,
+            content = savedContent,
             agentName,
             activationName,
             message =
-                "Plugins registered in agent-scoped use-plugins (progressive) with " +
-                "rule-set with-envs commons seeded when missing. " +
-                "Add executions next via SaveRules after match-any confirm. " +
-                "claimAllowed=true — you may report these installedShortNames.",
-            hint = "Never claim install without ok=true + claimAllowed=true from this tool.",
+                skipWebhookTriggers
+                    ? "Plugins registered (use-plugins only; webhook triggers deferred)."
+                    : $"Plugins registered with constant repository.url and {selectedExecutions.Length} confirmed execution(s).",
+            hint = "Never claim install without ok=true + claimAllowed=true.",
         };
     }
 
@@ -576,7 +785,7 @@ public sealed class RuleSetupSubagentTools
             };
         }
 
-        rulesJson = EnsureCommonWithEnvs(rulesJson);
+        rulesJson = EnsureCommonWithEnvs(rulesJson, InferCommonEnvNamesFromRules(rulesJson));
 
         var validation = ValidateRulesJsonCore(rulesJson, requiredPlugins);
         if (!validation.Ok)
@@ -619,7 +828,7 @@ public sealed class RuleSetupSubagentTools
                 ? rulesJson
                 : MergeRulesJson(agentExisting!, rulesJson);
 
-            toSave = EnsureCommonWithEnvs(toSave);
+            toSave = EnsureCommonWithEnvs(toSave, InferCommonEnvNamesFromRules(toSave));
 
             var revalidation = ValidateRulesJsonCore(
                 toSave,
@@ -799,13 +1008,13 @@ public sealed class RuleSetupSubagentTools
     }
 
     [Description(
-        "Create (or reuse) a builtin Xians webhook integration for the current agent activation. " +
-        "Refuses unless agent-scoped rules.json already has at least one installed plugin and a " +
-        "matching webhook rule set. Call after InstallPlugins / SaveRules succeeds, and only after " +
-        "the user agrees. Returns the full public webhook URL to display. SCM (GitHub / Azure " +
-        "DevOps) hooks are created manually by the user — there is no tool that registers them.")]
+        "Create (or reuse) the builtin Xians webhook that appears under Agent Settings → " +
+        "Connections (Default webhook). Call this IMMEDIATELY when the user agrees to create " +
+        "a webhook / connection — do not only describe the step. Refuses unless agent-scoped " +
+        "rules.json already has at least one installed plugin and a matching webhook rule set. " +
+        "Returns ok + claimAllowed + public webhookUrl. This is NOT GitHub/Azure SCM registration.")]
     public async Task<object> CreateWebhookConnection(
-        [Description("Webhook name from rules.json (default: Default).")]
+        [Description("Webhook name from rules.json / Studio Connections (default: Default).")]
         string webhookName = "Default")
     {
         var (agentName, activationName) = ResolveAgentContext();
@@ -814,6 +1023,7 @@ public sealed class RuleSetupSubagentTools
             return new
             {
                 ok = false,
+                claimAllowed = false,
                 webhookStatus = "failed",
                 error = "Could not resolve agent and activation for webhook creation. " +
                         "Use Rule Setup inside an agent activation chat, then ask to create the webhook again.",
@@ -830,6 +1040,7 @@ public sealed class RuleSetupSubagentTools
                 return new
                 {
                     ok = false,
+                    claimAllowed = false,
                     webhookStatus = "failed",
                     error = "Refusing to create webhook — no agent-scoped Rules yet. " +
                             "Call InstallPlugins / SaveRules first.",
@@ -843,6 +1054,7 @@ public sealed class RuleSetupSubagentTools
                 return new
                 {
                     ok = false,
+                    claimAllowed = false,
                     webhookStatus = "failed",
                     error = "Refusing to create webhook — activation rules.json has no installed plugins. " +
                             "Call InstallPlugins first.",
@@ -857,6 +1069,7 @@ public sealed class RuleSetupSubagentTools
                 return new
                 {
                     ok = false,
+                    claimAllowed = false,
                     webhookStatus = "failed",
                     error = $"Refusing to create webhook — rules.json has no rule set with webhook '{normalizedWebhookName}'.",
                     webhookName = normalizedWebhookName,
@@ -869,15 +1082,21 @@ public sealed class RuleSetupSubagentTools
                 return new
                 {
                     ok = false,
+                    claimAllowed = false,
                     webhookStatus = "failed",
                     error = result.Error,
+                    agentName,
+                    activationName,
+                    webhookName = normalizedWebhookName,
                 };
             }
 
             return new
             {
                 ok = true,
-                webhookStatus = "created",
+                claimAllowed = true,
+                webhookStatus = result.Created ? "created" : "reused",
+                location = "Agent Settings → Connections",
                 scmConnectionStatus = "not_established",
                 created = result.Created,
                 integrationId = result.IntegrationId,
@@ -888,11 +1107,11 @@ public sealed class RuleSetupSubagentTools
                 installedPluginCount = installedShortNames.Length,
                 installedShortNames,
                 message = result.Created
-                    ? "Xians webhook created successfully."
-                    : "Xians webhook already exists — reusing it.",
-                hint = "Report full details: webhook name, URL (markdown link), integration id. " +
-                       "Then guide the user to create the GitHub / Azure DevOps SCM hook manually " +
-                       "using this URL — do not register or ping from tools.",
+                    ? "Default webhook created under Agent Settings → Connections."
+                    : "Default webhook already exists under Agent Settings → Connections — reusing it.",
+                hint = "Show webhook name, full webhookUrl as a markdown link, and integration id. " +
+                       "Tell the user it is under Agent Settings → Connections. Then guide them to " +
+                       "register this URL manually in GitHub / Azure DevOps — do not claim SCM hooks.",
             };
         }
         catch (Exception ex)
@@ -900,6 +1119,7 @@ public sealed class RuleSetupSubagentTools
             return new
             {
                 ok = false,
+                claimAllowed = false,
                 webhookStatus = "failed",
                 error = $"Failed to create webhook: {ex.Message}",
             };
@@ -1490,8 +1710,15 @@ public sealed class RuleSetupSubagentTools
 
         try
         {
+            // Matches Studio Settings → Connections → create Default webhook defaults.
             var created = await agent.Webhooks
-                .CreateAsync(webhookName: normalizedWebhookName, cancellationToken: cancellationToken)
+                .CreateAsync(
+                    webhookName: normalizedWebhookName,
+                    name: normalizedWebhookName,
+                    workflowName: "Integrator Workflow",
+                    participantId: "webhook",
+                    timeoutSeconds: 30,
+                    cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
 
             return WebhookCreateResult.Succeeded(
@@ -2070,8 +2297,10 @@ public sealed class RuleSetupSubagentTools
     private static string MergeUsePluginsIntoSkeleton(
         string baseJson,
         IReadOnlyList<PluginEntry> plugins,
-        bool replaceExistingSet)
+        bool replaceExistingSet,
+        IReadOnlyList<string>? commonEnvNames = null)
     {
+        var commons = commonEnvNames ?? CommonEnvNames;
         using var doc = JsonDocument.Parse(baseJson, new JsonDocumentOptions
         {
             CommentHandling = JsonCommentHandling.Skip,
@@ -2153,8 +2382,8 @@ public sealed class RuleSetupSubagentTools
         if (!chat.ContainsKey("with-envs"))
             chat["with-envs"] = Array.Empty<object>();
 
-        EnsureCommonsOnRuleSet(webhook);
-        EnsureCommonsOnRuleSet(chat);
+        EnsureCommonsOnRuleSet(webhook, commons);
+        EnsureCommonsOnRuleSet(chat, commons);
 
         return JsonSerializer.Serialize(ruleSets);
     }
@@ -2203,10 +2432,14 @@ public sealed class RuleSetupSubagentTools
         return byName.Values.ToList();
     }
 
-    private static string EnsureCommonWithEnvs(string rulesJson)
+    private static string EnsureCommonWithEnvs(
+        string rulesJson,
+        IReadOnlyList<string>? commonEnvNames = null)
     {
         if (string.IsNullOrWhiteSpace(rulesJson))
             return rulesJson;
+
+        var commons = commonEnvNames ?? CommonEnvNames;
 
         using var doc = JsonDocument.Parse(rulesJson, new JsonDocumentOptions
         {
@@ -2240,7 +2473,7 @@ public sealed class RuleSetupSubagentTools
 
             var obj = JsonSerializer.Deserialize<Dictionary<string, object?>>(item.GetRawText())
                       ?? new Dictionary<string, object?>(StringComparer.Ordinal);
-            if (EnsureCommonsOnRuleSet(obj))
+            if (EnsureCommonsOnRuleSet(obj, commons))
                 changed = true;
             ruleSets.Add(obj);
         }
@@ -2262,10 +2495,14 @@ public sealed class RuleSetupSubagentTools
                && executions.GetArrayLength() > 0;
     }
 
-    private static bool EnsureCommonsOnRuleSet(Dictionary<string, object?> ruleSet)
+    private static bool EnsureCommonsOnRuleSet(
+        Dictionary<string, object?> ruleSet,
+        IReadOnlyList<string>? commonEnvNames = null)
     {
         if (!HasNonEmptyArray(ruleSet, "use-plugins") && !HasNonEmptyArray(ruleSet, "executions"))
             return false;
+
+        var commons = commonEnvNames ?? CommonEnvNames;
 
         var byName = new Dictionary<string, Dictionary<string, object?>>(StringComparer.OrdinalIgnoreCase);
         if (ruleSet.TryGetValue("with-envs", out var existing) && existing is not null)
@@ -2294,7 +2531,7 @@ public sealed class RuleSetupSubagentTools
         }
 
         var added = false;
-        foreach (var envName in CommonEnvNames)
+        foreach (var envName in commons)
         {
             if (byName.ContainsKey(envName))
                 continue;
@@ -2314,6 +2551,480 @@ public sealed class RuleSetupSubagentTools
             .OrderBy(e => e.TryGetValue("name", out var n) ? n?.ToString() : "", StringComparer.OrdinalIgnoreCase)
             .ToList();
         return true;
+    }
+
+    private static string NormalizeScm(string? scm)
+    {
+        var n = (scm ?? "both").Trim().ToLowerInvariant();
+        return n switch
+        {
+            "github" or "gh" or "git-hub" => "github",
+            "azure" or "ado" or "azuredevops" or "azure-devops" or "devops" => "azuredevops",
+            _ => "both",
+        };
+    }
+
+    private static string[] ResolveCommonEnvNames(string? scm) =>
+        NormalizeScm(scm) switch
+        {
+            "github" => ["GITHUB-TOKEN", "ANTHROPIC-API-KEY"],
+            "azuredevops" => ["AZURE-DEVOPS-TOKEN", "ANTHROPIC-API-KEY"],
+            _ => CommonEnvNames,
+        };
+
+    private static string[] InferCommonEnvNamesFromRules(string? rulesJson)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "ANTHROPIC-API-KEY" };
+        if (string.IsNullOrWhiteSpace(rulesJson))
+            return names.ToArray();
+
+        try
+        {
+            using var doc = JsonDocument.Parse(rulesJson, new JsonDocumentOptions
+            {
+                CommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true,
+            });
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                return names.ToArray();
+
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                if (item.TryGetProperty("with-envs", out var withEnvs)
+                    && withEnvs.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var env in withEnvs.EnumerateArray())
+                    {
+                        var envName = env.TryGetProperty("name", out var n) ? n.GetString() : null;
+                        if (string.Equals(envName, "GITHUB-TOKEN", StringComparison.OrdinalIgnoreCase))
+                            names.Add("GITHUB-TOKEN");
+                        if (string.Equals(envName, "AZURE-DEVOPS-TOKEN", StringComparison.OrdinalIgnoreCase))
+                            names.Add("AZURE-DEVOPS-TOKEN");
+                    }
+                }
+
+                if (!item.TryGetProperty("executions", out var executions)
+                    || executions.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                foreach (var ex in executions.EnumerateArray())
+                {
+                    var platform = ex.TryGetProperty("platform", out var p) ? p.GetString() : null;
+                    if (string.Equals(platform, "github", StringComparison.OrdinalIgnoreCase))
+                        names.Add("GITHUB-TOKEN");
+                    if (string.Equals(platform, "azuredevops", StringComparison.OrdinalIgnoreCase))
+                        names.Add("AZURE-DEVOPS-TOKEN");
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // keep ANTHROPIC only
+        }
+
+        return names
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string? LoadEmbeddedSeedRulesJson()
+    {
+        var assembly = typeof(RuleSetupSubagentTools).Assembly;
+        const string resourceName = "TheAgent.Knowledge.rules.json";
+        using var stream = assembly.GetManifestResourceStream(resourceName);
+        if (stream is null)
+            return null;
+
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
+    private static string? ResolveSlashCommandFromSeed(string pluginShortName)
+    {
+        var seed = LoadEmbeddedSeedRulesJson();
+        if (string.IsNullOrWhiteSpace(seed))
+            return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(seed, new JsonDocumentOptions
+            {
+                CommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true,
+            });
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                return null;
+
+            string? fallback = null;
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                if (item.TryGetProperty("use-plugins", out var rootPlugins)
+                    && rootPlugins.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var plugin in rootPlugins.EnumerateArray())
+                    {
+                        var name = plugin.TryGetProperty("plugin-name", out var n) ? n.GetString() : null;
+                        if (!ShortNameMatches(name, pluginShortName))
+                            continue;
+                        var slash = plugin.TryGetProperty("slash-command", out var s) ? s.GetString() : null;
+                        if (!string.IsNullOrWhiteSpace(slash))
+                            return slash;
+                    }
+                }
+
+                if (!item.TryGetProperty("executions", out var executions)
+                    || executions.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                foreach (var ex in executions.EnumerateArray())
+                {
+                    if (!ex.TryGetProperty("use-plugins", out var plugins)
+                        || plugins.ValueKind != JsonValueKind.Array)
+                    {
+                        continue;
+                    }
+
+                    foreach (var plugin in plugins.EnumerateArray())
+                    {
+                        var name = plugin.TryGetProperty("plugin-name", out var n) ? n.GetString() : null;
+                        if (!ShortNameMatches(name, pluginShortName))
+                            continue;
+                        var slash = plugin.TryGetProperty("slash-command", out var s) ? s.GetString() : null;
+                        if (!string.IsNullOrWhiteSpace(slash))
+                            fallback ??= slash;
+                    }
+                }
+            }
+
+            return fallback;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool ShortNameMatches(string? pluginName, string shortName)
+    {
+        if (string.IsNullOrWhiteSpace(pluginName) || string.IsNullOrWhiteSpace(shortName))
+            return false;
+        return string.Equals(ShortPluginName(pluginName), shortName.Trim(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Copies selected Default-webhook executions from the embedded seed, rewriting
+    /// <c>repository.url</c> to a constant clone URL and <c>platform</c> to the inferred SCM.
+    /// </summary>
+    private static string MergeSeedExecutionsForPlugins(
+        string rulesJson,
+        IReadOnlyList<string> pluginShortNames,
+        string platform,
+        string repositoryUrl,
+        IReadOnlyList<string> selectedExecutionNames)
+    {
+        var seed = LoadEmbeddedSeedRulesJson();
+        if (string.IsNullOrWhiteSpace(seed) || pluginShortNames.Count == 0)
+            return rulesJson;
+
+        var wantedPlugins = pluginShortNames
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Select(n => n.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var wantedExecutions = selectedExecutionNames
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Select(n => n.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (wantedExecutions.Count == 0)
+            return rulesJson;
+
+        var seedExecutions = new List<JsonElement>();
+        try
+        {
+            using var seedDoc = JsonDocument.Parse(seed, new JsonDocumentOptions
+            {
+                CommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true,
+            });
+            if (seedDoc.RootElement.ValueKind != JsonValueKind.Array)
+                return rulesJson;
+
+            foreach (var item in seedDoc.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                    continue;
+                if (!item.TryGetProperty("webhook", out var wh)
+                    || !string.Equals(wh.GetString(), "Default", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!item.TryGetProperty("executions", out var executions)
+                    || executions.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                foreach (var ex in executions.EnumerateArray())
+                {
+                    var exName = ex.TryGetProperty("name", out var n) ? n.GetString() : null;
+                    if (string.IsNullOrWhiteSpace(exName) || !wantedExecutions.Contains(exName!))
+                        continue;
+                    if (!ExecutionMatchesInstall(ex, wantedPlugins, platform))
+                        continue;
+                    seedExecutions.Add(ex.Clone());
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            return rulesJson;
+        }
+
+        if (seedExecutions.Count == 0)
+            return rulesJson;
+
+        using var draftDoc = JsonDocument.Parse(rulesJson, new JsonDocumentOptions
+        {
+            CommentHandling = JsonCommentHandling.Skip,
+            AllowTrailingCommas = true,
+        });
+        if (draftDoc.RootElement.ValueKind != JsonValueKind.Array)
+            return rulesJson;
+
+        var ruleSets = new List<object?>();
+        foreach (var item in draftDoc.RootElement.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object
+                || !item.TryGetProperty("webhook", out var wh)
+                || !string.Equals(wh.GetString(), "Default", StringComparison.OrdinalIgnoreCase))
+            {
+                ruleSets.Add(JsonSerializer.Deserialize<object>(item.GetRawText()));
+                continue;
+            }
+
+            var obj = JsonSerializer.Deserialize<Dictionary<string, object?>>(item.GetRawText())
+                      ?? new Dictionary<string, object?>(StringComparer.Ordinal);
+
+            var byName = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            if (obj.TryGetValue("executions", out var existingObj) && existingObj is not null)
+            {
+                try
+                {
+                    using var existingDoc = JsonDocument.Parse(JsonSerializer.Serialize(existingObj));
+                    if (existingDoc.RootElement.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var ex in existingDoc.RootElement.EnumerateArray())
+                        {
+                            var name = ex.TryGetProperty("name", out var n) ? n.GetString() : null;
+                            if (string.IsNullOrWhiteSpace(name))
+                                continue;
+                            byName[name!] = JsonSerializer.Deserialize<object>(ex.GetRawText());
+                        }
+                    }
+                }
+                catch (JsonException)
+                {
+                    // replace
+                }
+            }
+
+            foreach (var seedEx in seedExecutions)
+            {
+                var rewritten = RewriteExecutionForRepo(seedEx, repositoryUrl, platform);
+                var name = seedEx.TryGetProperty("name", out var n) ? n.GetString() : null;
+                if (string.IsNullOrWhiteSpace(name))
+                    continue;
+                byName[name!] = rewritten;
+            }
+
+            obj["executions"] = byName.Values.ToList();
+            ruleSets.Add(obj);
+        }
+
+        return JsonSerializer.Serialize(ruleSets);
+    }
+
+    private static object RewriteExecutionForRepo(JsonElement execution, string repositoryUrl, string platform)
+    {
+        var obj = JsonSerializer.Deserialize<Dictionary<string, object?>>(execution.GetRawText())
+                  ?? new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        obj["platform"] = platform;
+        obj["repository"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["url"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["value"] = repositoryUrl,
+                ["constant"] = true,
+            },
+        };
+
+        return obj;
+    }
+
+    private static IReadOnlyList<object> ListSeedTriggerOptions(
+        IReadOnlyList<string> pluginShortNames,
+        string platform)
+    {
+        var seed = LoadEmbeddedSeedRulesJson();
+        if (string.IsNullOrWhiteSpace(seed))
+            return [];
+
+        var wanted = pluginShortNames
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Select(n => n.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var results = new List<object>();
+        try
+        {
+            using var seedDoc = JsonDocument.Parse(seed, new JsonDocumentOptions
+            {
+                CommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true,
+            });
+            if (seedDoc.RootElement.ValueKind != JsonValueKind.Array)
+                return [];
+
+            foreach (var item in seedDoc.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                    continue;
+                if (!item.TryGetProperty("webhook", out var wh)
+                    || !string.Equals(wh.GetString(), "Default", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!item.TryGetProperty("executions", out var executions)
+                    || executions.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                foreach (var ex in executions.EnumerateArray())
+                {
+                    if (!ExecutionMatchesInstall(ex, wanted, platform))
+                        continue;
+
+                    var exName = ex.TryGetProperty("name", out var n) ? n.GetString() : null;
+                    if (string.IsNullOrWhiteSpace(exName))
+                        continue;
+
+                    var matchAny = new List<object>();
+                    if (ex.TryGetProperty("match-any", out var matches)
+                        && matches.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var m in matches.EnumerateArray())
+                        {
+                            matchAny.Add(new
+                            {
+                                name = m.TryGetProperty("name", out var mn) ? mn.GetString() : null,
+                                rule = m.TryGetProperty("rule", out var mr) ? mr.GetString() : null,
+                            });
+                        }
+                    }
+
+                    var plugins = new List<string>();
+                    if (ex.TryGetProperty("use-plugins", out var pluginsEl)
+                        && pluginsEl.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var p in pluginsEl.EnumerateArray())
+                        {
+                            var pn = p.TryGetProperty("plugin-name", out var pname) ? pname.GetString() : null;
+                            if (!string.IsNullOrWhiteSpace(pn))
+                                plugins.Add(ShortPluginName(pn!));
+                        }
+                    }
+
+                    results.Add(new
+                    {
+                        executionName = exName,
+                        platform = ex.TryGetProperty("platform", out var plat) ? plat.GetString() : platform,
+                        plugins,
+                        matchAny,
+                        summary = DescribeTrigger(exName!, matchAny.Count),
+                    });
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+
+        return results;
+    }
+
+    private static string DescribeTrigger(string executionName, int matchCount) =>
+        matchCount <= 0
+            ? executionName
+            : $"{executionName} ({matchCount} match-any rule(s))";
+
+    private static string ResolvePlatform(string repositoryUrl, string? platformOverride)
+    {
+        if (!string.IsNullOrWhiteSpace(platformOverride))
+        {
+            var normalized = NormalizeScm(platformOverride);
+            if (normalized is "github" or "azuredevops")
+                return normalized;
+            throw new ArgumentException(
+                $"platformOverride must be 'github' or 'azuredevops' (got '{platformOverride}').");
+        }
+
+        return RepositoryPlatform.InferPlatform(repositoryUrl.Trim());
+    }
+
+    private static bool ExecutionMatchesInstall(
+        JsonElement execution,
+        HashSet<string> wantedShortNames,
+        string scm)
+    {
+        if (execution.ValueKind != JsonValueKind.Object)
+            return false;
+
+        var platform = execution.TryGetProperty("platform", out var p) ? p.GetString()?.Trim() : null;
+        if (!PlatformMatchesScm(platform, scm))
+            return false;
+
+        if (!execution.TryGetProperty("use-plugins", out var plugins)
+            || plugins.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        foreach (var plugin in plugins.EnumerateArray())
+        {
+            var name = plugin.TryGetProperty("plugin-name", out var n) ? n.GetString() : null;
+            if (wantedShortNames.Contains(ShortPluginName(name ?? "")))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool PlatformMatchesScm(string? platform, string scm)
+    {
+        if (string.IsNullOrWhiteSpace(platform))
+            return scm is "both";
+
+        var normalized = NormalizeScm(scm);
+        if (normalized is "both")
+            return true;
+
+        return string.Equals(platform, normalized, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool HasNonEmptyArray(Dictionary<string, object?> ruleSet, string key)
