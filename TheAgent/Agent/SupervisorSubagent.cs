@@ -30,7 +30,7 @@ public sealed class SupervisorSubagent
     /// any text content (typically because it ended on a tool call or chose to stay
     /// silent after one). We never want to ship an empty bubble to the user.
     /// </summary>
-    internal const string EmptyResponseFallback =
+    public const string EmptyResponseFallback =
         "Sorry — I didn't produce a reply for that. Could you try rephrasing or sending the message again?";
 
     /// <summary>

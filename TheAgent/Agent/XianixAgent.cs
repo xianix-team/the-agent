@@ -72,30 +72,49 @@ public class XianixAgent(
             supervisorToolsLogger,
             loggerFactory);
 
+        var ruleSetupSubagent = new RuleSetupSubagent(
+            ResolveAnthropicApiKeyAsync,
+            EnvConfig.AnthropicDeploymentName,
+            loggerFactory);
+
         conversationWorkflow.OnUserChatMessage(async (context) =>
         {
-            if (context.Message.Scope == "setup")
-            {
-                await context.ReplyAsync("Hello, how can I help you with your setup????");
-                return;
-            }
             try
             {
-                var reply = await subagent.RunAsync(context, cancellationToken);
-
-                // Defence-in-depth: SupervisorSubagent already substitutes a fallback
-                // message for empty model output, but guard here too so we never publish
-                // an empty bubble to the user even if that contract regresses.
-                if (string.IsNullOrWhiteSpace(reply))
+                if (context.Message.Scope == "setup")
                 {
-                    logger.LogWarning(
-                        "Supervisor returned empty reply for tenant '{TenantId}', participant '{ParticipantId}'. " +
-                        "Sending generic retry prompt instead.",
-                        context.Message.TenantId, context.Message.ParticipantId);
-                    reply = SupervisorSubagent.EmptyResponseFallback;
-                }
 
-                await context.ReplyAsync(reply);
+                    var reply = await ruleSetupSubagent.RunAsync(context, cancellationToken);
+                    if (string.IsNullOrWhiteSpace(reply))
+                    {
+                        logger.LogWarning(
+                            "RuleSetupSubagent returned empty reply for tenant '{TenantId}', participant '{ParticipantId}'. " +
+                            "Sending generic retry prompt instead.",
+                            context.Message.TenantId, context.Message.ParticipantId);
+                        reply = RuleSetupSubagent.EmptyResponseFallback;
+                    }
+
+                    await context.ReplyAsync(reply);
+                }
+                else
+                {
+
+                    var reply = await subagent.RunAsync(context, cancellationToken);
+
+                    // Defence-in-depth: SupervisorSubagent already substitutes a fallback
+                    // message for empty model output, but guard here too so we never publish
+                    // an empty bubble to the user even if that contract regresses.
+                    if (string.IsNullOrWhiteSpace(reply))
+                    {
+                        logger.LogWarning(
+                            "Supervisor returned empty reply for tenant '{TenantId}', participant '{ParticipantId}'. " +
+                            "Sending generic retry prompt instead.",
+                            context.Message.TenantId, context.Message.ParticipantId);
+                        reply = SupervisorSubagent.EmptyResponseFallback;
+                    }
+
+                    await context.ReplyAsync(reply);
+                }
             }
             catch (OperationCanceledException)
             {
