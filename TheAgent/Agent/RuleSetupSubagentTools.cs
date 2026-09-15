@@ -706,6 +706,99 @@ public sealed class RuleSetupSubagentTools
     }
 
     [Description(
+        "List the secret KEY NAMES present in this tenant's Studio Secret Vault. " +
+        "Never returns secret values — only key names (e.g. GITHUB-TOKEN, ANTHROPIC-API-KEY). " +
+        "Call this (or CheckTenantSecrets) before asking the user to add credentials. " +
+        "Do not ask \"Do you have GITHUB-TOKEN?\" — check first.")]
+    public async Task<object> ListTenantSecrets()
+    {
+        try
+        {
+            var keys = await ListTenantSecretKeysAsync().ConfigureAwait(false);
+            return new
+            {
+                ok = true,
+                keys,
+                count = keys.Count,
+                hint = "Keys listed exist in Studio → Settings → Secrets. " +
+                       "Never ask the user to add a key that appears here.",
+            };
+        }
+        catch (Exception ex)
+        {
+            return new
+            {
+                ok = false,
+                error = $"Failed to list tenant secrets: {ex.Message}",
+            };
+        }
+    }
+
+    [Description(
+        "Check which of the requested secret keys already exist in the tenant Studio vault. " +
+        "Pass comma-separated key names (e.g. \"GITHUB-TOKEN,ANTHROPIC-API-KEY\"). " +
+        "Returns present vs missing — never returns secret values. " +
+        "Only instruct the user to add keys in missing[]. Never ask whether a key is set up; " +
+        "never ask the user to paste the secret value into chat.")]
+    public async Task<object> CheckTenantSecrets(
+        [Description(
+            "Comma-separated vault key names to check, e.g. GITHUB-TOKEN,ANTHROPIC-API-KEY,AZURE-DEVOPS-TOKEN.")]
+        string keys)
+    {
+        var requested = ParseSecretKeyList(keys);
+        if (requested.Length == 0)
+        {
+            return new
+            {
+                ok = false,
+                error = "keys is required — pass comma-separated names like GITHUB-TOKEN,ANTHROPIC-API-KEY.",
+            };
+        }
+
+        try
+        {
+            var existing = await ListTenantSecretKeysAsync().ConfigureAwait(false);
+            var existingSet = existing.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var present = requested
+                .Where(k => existingSet.Contains(k))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var missing = requested
+                .Where(k => !existingSet.Contains(k))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            return new
+            {
+                ok = true,
+                requested,
+                present,
+                missing,
+                allPresent = missing.Length == 0,
+                userFacingWhenMissing = missing.Length == 0
+                    ? null
+                    : "Add these in Studio → Settings → Secrets (exact key names), then say \"done\":\n" +
+                      string.Join("\n", missing.Select(FormatMissingSecretInstruction)),
+                hint = missing.Length == 0
+                    ? "All requested keys are present. Do NOT ask the user about them — continue."
+                    : "Only ask the user to add missing keys. Never ask them to paste values in chat. " +
+                      "On \"done\", call CheckTenantSecrets again for the missing keys only.",
+            };
+        }
+        catch (Exception ex)
+        {
+            return new
+            {
+                ok = false,
+                error = $"Failed to check tenant secrets: {ex.Message}",
+            };
+        }
+    }
+
+    [Description(
         "Create (or reuse) a builtin Xians webhook integration for the current agent activation. " +
         "Refuses unless agent-scoped rules.json already has at least one installed plugin and a " +
         "matching webhook rule set. Call after InstallPlugins / SaveRules succeeds, and only after " +
@@ -1277,6 +1370,66 @@ public sealed class RuleSetupSubagentTools
         return (
             string.IsNullOrWhiteSpace(agentName) ? null : agentName.Trim(),
             string.IsNullOrWhiteSpace(activationName) ? null : activationName.Trim());
+    }
+
+    private static async Task<IReadOnlyList<string>> ListTenantSecretKeysAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var agent = XiansContext.CurrentAgent;
+        if (agent is null)
+            throw new InvalidOperationException("No current agent bound — cannot list secrets.");
+
+        var items = await agent.Secrets.TenantScope().ListAsync(cancellationToken).ConfigureAwait(false);
+        return items
+            .Select(s => s.Key?.Trim())
+            .Where(k => !string.IsNullOrWhiteSpace(k))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
+            .Select(k => k!)
+            .ToArray();
+    }
+
+    private static string[] ParseSecretKeyList(string? keys)
+    {
+        if (string.IsNullOrWhiteSpace(keys))
+            return [];
+
+        return keys
+            .Split([',', ';', '\n', '\r', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(NormalizeSecretKey)
+            .Where(k => !string.IsNullOrWhiteSpace(k))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray()!;
+    }
+
+    private static string? NormalizeSecretKey(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+            return null;
+
+        var trimmed = key.Trim();
+        if (trimmed.StartsWith("secrets.", StringComparison.OrdinalIgnoreCase))
+            trimmed = trimmed["secrets.".Length..];
+
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed.Trim();
+    }
+
+    private static string FormatMissingSecretInstruction(string key)
+    {
+        var purpose = key.ToUpperInvariant() switch
+        {
+            "GITHUB-TOKEN" =>
+                "GitHub personal access token (repo + workflow scopes typical for marketplace plugins)",
+            "AZURE-DEVOPS-TOKEN" =>
+                "Azure DevOps personal access token for the org/project",
+            "ANTHROPIC-API-KEY" =>
+                "Anthropic API key for model calls during plugin runs",
+            "GITHUB-WEBHOOK-SECRET" =>
+                "Optional shared secret matching the GitHub webhook Secret field",
+            _ => "required for the selected plugins — see plugin README / env setup",
+        };
+
+        return $"- Key: `{key}` — {purpose}";
     }
 
     private static bool HasWebhookNamed(string? rulesJson, string webhookName)
