@@ -54,6 +54,7 @@ public sealed class RuleSetupSubagent
                    AIFunctionFactory.Create(tools.InstallPlugins),
                    AIFunctionFactory.Create(tools.UninstallPlugins),
                    AIFunctionFactory.Create(tools.SaveRules),
+                   AIFunctionFactory.Create(tools.CreateWebhookConnection),
                ],
         });
 

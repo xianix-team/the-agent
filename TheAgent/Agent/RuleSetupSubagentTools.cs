@@ -705,6 +705,114 @@ public sealed class RuleSetupSubagentTools
         }
     }
 
+    [Description(
+        "Create (or reuse) a builtin Xians webhook integration for the current agent activation. " +
+        "Refuses unless agent-scoped rules.json already has at least one installed plugin and a " +
+        "matching webhook rule set. Call after InstallPlugins / SaveRules succeeds, and only after " +
+        "the user agrees. Returns the full public webhook URL to display. SCM (GitHub / Azure " +
+        "DevOps) hooks are created manually by the user — there is no tool that registers them.")]
+    public async Task<object> CreateWebhookConnection(
+        [Description("Webhook name from rules.json (default: Default).")]
+        string webhookName = "Default")
+    {
+        var (agentName, activationName) = ResolveAgentContext();
+        if (string.IsNullOrWhiteSpace(agentName) || string.IsNullOrWhiteSpace(activationName))
+        {
+            return new
+            {
+                ok = false,
+                webhookStatus = "failed",
+                error = "Could not resolve agent and activation for webhook creation. " +
+                        "Use Rule Setup inside an agent activation chat, then ask to create the webhook again.",
+                agentName,
+                activationName,
+            };
+        }
+
+        try
+        {
+            var (rulesContent, scope) = await GetEffectiveRulesContentAsync().ConfigureAwait(false);
+            if (scope is not "agent" || string.IsNullOrWhiteSpace(rulesContent))
+            {
+                return new
+                {
+                    ok = false,
+                    webhookStatus = "failed",
+                    error = "Refusing to create webhook — no agent-scoped Rules yet. " +
+                            "Call InstallPlugins / SaveRules first.",
+                    rulesScope = scope,
+                };
+            }
+
+            var installedShortNames = CollectInstalledShortNames(rulesContent);
+            if (installedShortNames.Length == 0)
+            {
+                return new
+                {
+                    ok = false,
+                    webhookStatus = "failed",
+                    error = "Refusing to create webhook — activation rules.json has no installed plugins. " +
+                            "Call InstallPlugins first.",
+                };
+            }
+
+            var normalizedWebhookName = string.IsNullOrWhiteSpace(webhookName)
+                ? "Default"
+                : webhookName.Trim();
+            if (!HasWebhookNamed(rulesContent, normalizedWebhookName))
+            {
+                return new
+                {
+                    ok = false,
+                    webhookStatus = "failed",
+                    error = $"Refusing to create webhook — rules.json has no rule set with webhook '{normalizedWebhookName}'.",
+                    webhookName = normalizedWebhookName,
+                };
+            }
+
+            var result = await EnsureBuiltinWebhookAsync(normalizedWebhookName).ConfigureAwait(false);
+            if (!result.Success)
+            {
+                return new
+                {
+                    ok = false,
+                    webhookStatus = "failed",
+                    error = result.Error,
+                };
+            }
+
+            return new
+            {
+                ok = true,
+                webhookStatus = "created",
+                scmConnectionStatus = "not_established",
+                created = result.Created,
+                integrationId = result.IntegrationId,
+                webhookName = result.WebhookName,
+                webhookUrl = result.WebhookUrl,
+                agentName,
+                activationName,
+                installedPluginCount = installedShortNames.Length,
+                installedShortNames,
+                message = result.Created
+                    ? "Xians webhook created successfully."
+                    : "Xians webhook already exists — reusing it.",
+                hint = "Report full details: webhook name, URL (markdown link), integration id. " +
+                       "Then guide the user to create the GitHub / Azure DevOps SCM hook manually " +
+                       "using this URL — do not register or ping from tools.",
+            };
+        }
+        catch (Exception ex)
+        {
+            return new
+            {
+                ok = false,
+                webhookStatus = "failed",
+                error = $"Failed to create webhook: {ex.Message}",
+            };
+        }
+    }
+
     private static async Task<MarketplaceCatalogLoad> LoadMarketplaceCatalogAsync()
     {
         try
@@ -1169,6 +1277,80 @@ public sealed class RuleSetupSubagentTools
         return (
             string.IsNullOrWhiteSpace(agentName) ? null : agentName.Trim(),
             string.IsNullOrWhiteSpace(activationName) ? null : activationName.Trim());
+    }
+
+    private static bool HasWebhookNamed(string? rulesJson, string webhookName)
+    {
+        if (string.IsNullOrWhiteSpace(rulesJson) || string.IsNullOrWhiteSpace(webhookName))
+            return false;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(rulesJson, new JsonDocumentOptions
+            {
+                CommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true,
+            });
+
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                return false;
+
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                    continue;
+                if (!item.TryGetProperty("webhook", out var wh))
+                    continue;
+                if (string.Equals(wh.GetString(), webhookName.Trim(), StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+
+        return false;
+    }
+
+    private static async Task<WebhookCreateResult> EnsureBuiltinWebhookAsync(
+        string webhookName,
+        CancellationToken cancellationToken = default)
+    {
+        var agent = XiansContext.CurrentAgent;
+        if (agent is null)
+            return WebhookCreateResult.Failed("No current agent bound — cannot create webhooks.");
+
+        var normalizedWebhookName = string.IsNullOrWhiteSpace(webhookName) ? "Default" : webhookName.Trim();
+
+        var existing = await agent.Webhooks.ListAsync(cancellationToken).ConfigureAwait(false);
+        var matched = existing.FirstOrDefault(w =>
+            string.Equals(w.WebhookName, normalizedWebhookName, StringComparison.OrdinalIgnoreCase));
+        if (matched is not null)
+        {
+            return WebhookCreateResult.Succeeded(
+                matched.Id,
+                WebhookPublicUrl.ToPublicUrl(matched.WebhookUrl) ?? matched.WebhookUrl,
+                created: false,
+                webhookName: normalizedWebhookName);
+        }
+
+        try
+        {
+            var created = await agent.Webhooks
+                .CreateAsync(webhookName: normalizedWebhookName, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+
+            return WebhookCreateResult.Succeeded(
+                created.Id,
+                WebhookPublicUrl.ToPublicUrl(created.WebhookUrl) ?? created.WebhookUrl,
+                created: true,
+                webhookName: normalizedWebhookName);
+        }
+        catch (Exception ex)
+        {
+            return WebhookCreateResult.Failed($"Failed to create webhook: {ex.Message}");
+        }
     }
 
     private static async Task<(string? Content, string Scope)> GetEffectiveRulesContentAsync()
@@ -2192,6 +2374,25 @@ public sealed class RuleSetupSubagentTools
 
         public static RulesSaveResult Failed(string error) =>
             new(false, null, error);
+    }
+
+    private sealed record WebhookCreateResult(
+        bool Success,
+        string? IntegrationId,
+        string? WebhookUrl,
+        bool Created,
+        string? WebhookName,
+        string? Error)
+    {
+        public static WebhookCreateResult Succeeded(
+            string integrationId,
+            string webhookUrl,
+            bool created,
+            string webhookName) =>
+            new(true, integrationId, webhookUrl, created, webhookName, null);
+
+        public static WebhookCreateResult Failed(string error) =>
+            new(false, null, null, false, null, error);
     }
 
     private sealed record ValidationResult(bool Ok, IReadOnlyList<string> Errors)
