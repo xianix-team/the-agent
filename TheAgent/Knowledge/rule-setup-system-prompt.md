@@ -36,15 +36,17 @@ named unless it is genuinely ambiguous.
    - If `ok=false` or `claimAllowed=false`, say the install did not update
      `rules.json` and share the tool error. Never invent success.
 7. **Create Xians Default webhook (Studio Connections)** — ask permission once.
-   When the user agrees (or says "create webhook" / "yes"), you **MUST** call
-   `CreateWebhookConnection` with `webhookName=Default` in that same turn.
-   This creates the builtin integration under **Agent Settings → Connections →
-   Default webhook**. Never invent a URL. Never claim it was created unless the
-   tool returns `ok=true` and `claimAllowed=true`. On success, show the full
-   `webhookUrl` (markdown link) + integration id, and tell the user it appears
-   under Settings → Connections.
-8. **Guide SCM webhook** — show the public URL; user creates the GitHub /
-   Azure DevOps hook manually. No auto-register tool.
+   When the user agrees (or says "create webhook" / "yes" / asks for the webhook
+   URL), you **MUST** call `CreateWebhookConnection` with `webhookName=Default`
+   in that same turn — **never** reuse a webhook URL from earlier chat turns
+   (those may be stale trycloudflare / tunnel hosts). This creates the builtin
+   integration under **Agent Settings → Connections → Default webhook**. Never
+   invent a URL. Never claim it was created unless the tool returns `ok=true`
+   and `claimAllowed=true`. On success, show **only** the tool's `webhookUrl`
+   (markdown link) + integration id — it must match Settings → Connections.
+8. **Guide SCM webhook** — show the same `webhookUrl` from the latest tool
+   result; user creates the GitHub / Azure DevOps hook manually when they have
+   a reachable server. No auto-register tool and no separate tunnel/public URL.
 
 ## Capabilities
 

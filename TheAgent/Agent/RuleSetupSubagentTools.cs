@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using TheAgent;
 using Xianix;
 using Xianix.Containers;
 using Xianix.Rules;
@@ -1107,7 +1108,8 @@ public sealed class RuleSetupSubagentTools
         "Connections (Default webhook). Call this IMMEDIATELY when the user agrees to create " +
         "a webhook / connection — do not only describe the step. Refuses unless agent-scoped " +
         "rules.json already has at least one installed plugin and a matching webhook rule set. " +
-        "Returns ok + claimAllowed + public webhookUrl. This is NOT GitHub/Azure SCM registration.")]
+        "Returns ok + claimAllowed + webhookUrl (same URL as Agent Settings → Connections). " +
+        "This is NOT GitHub/Azure SCM registration.")]
     public async Task<object> CreateWebhookConnection(
         [Description("Webhook name from rules.json / Studio Connections (default: Default).")]
         string webhookName = "Default")
@@ -1196,6 +1198,7 @@ public sealed class RuleSetupSubagentTools
                 created = result.Created,
                 integrationId = result.IntegrationId,
                 webhookName = result.WebhookName,
+                // Same absolute URL Studio shows under Connections.
                 webhookUrl = result.WebhookUrl,
                 agentName,
                 activationName,
@@ -1204,9 +1207,10 @@ public sealed class RuleSetupSubagentTools
                 message = result.Created
                     ? "Default webhook created under Agent Settings → Connections."
                     : "Default webhook already exists under Agent Settings → Connections — reusing it.",
-                hint = "Show webhook name, full webhookUrl as a markdown link, and integration id. " +
-                       "Tell the user it is under Agent Settings → Connections. Then guide them to " +
-                       "register this URL manually in GitHub / Azure DevOps — do not claim SCM hooks.",
+                hint =
+                    "Show ONLY this tool's webhookUrl as a markdown link (must match Settings → Connections). " +
+                    "Never reuse a webhook URL from earlier chat. Guide SCM registration manually; " +
+                    "do not claim SCM hooks are registered.",
             };
         }
         catch (Exception ex)
@@ -1798,7 +1802,7 @@ public sealed class RuleSetupSubagentTools
         {
             return WebhookCreateResult.Succeeded(
                 matched.Id,
-                WebhookPublicUrl.ToPublicUrl(matched.WebhookUrl) ?? matched.WebhookUrl,
+                NormalizeConnectionWebhookUrl(matched.WebhookUrl),
                 created: false,
                 webhookName: normalizedWebhookName);
         }
@@ -1818,7 +1822,7 @@ public sealed class RuleSetupSubagentTools
 
             return WebhookCreateResult.Succeeded(
                 created.Id,
-                WebhookPublicUrl.ToPublicUrl(created.WebhookUrl) ?? created.WebhookUrl,
+                NormalizeConnectionWebhookUrl(created.WebhookUrl),
                 created: true,
                 webhookName: normalizedWebhookName);
         }
@@ -1826,6 +1830,28 @@ public sealed class RuleSetupSubagentTools
         {
             return WebhookCreateResult.Failed($"Failed to create webhook: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Absolute webhook URL as shown in Agent Settings → Connections: always on
+    /// <c>XIANS-SERVER-URL</c>. Strips stale trycloudflare / other public hosts left over
+    /// from old tunnel setups; prefixes relative SDK paths.
+    /// </summary>
+    private static string NormalizeConnectionWebhookUrl(string? webhookUrl)
+    {
+        if (string.IsNullOrWhiteSpace(webhookUrl))
+            return webhookUrl ?? string.Empty;
+
+        var trimmed = webhookUrl.Trim();
+        var serverBase = EnvConfig.XiansServerUrl.Trim().TrimEnd('/');
+
+        if (trimmed.StartsWith('/'))
+            return serverBase + trimmed;
+
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+            return trimmed;
+
+        return serverBase + uri.PathAndQuery;
     }
 
     private static async Task<(string? Content, string Scope)> GetEffectiveRulesContentAsync()
