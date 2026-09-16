@@ -276,7 +276,16 @@ public class XianixAgent(
             Name = EnvConfig.AgentName,
             Description = "A versatile automation agent that listens for incoming webhooks from your tools and services, then triggers intelligent AI-powered workflows using Claude Code plugins — helping your team automate code reviews, respond to events, and streamline everyday development tasks without lifting a finger.",
             Summary = "AI automation agent that turns webhook events into smart, plugin-driven actions.",
-            IsTemplate = EnvConfig.AgentIsTemplate
+            IsTemplate = EnvConfig.AgentIsTemplate,
+            SamplePrompts =
+            [
+                "List my onboarded repositories",
+                "What plugins can I use?",
+                "Set up webhooks and rules for a repository",
+                "Onboard a GitHub or Azure DevOps repository",
+                "Run a pull request review on my repo",
+                "Create the default Xians webhook connection",
+            ],
         });
 
         return xiansAgent;

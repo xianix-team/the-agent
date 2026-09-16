@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Xianix;
 using Xianix.Containers;
@@ -325,7 +326,8 @@ public sealed class RuleSetupSubagentTools
         "user confirmed (from ListPluginTriggerOptions) — never invents match-any. Seeds " +
         "with-envs for the inferred platform. ONLY call after the user confirmed plugins AND " +
         "triggers (or set skipWebhookTriggers=true for use-plugins only). Never claim success " +
-        "unless ok=true and claimAllowed=true.")]
+        "unless ok=true, claimAllowed=true, AND rulesChanged=true. If rulesChanged=false the " +
+        "activation rules.json was not updated — tell the user that, do not say installed.")]
     public async Task<object> InstallPlugins(
         [Description("Comma-separated plugin short names to install, e.g. pr-reviewer,perf-optimizer.")]
         string pluginNames,
@@ -485,6 +487,11 @@ public sealed class RuleSetupSubagentTools
 
         draft = EnsureCommonWithEnvs(draft, commonEnvs);
 
+        var beforeInstalled = CollectInstalledShortNames(agentExisting);
+        var newlyRequested = requested
+            .Where(r => !beforeInstalled.Contains(r, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+
         var save = await SaveRules(
                 draft,
                 requiredPlugins: string.Join(",", fullSet),
@@ -499,25 +506,35 @@ public sealed class RuleSetupSubagentTools
             {
                 ok = false,
                 claimAllowed = false,
+                rulesChanged = false,
                 error = "InstallPlugins refused — SaveRules / validation failed. Rules.json was not updated.",
                 save,
                 requiredPlugins = fullSet,
-                newlyRequested = requested,
+                requestedPlugins = requested,
+                newlyRequested,
                 replaceExistingSet,
                 repositoryUrl = repositoryUrl.Trim(),
                 platform,
             };
         }
 
-        var installedShort = saveDoc.RootElement.TryGetProperty("installedShortNames", out var namesEl)
-            && namesEl.ValueKind == JsonValueKind.Array
-            ? namesEl.EnumerateArray()
-                .Select(e => e.GetString())
-                .Where(s => !string.IsNullOrWhiteSpace(s))
-                .Select(s => s!)
-                .ToArray()
-            : Array.Empty<string>();
+        // Independent re-read — do not trust SaveRules payload alone before claiming success.
+        var (verifiedContent, verifiedScope) = await GetEffectiveRulesContentAsync()
+            .ConfigureAwait(false);
+        if (verifiedScope is not "agent" || string.IsNullOrWhiteSpace(verifiedContent))
+        {
+            return new
+            {
+                ok = false,
+                claimAllowed = false,
+                rulesChanged = false,
+                error = "Install save ran but agent-scoped rules.json could not be re-read afterward.",
+                scope = verifiedScope,
+                save,
+            };
+        }
 
+        var installedShort = CollectInstalledShortNames(verifiedContent);
         var missingRequested = requested
             .Where(r => !installedShort.Contains(r, StringComparer.OrdinalIgnoreCase))
             .ToArray();
@@ -527,7 +544,8 @@ public sealed class RuleSetupSubagentTools
             {
                 ok = false,
                 claimAllowed = false,
-                error = "Save reported success but re-read is missing requested plugins: " +
+                rulesChanged = false,
+                error = "Re-read rules.json is missing requested plugins: " +
                         string.Join(", ", missingRequested),
                 installedShortNames = installedShort,
                 missingRequested,
@@ -535,15 +553,64 @@ public sealed class RuleSetupSubagentTools
             };
         }
 
-        var savedContent = saveDoc.RootElement.TryGetProperty("content", out var contentEl)
-            && contentEl.ValueKind == JsonValueKind.String
-                ? contentEl.GetString()
-                : null;
+        var rulesChanged = !RulesContentEquals(agentExisting, verifiedContent);
+        if (!rulesChanged)
+        {
+            // Already configured — do not tell the user a fresh install succeeded.
+            if (newlyRequested.Length == 0)
+            {
+                return new
+                {
+                    ok = true,
+                    claimAllowed = false,
+                    rulesChanged = false,
+                    alreadyInstalled = true,
+                    installed = true,
+                    persisted = true,
+                    scope = "agent",
+                    replaceExistingSet,
+                    repositoryUrl = repositoryUrl.Trim(),
+                    platform,
+                    selectedExecutionNames = selectedExecutions,
+                    skipWebhookTriggers,
+                    seededEnvNames = commonEnvs,
+                    requiredPlugins = fullSet,
+                    requestedPlugins = requested,
+                    newlyRequested,
+                    installedShortNames = installedShort,
+                    content = verifiedContent,
+                    agentName,
+                    activationName,
+                    message =
+                        "Requested plugins are already present in agent-scoped rules.json; " +
+                        "no changes were written.",
+                    hint =
+                        "Do NOT tell the user the plugin was newly installed. " +
+                        "Say it was already configured. claimAllowed=false because rules.json did not change.",
+                };
+            }
+
+            return new
+            {
+                ok = false,
+                claimAllowed = false,
+                rulesChanged = false,
+                error =
+                    "Install reported success but agent-scoped rules.json is unchanged despite " +
+                    "new plugins being requested: " + string.Join(", ", newlyRequested) +
+                    ". Do not claim the plugin was installed.",
+                installedShortNames = installedShort,
+                requestedPlugins = requested,
+                newlyRequested,
+                save,
+            };
+        }
 
         return new
         {
             ok = true,
             claimAllowed = true,
+            rulesChanged = true,
             installed = true,
             persisted = true,
             scope = "agent",
@@ -554,16 +621,19 @@ public sealed class RuleSetupSubagentTools
             skipWebhookTriggers,
             seededEnvNames = commonEnvs,
             requiredPlugins = fullSet,
-            newlyRequested = requested,
+            requestedPlugins = requested,
+            newlyRequested,
             installedShortNames = installedShort,
-            content = savedContent,
+            content = verifiedContent,
             agentName,
             activationName,
             message =
                 skipWebhookTriggers
-                    ? "Plugins registered (use-plugins only; webhook triggers deferred)."
-                    : $"Plugins registered with constant repository.url and {selectedExecutions.Length} confirmed execution(s).",
-            hint = "Never claim install without ok=true + claimAllowed=true.",
+                    ? "Plugins registered (use-plugins only; webhook triggers deferred). rules.json verified changed."
+                    : $"Plugins registered with constant repository.url and {selectedExecutions.Length} confirmed execution(s). rules.json verified changed.",
+            hint =
+                "Only claim install when ok=true + claimAllowed=true + rulesChanged=true. " +
+                "Call GetCurrentRules once more before telling the user.",
         };
     }
 
@@ -851,12 +921,40 @@ public sealed class RuleSetupSubagentTools
                 return new
                 {
                     ok = false,
+                    claimAllowed = false,
+                    rulesChanged = false,
                     error = $"Failed to save Rules: {saveResult.Error}",
                 };
             }
 
             var (verifiedContent, verifiedScope) = await GetEffectiveRulesContentAsync()
                 .ConfigureAwait(false);
+
+            if (verifiedScope is not "agent" || string.IsNullOrWhiteSpace(verifiedContent))
+            {
+                return new
+                {
+                    ok = false,
+                    claimAllowed = false,
+                    rulesChanged = false,
+                    error = "Save ran but Rules did not resolve as agent-scoped afterward.",
+                    scope = verifiedScope,
+                };
+            }
+
+            if (!RulesContentEquals(toSave, verifiedContent))
+            {
+                return new
+                {
+                    ok = false,
+                    claimAllowed = false,
+                    rulesChanged = false,
+                    error =
+                        "Save reported success but re-read agent-scoped rules.json does not match " +
+                        "what was written. Do not claim plugins were installed.",
+                    scope = verifiedScope,
+                };
+            }
 
             if (required.Length > 0)
             {
@@ -867,6 +965,7 @@ public sealed class RuleSetupSubagentTools
                     {
                         ok = false,
                         claimAllowed = false,
+                        rulesChanged = false,
                         error = "Save appeared to succeed but re-read Rules is missing required plugins: " +
                                 string.Join(", ", missingAfterSave),
                         missingPlugins = missingAfterSave,
@@ -875,22 +974,14 @@ public sealed class RuleSetupSubagentTools
                 }
             }
 
-            if (verifiedScope is not "agent")
-            {
-                return new
-                {
-                    ok = false,
-                    claimAllowed = false,
-                    error = "Save ran but Rules did not resolve as agent-scoped afterward.",
-                    scope = verifiedScope,
-                };
-            }
-
+            var rulesChanged = !RulesContentEquals(agentExisting, verifiedContent);
             var installedShortNames = CollectInstalledShortNames(verifiedContent);
             return new
             {
                 ok = true,
-                claimAllowed = true,
+                // Only allow a "saved successfully" claim when rules.json actually changed.
+                claimAllowed = rulesChanged,
+                rulesChanged,
                 persisted = true,
                 scope = "agent",
                 replaceExisting,
@@ -899,9 +990,11 @@ public sealed class RuleSetupSubagentTools
                 activationName,
                 installedShortNames,
                 content = verifiedContent,
-                message = replaceExisting
-                    ? "Agent-scoped Rules saved (replace). Existing plugin executions were not merged."
-                    : "Agent-scoped Rules saved; existing plugin executions were kept and new ones merged in.",
+                message = !rulesChanged
+                    ? "Agent-scoped Rules unchanged after save (content already matched)."
+                    : replaceExisting
+                        ? "Agent-scoped Rules saved (replace). Existing plugin executions were not merged."
+                        : "Agent-scoped Rules saved; existing plugin executions were kept and new ones merged in.",
             };
         }
         catch (Exception ex)
@@ -909,6 +1002,8 @@ public sealed class RuleSetupSubagentTools
             return new
             {
                 ok = false,
+                claimAllowed = false,
+                rulesChanged = false,
                 error = $"SaveRules failed: {ex.Message}",
             };
         }
@@ -1796,6 +1891,12 @@ public sealed class RuleSetupSubagentTools
                     "Agent-level override was not created.");
             }
 
+            if (!RulesContentEquals(content, doc.Content))
+            {
+                return RulesSaveResult.Failed(
+                    "Rules update re-read does not match the document that was written.");
+            }
+
             return RulesSaveResult.Succeeded(doc.Id);
         }
         catch (Exception ex)
@@ -1901,6 +2002,29 @@ public sealed class RuleSetupSubagentTools
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+    /// <summary>
+    /// Semantic equality for rules.json (parse + deep compare). Used to detect no-op saves
+    /// before the agent is allowed to tell the user an install succeeded.
+    /// </summary>
+    private static bool RulesContentEquals(string? left, string? right)
+    {
+        if (string.IsNullOrWhiteSpace(left) && string.IsNullOrWhiteSpace(right))
+            return true;
+        if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+            return false;
+
+        try
+        {
+            var leftNode = JsonNode.Parse(left);
+            var rightNode = JsonNode.Parse(right);
+            return JsonNode.DeepEquals(leftNode, rightNode);
+        }
+        catch (JsonException)
+        {
+            return string.Equals(left.Trim(), right.Trim(), StringComparison.Ordinal);
+        }
+    }
 
     /// <summary>
     /// Removes plugin short names from every use-plugins list and drops executions
