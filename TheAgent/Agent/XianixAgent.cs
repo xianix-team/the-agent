@@ -72,30 +72,49 @@ public class XianixAgent(
             supervisorToolsLogger,
             loggerFactory);
 
+        var ruleSetupSubagent = new RuleSetupSubagent(
+            ResolveAnthropicApiKeyAsync,
+            EnvConfig.AnthropicDeploymentName,
+            loggerFactory);
+
         conversationWorkflow.OnUserChatMessage(async (context) =>
         {
-            if (context.Message.Scope == "setup")
-            {
-                await context.ReplyAsync("Hello, how can I help you with your setup????");
-                return;
-            }
             try
             {
-                var reply = await subagent.RunAsync(context, cancellationToken);
-
-                // Defence-in-depth: SupervisorSubagent already substitutes a fallback
-                // message for empty model output, but guard here too so we never publish
-                // an empty bubble to the user even if that contract regresses.
-                if (string.IsNullOrWhiteSpace(reply))
+                if (context.Message.Scope == "setup")
                 {
-                    logger.LogWarning(
-                        "Supervisor returned empty reply for tenant '{TenantId}', participant '{ParticipantId}'. " +
-                        "Sending generic retry prompt instead.",
-                        context.Message.TenantId, context.Message.ParticipantId);
-                    reply = SupervisorSubagent.EmptyResponseFallback;
-                }
 
-                await context.ReplyAsync(reply);
+                    var reply = await ruleSetupSubagent.RunAsync(context, cancellationToken);
+                    if (string.IsNullOrWhiteSpace(reply))
+                    {
+                        logger.LogWarning(
+                            "RuleSetupSubagent returned empty reply for tenant '{TenantId}', participant '{ParticipantId}'. " +
+                            "Sending generic retry prompt instead.",
+                            context.Message.TenantId, context.Message.ParticipantId);
+                        reply = RuleSetupSubagent.EmptyResponseFallback;
+                    }
+
+                    await context.ReplyAsync(reply);
+                }
+                else
+                {
+
+                    var reply = await subagent.RunAsync(context, cancellationToken);
+
+                    // Defence-in-depth: SupervisorSubagent already substitutes a fallback
+                    // message for empty model output, but guard here too so we never publish
+                    // an empty bubble to the user even if that contract regresses.
+                    if (string.IsNullOrWhiteSpace(reply))
+                    {
+                        logger.LogWarning(
+                            "Supervisor returned empty reply for tenant '{TenantId}', participant '{ParticipantId}'. " +
+                            "Sending generic retry prompt instead.",
+                            context.Message.TenantId, context.Message.ParticipantId);
+                        reply = SupervisorSubagent.EmptyResponseFallback;
+                    }
+
+                    await context.ReplyAsync(reply);
+                }
             }
             catch (OperationCanceledException)
             {
@@ -257,7 +276,16 @@ public class XianixAgent(
             Name = EnvConfig.AgentName,
             Description = "A versatile automation agent that listens for incoming webhooks from your tools and services, then triggers intelligent AI-powered workflows using Claude Code plugins — helping your team automate code reviews, respond to events, and streamline everyday development tasks without lifting a finger.",
             Summary = "AI automation agent that turns webhook events into smart, plugin-driven actions.",
-            IsTemplate = EnvConfig.AgentIsTemplate
+            IsTemplate = EnvConfig.AgentIsTemplate,
+            SamplePrompts =
+            [
+                "List my onboarded repositories",
+                "What plugins can I use?",
+                "Set up webhooks and rules for a repository",
+                "Onboard a GitHub or Azure DevOps repository",
+                "Run a pull request review on my repo",
+                "Create the default Xians webhook connection",
+            ],
         });
 
         return xiansAgent;
@@ -274,6 +302,12 @@ public class XianixAgent(
         await xiansAgent.Knowledge.UploadEmbeddedResourceAsync(
             resourcePath: "Knowledge/system-prompt.md",
             knowledgeName: Constants.SystemPromptKnowledgeName,
+            knowledgeType: "markdown"
+        );
+
+        await xiansAgent.Knowledge.UploadEmbeddedResourceAsync(
+            resourcePath: "Knowledge/rule-setup-system-prompt.md",
+            knowledgeName: Constants.RuleSetupSystemPromptKnowledgeName,
             knowledgeType: "markdown"
         );
     }
