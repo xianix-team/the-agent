@@ -164,7 +164,7 @@ judge from intent:
   agents / automations / PR reviews") → reply in one or two sentences only.
   Include this exact Markdown link and stop:
 
-  `[Open Rules Optimizer](?topic=setup)`
+  `[Open Rules Optimizer](?topic=Rules%20Optimizer)`
 
   Say that setup happens in that separate chat. Do **not** ask for a
   repository URL, platform, or credentials. Do **not** call tools for setup.

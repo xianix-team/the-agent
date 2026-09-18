@@ -81,7 +81,9 @@ public class XianixAgent(
         {
             try
             {
-                if (context.Message.Scope == "setup")
+                var scope = context.Message.Scope?.Trim();
+                if (string.Equals(scope, "Rules Optimizer", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(scope, "setup", StringComparison.OrdinalIgnoreCase))
                 {
 
                     var reply = await ruleSetupSubagent.RunAsync(context, cancellationToken);
