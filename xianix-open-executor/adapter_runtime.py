@@ -109,14 +109,29 @@ def prepare_plugins_for_prompt(
     Raises on UNSUPPORTED required capabilities or missing required assets when
     a slash command was matched.
     """
-    roots = discover_plugin_roots(plugins_dir)
-    if not roots:
-        # No generic plugins published — nothing to adapt.
+    # Empty CLAUDE-CODE-PLUGINS (no use-plugins on the rule) → skip adapter.
+    # Plain OpenCode runs the execute-prompt without generating a plugin bundle.
+    requested = set(resolve_requested_plugins())
+    if not requested:
         return None
 
-    requested = set(resolve_requested_plugins())
-    if requested:
-        roots = [r for r in roots if r.name in requested] or roots
+    roots = discover_plugin_roots(plugins_dir)
+    if not roots:
+        raise RuntimeError(
+            "use-plugins requested "
+            + ", ".join(sorted(requested))
+            + f" but no plugins found under {plugins_dir or os.environ.get('XIANIX_PLUGINS_DIR') or DEFAULT_PLUGINS_DIR}"
+        )
+
+    matched_roots = [r for r in roots if r.name in requested]
+    if not matched_roots:
+        available = ", ".join(r.name for r in roots) or "(none)"
+        raise RuntimeError(
+            "Requested plugins not published in executor vendor: "
+            + ", ".join(sorted(requested))
+            + f". Available: {available}"
+        )
+    roots = matched_roots
 
     gen_root = Path(
         generated_dir
