@@ -11,6 +11,9 @@
 .env
 .local/
 
+# Generated OpenCode vendor snapshots (publish_to_open_executor.py)
+xianix-open-executor/vendor/
+
 # Build results
 [Dd]ebug/
 [Dd]ebugPublic/
