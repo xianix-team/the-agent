@@ -58,11 +58,12 @@ def detect_constructs_in_text(text: str) -> tuple[ClaudeConstruct, ...]:
         found.append(ClaudeConstruct.TASK)
     if _SUBAGENT_RE.search(text):
         found.append(ClaudeConstruct.SUBAGENT_TYPE)
-    if _AGENT_TOOL_RE.search(text) or (
+    agent_tool_match = _AGENT_TOOL_RE.search(text)
+    if agent_tool_match or (
         "tools:" in text[:500] and re.search(r"\bAgent\b", text[:800])
     ):
         # Frontmatter tools: Agent — keep lightweight
-        if re.search(r"(?m)^tools:.*\bAgent\b", text) or _AGENT_TOOL_RE.search(text):
+        if agent_tool_match or re.search(r"(?m)^tools:.*\bAgent\b", text):
             found.append(ClaudeConstruct.AGENT_TOOL)
     if _MODEL_TIER_RE.search(text):
         found.append(ClaudeConstruct.MODEL_TIER)

@@ -36,6 +36,17 @@ _SKIP_COPY_NAMES = frozenset(
 )
 
 
+def _safe_dest(output: Path, relative: str | Path) -> Path:
+    """Resolve ``output / relative`` and reject paths that escape ``output``."""
+    dest = (output / relative).resolve()
+    output_resolved = output.resolve()
+    try:
+        dest.relative_to(output_resolved)
+    except ValueError as exc:
+        raise ValueError(f"Invalid path traversal attempt: {relative}") from exc
+    return dest
+
+
 @dataclass
 class GeneratedBundle:
     """Result of adapting a PluginDefinition for OpenCode."""
@@ -206,7 +217,7 @@ class OpenCodePluginAdapter:
             src = root / script.relative_path
             if not src.is_file():
                 continue
-            dest = output / script.relative_path
+            dest = _safe_dest(output, script.relative_path)
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dest)
             count += 1
@@ -219,7 +230,7 @@ class OpenCodePluginAdapter:
             src = root / template.path
             if not src.is_file():
                 continue
-            dest = output / template.path
+            dest = _safe_dest(output, template.path)
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dest)
             count += 1

@@ -70,8 +70,25 @@ def publish_plugin_compat(dest_root: Path) -> None:
     print(f"Published plugin_compat → {package_dest}")
 
 
+def _validate_plugin_name(plugin_name: str) -> None:
+    if (
+        not plugin_name
+        or plugin_name in {".", ".."}
+        or plugin_name.startswith(".")
+        or "/" in plugin_name
+        or "\\" in plugin_name
+    ):
+        raise ValueError(f"Invalid plugin name: {plugin_name}")
+
+
 def publish_plugin(plugin_name: str, plugins_root: Path, dest_root: Path) -> Path:
-    src = plugins_root / plugin_name
+    _validate_plugin_name(plugin_name)
+    src = (plugins_root / plugin_name).resolve()
+    plugins_root_resolved = plugins_root.resolve()
+    try:
+        src.relative_to(plugins_root_resolved)
+    except ValueError as exc:
+        raise ValueError(f"Invalid plugin name: {plugin_name}") from exc
     if not src.is_dir():
         raise FileNotFoundError(f"Plugin not found: {src}")
     dest = dest_root / "plugins" / plugin_name

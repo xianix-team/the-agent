@@ -431,9 +431,11 @@ def _hash_plugin_tree(root: Path) -> str:
             continue
         # Skip large/binary noise; hash path + size + mtime for speed
         rel = path.relative_to(root).as_posix()
-        if any(part.startswith(".") and part not in {".claude-plugin"} for part in path.parts):
-            # still include .claude-plugin
-            pass
+        if any(
+            part.startswith(".") and part not in {".claude-plugin"}
+            for part in Path(rel).parts
+        ):
+            continue
         try:
             stat = path.stat()
         except OSError:
