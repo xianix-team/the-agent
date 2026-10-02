@@ -2,9 +2,8 @@ FROM python:3.12-slim-bookworm
 
 # OpenCode-only executor. Shared prepare/isolation/runtime plumbing.
 # libicu72: required by any .NET SDK mise may install for repo builds.
-#
-# Before build, publish plugins + plugin-compat into ./vendor:
-#   python ../plugin-compat/scripts/publish_to_open_executor.py
+# No Claude marketplace / plugin-compat adapter in this image — prompts run
+# directly via `opencode run`.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
@@ -60,7 +59,6 @@ RUN set -eux; \
 
 COPY execute_opencode.py /workspace/execute_opencode.py
 COPY host_context.py /workspace/host_context.py
-COPY adapter_runtime.py /workspace/adapter_runtime.py
 COPY _common.sh /workspace/_common.sh
 COPY prepare_repo.sh /workspace/prepare_repo.sh
 COPY run_prompt.sh /workspace/run_prompt.sh
@@ -69,32 +67,15 @@ COPY maintain_volume.sh /workspace/maintain_volume.sh
 COPY provision_runtimes.sh /workspace/provision_runtimes.sh
 COPY entrypoint.sh /entrypoint.sh
 
-# Generic plugin-compat + canonical plugin snapshots (from publish_to_open_executor.py).
-COPY vendor/plugin_compat /workspace/vendor/plugin_compat
-COPY vendor/plugins /workspace/vendor/plugins
-
-RUN test -f /workspace/vendor/plugin_compat/__init__.py \
-    && test -d /workspace/vendor/plugins
-
-ENV XIANIX_PLUGINS_DIR=/workspace/vendor/plugins \
-    XIANIX_GENERATED_PLUGINS_DIR=/workspace/generated-plugins \
-    PYTHONPATH=/workspace/vendor
-
 # Strip CRLF if a Windows checkout baked \\r into scripts.
 RUN find /workspace /entrypoint.sh -type f \( -name '*.sh' -o -path '/entrypoint.sh' \) \
         -exec sed -i 's/\r$//' {} + \
     && chmod +x /entrypoint.sh /workspace/prepare_repo.sh /workspace/run_prompt.sh \
         /workspace/generate_context.sh /workspace/maintain_volume.sh \
-        /workspace/provision_runtimes.sh \
-    && if ls /workspace/vendor/plugins/*/scripts/*.sh >/dev/null 2>&1; then \
-         chmod +x /workspace/vendor/plugins/*/scripts/*.sh; \
-       fi \
-    && if ls /workspace/vendor/plugins/*/hooks/*.sh >/dev/null 2>&1; then \
-         chmod +x /workspace/vendor/plugins/*/hooks/*.sh; \
-       fi
+        /workspace/provision_runtimes.sh
 
 RUN groupadd -r xianix && useradd -r -g xianix -d /workspace xianix \
-    && mkdir -p /workspace/repo /workspace/runtimes /workspace/generated-plugins \
+    && mkdir -p /workspace/repo /workspace/runtimes \
     && chown -R xianix:xianix /workspace
 USER xianix
 

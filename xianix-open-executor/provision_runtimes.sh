@@ -10,7 +10,7 @@ log() { echo "[runtimes] $*" >&2; }
 ENV_FILE="${1:-}"
 if [ -z "${ENV_FILE}" ]; then
     log "FATAL: usage: provision_runtimes.sh <env_out_file>"
-    exit 0
+    exit 1
 fi
 : > "${ENV_FILE}" 2>/dev/null || { log "WARNING: cannot write env file '${ENV_FILE}' — skipping provisioning."; exit 0; }
 emit_env() { printf '%s\n' "$1" >> "${ENV_FILE}"; }

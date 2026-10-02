@@ -13,23 +13,14 @@ OpenCode-only Docker image for Xianix. Same prepare / worktree / mise isolation 
 | `prepare_repo.sh` | Bare clone + worktree |
 | `run_prompt.sh` | Runtimes + context + `execute_opencode.py` |
 | `execute_opencode.py` | `opencode run` → JSON envelope |
-| `host_context.py` | Platform / runtime / plugin recipe preamble |
-| `adapter_runtime.py` | Generic plugin-compat adapt + slash-command match |
+| `host_context.py` | Platform / runtime preamble |
 | `generate_context.sh` | Deterministic orientation + symbol map |
 | `provision_runtimes.sh` | mise from **repo** version files only |
 | `maintain_volume.sh` | git gc, sessions, mise prune |
 
-`vendor/` is **not committed**. Produce it before image build:
-
-```bash
-python ../plugin-compat/scripts/publish_to_open_executor.py
-```
-
 ## Build
 
 ```bash
-# from the-agent/
-python plugin-compat/scripts/publish_to_open_executor.py
 cd xianix-open-executor/
 docker build -t xianix-open-executor:latest .
 ```
@@ -38,6 +29,19 @@ docker build -t xianix-open-executor:latest .
 # TheAgent/.env
 EXECUTOR-IMAGE=xianix-open-executor:latest
 ```
+
+Switch harness with `EXECUTOR-IMAGE` only. **Rules are not interchangeable** between
+images without edits:
+
+| Claude executor (`xianix-executor`) | Open executor (`xianix-open-executor`) |
+|-------------------------------------|----------------------------------------|
+| `claude-sonnet-*` model ids | `provider/model` (e.g. `openai/gpt-5.3-codex`) |
+| `use-plugins` + `/slash` in prompt | Full task in `execute-prompt`; `use-plugins` ignored |
+| `secrets.ANTHROPIC-API-KEY` | `secrets.OPENAI-API-KEY` (or anthropic provider/model) |
+
+The system seed `TheAgent/Knowledge/rules.json` in this branch is tuned for OpenCode.
+For Claude executor, restore plugin blocks and Claude model ids (or maintain two
+agent templates / activations with separate rule sets).
 
 ## Models
 
@@ -48,26 +52,16 @@ EXECUTOR-IMAGE=xianix-open-executor:latest
 Use an id from `opencode models` in the image. Inject matching API keys via `with-envs`
 (e.g. `secrets.OPENAI-API-KEY`).
 
-## Plugin compatibility
+OpenCode rejects bare Claude-style ids (`claude-sonnet-4-5`); they must be
+`provider/model`.
 
-Claude marketplace install does **not** run here. Official plugins are adapted at
-runtime by `plugin-compat` (`../plugin-compat/`):
+## Plugins
 
-```text
-vendor/plugins/<id>
-        ↓
-Plugin Parser → PluginDefinition
-        ↓
-OpenCodePluginAdapter → generated-plugins/<id>
-        ↓
-WORK_DIR/.opencode/{commands,agents,skills}
-        ↓
-opencode run
-```
-
-Keep `use-plugins` in `rules.json` as usual. Switch harness via `EXECUTOR-IMAGE`.
+This image does **not** install Claude marketplace plugins and does **not** run
+plugin-compat adaptation. `use-plugins` / `CLAUDE-CODE-PLUGINS` from the agent are
+ignored. Put the full task in `execute-prompt` (the model can still use `gh`, git,
+etc. via OpenCode tools).
 
 ## Not included
 
-Claude Code CLI, Playwright, Claude marketplace install, hand-maintained per-plugin
-recipe ports. This image runs OpenCode + the generic compatibility layer only.
+Claude Code CLI, Playwright, Claude marketplace install, plugin-compat adapter.

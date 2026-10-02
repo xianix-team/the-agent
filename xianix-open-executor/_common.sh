@@ -51,11 +51,40 @@ export REPOSITORY_URL XIANIX_PLATFORM
 # Drop an inherited PLATFORM so MSBuild never sees github/azuredevops as a target.
 unset PLATFORM
 
+# ── Execution id (path-safe) ─────────────────────────────────────────────────
+# Orchestrator-supplied EXECUTION_ID must not escape /workspace via .. or slashes.
+_sanitize_execution_id() {
+    local raw="${1:-}"
+    local safe
+    safe=$(printf '%s' "${raw}" | tr -cd 'A-Za-z0-9_-')
+    if [ -z "${safe}" ]; then
+        log "FATAL: EXECUTION_ID is missing or invalid after sanitization."
+        exit 1
+    fi
+    printf '%s' "${safe}"
+}
+EXECUTION_ID="$(_sanitize_execution_id "${EXECUTION_ID:-}")"
+export EXECUTION_ID
+
 # ── Workspace paths ──────────────────────────────────────────────────────────
 REPO_DIR="/workspace/repo"
 WORK_DIR="/workspace/exec-${EXECUTION_ID}"
-GIT_CRED_FILE="/tmp/.git-credentials"
+GIT_CRED_FILE="/tmp/.git-credentials-${EXECUTION_ID}"
 export REPO_DIR WORK_DIR GIT_CRED_FILE
+
+# Reject branch names that could break refspecs or inject shell/git metacharacters.
+is_safe_git_branch_name() {
+    local name="$1"
+    [ -n "${name}" ] || return 1
+    case "${name}" in
+        *$'\t'*|*$'\n'*|*$'\r'*|*:*|*\`*|*\;*|*\|*|*\&*|*\'*|*\"*|*\$*|*\(*|*\)*)
+            return 1
+            ;;
+    esac
+    [[ "${name}" =~ ^[A-Za-z0-9._/-]+$ ]] || return 1
+    [[ "${name}" != *".."* ]] || return 1
+    return 0
+}
 
 # ── Platform-specific credential & URL setup ─────────────────────────────────
 # Strip surrounding whitespace/CR/LF from a token. Vault-stored secrets often

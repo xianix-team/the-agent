@@ -18,7 +18,6 @@ import sys
 import time
 import traceback
 
-from adapter_runtime import format_version_logs, validate_adapter_or_raise
 from host_context import prepend_host_context
 
 
@@ -53,26 +52,50 @@ def resolve_opencode_model(raw: str | None) -> str | None:
 
 
 def require_credentials_for_model(model: str | None) -> None:
-    if not model:
-        if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
-            raise ValueError(
-                "OpenCode requires OPENAI_API_KEY or ANTHROPIC_API_KEY "
-                "(or set model in rules.json with the matching secret)."
-            )
-        return
-    provider = model.split("/", 1)[0].lower()
+    openai_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+    anthropic_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+
+    if not model or not model.strip():
+        if openai_key:
+            return
+        if anthropic_key:
+            return
+        raise ValueError(
+            "No model set and no API key found. Set rules.json model to "
+            "provider/model (e.g. openai/gpt-5.3-codex) and inject "
+            "OPENAI-API-KEY via with-envs, or set OPENAI_API_KEY / "
+            "ANTHROPIC_API_KEY in the container env."
+        )
+
+    provider, _, model_id = model.strip().partition("/")
+    provider = provider.lower()
+    if not model_id:
+        raise ValueError(
+            f"OpenCode model must be 'provider/model' "
+            f"(e.g. openai/gpt-5.3-codex), got '{model}'."
+        )
+
     if provider in ("openai", "oai"):
-        if not os.environ.get("OPENAI_API_KEY"):
+        if not openai_key:
             raise ValueError(
-                "OpenCode openai/* requires OPENAI_API_KEY "
-                "(inject via with-envs secrets.OPENAI-API-KEY)."
+                f"Model is {model} but OPENAI_API_KEY is missing. "
+                "Add with-envs: secrets.OPENAI-API-KEY (or OPENAI-API-KEY)."
             )
         return
+
     if provider in ("anthropic", "claude"):
-        if not os.environ.get("ANTHROPIC_API_KEY"):
+        if not anthropic_key:
             raise ValueError(
-                "OpenCode anthropic/* requires ANTHROPIC_API_KEY."
+                f"Model is {model} but ANTHROPIC_API_KEY is missing. "
+                "Add with-envs: secrets.ANTHROPIC-API-KEY (or ANTHROPIC-API-KEY)."
             )
+        return
+
+    if not openai_key and not anthropic_key:
+        raise ValueError(
+            f"Model is {model} (provider '{provider}'). No OPENAI_API_KEY or "
+            "ANTHROPIC_API_KEY is set — add the secret that matches your provider."
+        )
 
 
 def build_output(
@@ -241,19 +264,7 @@ def run(
     """
     Run OpenCode against the workspace and return the control-plane envelope.
     """
-    try:
-        # Adapt published plugins via generic plugin-compat (Phase 2).
-        os.environ.setdefault("WORK_DIR", workspace)
-        adapter_versions = validate_adapter_or_raise(prompt)
-    except (FileNotFoundError, RuntimeError, ValueError, json.JSONDecodeError) as e:
-        return build_output(
-            tenant_id=tenant_id,
-            execution_id=execution_id,
-            status="error",
-            models=[model] if model else None,
-            error=str(e),
-        )
-
+    os.environ.setdefault("WORK_DIR", workspace)
     prompt = prepend_host_context(
         prompt,
         xianix_inputs,
@@ -270,10 +281,6 @@ def run(
             models=[model] if model else None,
             error=str(e),
         )
-
-    if adapter_versions:
-        for line in format_version_logs(adapter_versions, resolved_model):
-            log(line)
 
     opencode_bin = shutil.which("opencode")
     if not opencode_bin:

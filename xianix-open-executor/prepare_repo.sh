@@ -144,6 +144,11 @@ pull_default_branch() {
         return 0
     fi
 
+    if ! is_safe_git_branch_name "${default_branch}"; then
+        log "WARNING: default branch name failed safety check ('${default_branch}') — skipping refresh."
+        return 0
+    fi
+
     log "Default branch: ${default_branch}"
 
     # Force-update the local default-branch ref to match origin. The bare-clone

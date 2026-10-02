@@ -21,26 +21,6 @@ log "Execution ID:        ${EXECUTION_ID}"
 log "Runtime:             opencode"
 log "Model:               ${XIANIX_MODEL:-"(opencode default)"}"
 
-# Plugin compatibility roots (generic adapter).
-# Canonical snapshots: /workspace/vendor/plugins/<id>
-# Generated OpenCode bundles: /workspace/generated-plugins/<id>
-export XIANIX_PLUGINS_DIR="${XIANIX_PLUGINS_DIR:-/workspace/vendor/plugins}"
-export XIANIX_GENERATED_PLUGINS_DIR="${XIANIX_GENERATED_PLUGINS_DIR:-/workspace/generated-plugins}"
-
-if [ -d "${XIANIX_PLUGINS_DIR}" ]; then
-    log "XIANIX_PLUGINS_DIR:   ${XIANIX_PLUGINS_DIR}"
-    for _plugin_dir in "${XIANIX_PLUGINS_DIR}"/*; do
-        [ -d "${_plugin_dir}" ] || continue
-        _name="$(basename "${_plugin_dir}")"
-        if [ -f "${_plugin_dir}/.claude-plugin/plugin.json" ]; then
-            _ver="$(jq -r '.version // "unknown"' "${_plugin_dir}/.claude-plugin/plugin.json" 2>/dev/null || echo unknown)"
-            log "  plugin ${_name}@${_ver}"
-        fi
-    done
-else
-    log "WARNING: no plugins published at ${XIANIX_PLUGINS_DIR}"
-fi
-
 if [ ! -d "${WORK_DIR}" ]; then
     log "FATAL: Workspace '${WORK_DIR}' does not exist. " \
         "run_prompt.sh requires prepare_repo.sh to have run first " \
