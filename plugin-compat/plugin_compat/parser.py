@@ -426,15 +426,18 @@ def _union_constructs(definition: PluginDefinition) -> tuple[ClaudeConstruct, ..
 
 def _hash_plugin_tree(root: Path) -> str:
     digest = hashlib.sha256()
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
+    # Filter to files first so sort doesn't pay for directories/noise.
+    for path in sorted(
+        (p for p in root.rglob("*") if p.is_file()),
+        key=lambda p: p.as_posix(),
+    ):
         # Skip large/binary noise; hash path + size + mtime for speed
         rel = path.relative_to(root).as_posix()
         if any(
             part.startswith(".") and part not in {".claude-plugin"}
             for part in Path(rel).parts
         ):
+            # Skip hidden dirs/files (but include .claude-plugin)
             continue
         try:
             stat = path.stat()

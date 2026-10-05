@@ -196,6 +196,9 @@ class OpenCodePluginAdapter:
         return bundle
 
     def _ensure_root_hint(self, body: str) -> str:
+        # Only annotate commands that already mention CLAUDE_PLUGIN_ROOT: the hint
+        # tells the model the executor sets that env var automatically. Commands that
+        # never reference it don't need the note (the executor still exports the var).
         hint = (
             "Plugin root for scripts: set `CLAUDE_PLUGIN_ROOT` to this bundle "
             "directory (the executor does this automatically).\n\n"
