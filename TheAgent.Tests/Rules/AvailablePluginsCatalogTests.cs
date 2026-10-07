@@ -57,7 +57,8 @@ public class AvailablePluginsCatalogTests
         IReadOnlyList<string>? disallowedTools = null,
         bool resumeSessions = false,
         IEnumerable<EnvEntry>? withEnvs = null,
-        string slashCommand = "") =>
+        string slashCommand = "",
+        string executorImage = "") =>
         new()
         {
             ChatName        = "chat",
@@ -75,6 +76,7 @@ public class AvailablePluginsCatalogTests
             MaxTurns        = maxTurns,
             AllowedTools    = (allowedTools ?? []).ToList(),
             DisallowedTools = (disallowedTools ?? []).ToList(),
+            ExecutorImage   = executorImage,
             ResumeSessions  = resumeSessions,
             WithEnvs        = (withEnvs ?? []).ToList(),
         };
@@ -258,7 +260,8 @@ public class AvailablePluginsCatalogTests
                 maxTurns: 20,
                 allowedTools: ["Read", "Bash"],
                 disallowedTools: ["WebSearch"],
-                resumeSessions: true),
+                resumeSessions: true,
+                executorImage: "xianix-open-executor:latest"),
         };
 
         var plugin  = Assert.Single(AvailablePluginsCatalog.BuildCatalog([], chatRules));
@@ -269,6 +272,7 @@ public class AvailablePluginsCatalogTests
         Assert.Equal(20, example.MaxTurns);
         Assert.Equal(new[] { "Read", "Bash" }, example.AllowedTools);
         Assert.Equal(new[] { "WebSearch" }, example.DisallowedTools);
+        Assert.Equal("xianix-open-executor:latest", example.ExecutorImage);
         Assert.True(example.ResumeSessions);
         Assert.Equal("", example.ExecutePrompt);
         Assert.Empty(example.Inputs);
