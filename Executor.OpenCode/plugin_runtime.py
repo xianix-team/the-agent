@@ -14,7 +14,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-DEFAULT_PLUGINS_DIR = "/workspace/vendor/plugins"
+# Per-run staging dir filled by run_prompt.sh after `claude plugin install`;
+# override via XIANIX_PLUGINS_DIR.
+DEFAULT_PLUGINS_DIR = "/tmp/xianix-plugins"
 
 _OPENCODE_NOTE = (
     "> **OpenCode runtime note:** Claude `Task` / `Agent` tool orchestration is not "
@@ -419,14 +421,16 @@ def prepare_plugins_for_prompt(
         )
         raise RuntimeError(
             f"use-plugins requested {', '.join(sorted(requested))} "
-            f"but no plugins found under {plugins_root}"
+            f"but no plugins found under {plugins_root} after "
+            f"`claude plugin marketplace add/install`"
         )
 
     matched_roots = [r for r in roots if r.name in requested]
     if not matched_roots:
         available = ", ".join(r.name for r in roots) or "(none)"
         raise RuntimeError(
-            f"Requested plugins not published in executor vendor: "
+            f"Requested plugins not found after "
+            f"`claude plugin marketplace add/install`: "
             f"{', '.join(sorted(requested))}. Available: {available}"
         )
 

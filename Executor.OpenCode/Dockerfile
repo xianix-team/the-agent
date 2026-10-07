@@ -1,10 +1,10 @@
 FROM python:3.12-slim-bookworm
 
-# OpenCode-only executor. Shared prepare/isolation/runtime plumbing.
+# OpenCode executor. Shared prepare/isolation/runtime plumbing.
 # libicu72: required by any .NET SDK mise may install for repo builds.
-#
-# Before build, publish plugins into ./vendor:
-#   python scripts/publish_plugins.py
+# Claude Code CLI is for `claude plugin marketplace add/install` only
+# (same plugin fetch as Executor/); prompts still run via OpenCode.
+# No Playwright — keep the image smaller than xianix-executor.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
@@ -33,7 +33,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ARG OPENCODE_VERSION=1.18.31
-RUN npm install -g "opencode-ai@${OPENCODE_VERSION}" \
+# Pin Claude Code to match Executor/ so marketplace/plugin resolution does not drift.
+ARG CLAUDE_CODE_VERSION=2.1.201
+RUN npm install -g \
+        "opencode-ai@${OPENCODE_VERSION}" \
+        "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
     && rm -rf /root/.npm
 
 WORKDIR /workspace
@@ -69,25 +73,12 @@ COPY maintain_volume.sh /workspace/maintain_volume.sh
 COPY provision_runtimes.sh /workspace/provision_runtimes.sh
 COPY entrypoint.sh /entrypoint.sh
 
-# Official Claude plugins (OpenCode converts .md at runtime; from scripts/publish_plugins.py).
-COPY vendor/plugins /workspace/vendor/plugins
-
-RUN test -d /workspace/vendor/plugins
-
-ENV XIANIX_PLUGINS_DIR=/workspace/vendor/plugins
-
 # Strip CRLF if a Windows checkout baked \\r into scripts.
 RUN find /workspace /entrypoint.sh -type f \( -name '*.sh' -o -path '/entrypoint.sh' \) \
         -exec sed -i 's/\r$//' {} + \
     && chmod +x /entrypoint.sh /workspace/prepare_repo.sh /workspace/run_prompt.sh \
         /workspace/generate_context.sh /workspace/maintain_volume.sh \
-        /workspace/provision_runtimes.sh \
-    && if ls /workspace/vendor/plugins/*/scripts/*.sh >/dev/null 2>&1; then \
-         chmod +x /workspace/vendor/plugins/*/scripts/*.sh; \
-       fi \
-    && if ls /workspace/vendor/plugins/*/hooks/*.sh >/dev/null 2>&1; then \
-         chmod +x /workspace/vendor/plugins/*/hooks/*.sh; \
-       fi
+        /workspace/provision_runtimes.sh
 
 RUN groupadd -r xianix && useradd -r -g xianix -d /workspace xianix \
     && mkdir -p /workspace/repo /workspace/runtimes \
