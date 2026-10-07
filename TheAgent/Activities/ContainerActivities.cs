@@ -273,11 +273,14 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
         ArgumentNullException.ThrowIfNull(input);
         ArgumentException.ThrowIfNullOrWhiteSpace(input.TenantId);
 
-        var image = EnvConfig.ExecutorImage;
+        var image = string.IsNullOrWhiteSpace(input.ExecutorImage)
+            ? EnvConfig.ExecutorImage
+            : input.ExecutorImage.Trim();
         var logger = ActivityExecutionContext.Current.Logger;
         logger.LogInformation(
-            "Starting container for tenant={TenantId}, image={Image}.",
-            input.TenantId, image);
+            "Starting container for tenant={TenantId}, image={Image} (source={ImageSource}).",
+            input.TenantId, image,
+            string.IsNullOrWhiteSpace(input.ExecutorImage) ? "host EXECUTOR-IMAGE" : "rules.json executor-image");
 
         var env = await BuildEnvVarsAsync(input);
 

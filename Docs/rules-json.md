@@ -94,6 +94,7 @@ Every kind carries an **executions** array (each execution is an independent pip
 | `executions` | One or more execution blocks |
 | `platform` (optional, on each execution) | Hosting service the execution operates against (`github`, `azuredevops`, …). Structural — describes *where* the run happens, independent of the plugin. Auto-injected into `XIANIX_INPUTS` as `"platform"` for plugin prompts. Omit for executions that don't target a specific platform. |
 | `repository` (optional, on each execution) | Structural binding for the repository being operated on. Declared sub-fields (`url`) are treated as **mandatory** — if a declared path doesn't resolve, the block is skipped before any container starts. Auto-injected as `"repository-url"`, with `"repository-name"` derived from `repository.url` and injected alongside it. The executor always checks out the default-branch HEAD; plugins perform any task-specific checkout. Omit entirely for executions that don't operate on a specific repo (e.g. work-item analysis), or for chat rule-set executions (the chat tool always supplies the repository itself). |
+| `executor-image` (optional, on each execution) | Docker image for this execution's harness (e.g. `xianix-open-executor:latest` or `99xio/xianix-executor:latest`). When set, the control plane starts the container with this image instead of the host `EXECUTOR-IMAGE`. Omit or leave empty to use the host default. Lets different executions use different harnesses without restarting the agent. The image must already be available on the Docker host. |
 
 If **several** execution blocks in the same rule set match the same webhook payload, **each** match is scheduled separately: the integrator starts one activation / processing workflow per match (see `XianixAgent` webhook handler).
 
@@ -167,7 +168,7 @@ Unlike a webhook rule set, **a chat rule set has no `executions` array.** A chat
   ],
   "model": "claude-sonnet-4-5",
   "max-budget-usd": 5.0
-  // also: "max-turns", "allowed-tools", "disallowed-tools", "resume-sessions"
+  // also: "max-turns", "allowed-tools", "disallowed-tools", "resume-sessions", "executor-image"
 }
 ```
 
@@ -185,7 +186,7 @@ Unlike a webhook rule set, **a chat rule set has no `executions` array.** A chat
 | ------- | ------------- |
 | `chat` | Discriminator + label. Any non-empty value marks the object as a chat rule set (the value is only used in logs — there's no external event to match). |
 | `use-plugins` | The plugins this rule set makes available to the chat tool. Same `plugin-name@marketplace` shape as a webhook execution's `use-plugins`, plus a required **`slash-command`** (e.g. `/pr-review`) so the supervisor composes `{slash-command} {user-target}` without inventing a command name. |
-| `model` / `max-turns` / `allowed-tools` / `disallowed-tools` / `max-budget-usd` / `resume-sessions` | Cost/control tuning applied to every chat dispatch that uses one of `use-plugins`. Same meaning as the identically-named per-execution knobs on a webhook block. |
+| `model` / `max-turns` / `allowed-tools` / `disallowed-tools` / `max-budget-usd` / `executor-image` / `resume-sessions` | Cost/control / harness tuning applied to every chat dispatch that uses one of `use-plugins`. Same meaning as the identically-named per-execution knobs on a webhook block. |
 | `with-envs` | Optional rule-set-wide common environment variables shipped to chat dispatches by `RulesEnvCatalog` (platform-agnostic, like a webhook rule set's commons). |
 
 ### Why cost tuning must live on the chat rule set
@@ -648,6 +649,7 @@ Only the fields declared here are transmitted. Be deliberate about that — a li
             "marketplace": "xianix-team/plugins-official"
           }
         ],
+        "executor-image": "xianix-open-executor:latest",
         "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}}.\n\nRun /pr-review {{pr-number}} to perform the automated review. The `gh` CLI is authenticated and available if you need it directly.",
         "raise-events": [
           {

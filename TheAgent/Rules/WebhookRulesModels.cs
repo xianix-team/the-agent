@@ -116,6 +116,13 @@ public sealed class ChatRuleSet
     [JsonPropertyName("max-budget-usd")]
     public double? MaxBudgetUsd { get; init; }
 
+    /// <summary>
+    /// Optional Docker image for chat dispatches (mirrors <see cref="WebhookExecution.ExecutorImage"/>).
+    /// Empty means the host <c>EXECUTOR-IMAGE</c> default.
+    /// </summary>
+    [JsonPropertyName("executor-image")]
+    public string ExecutorImage { get; init; } = "";
+
     /// <summary>Whether chat dispatches resume prior sessions (mirrors <see cref="WebhookExecution.ResumeSessions"/>).</summary>
     [JsonPropertyName("resume-sessions")]
     public bool ResumeSessions { get; init; }
@@ -229,6 +236,16 @@ public sealed class WebhookExecution
     /// </summary>
     [JsonPropertyName("max-budget-usd")]
     public double? MaxBudgetUsd { get; init; }
+
+    /// <summary>
+    /// Optional Docker image for this execution's harness (e.g. <c>xianix-open-executor:latest</c>
+    /// or <c>99xio/xianix-executor:latest</c>). When set, the control plane starts the container
+    /// with this image instead of the host <c>EXECUTOR-IMAGE</c>. Empty means "use the host
+    /// default". Lets different executions use different harnesses without restarting the agent.
+    /// The image must already be available on the Docker host.
+    /// </summary>
+    [JsonPropertyName("executor-image")]
+    public string ExecutorImage { get; init; } = "";
 
     /// <summary>
     /// When true, back-to-back runs against the same conversation resume the prior Claude

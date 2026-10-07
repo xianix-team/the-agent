@@ -452,6 +452,7 @@ public sealed class SupervisorSubagentTools(UserMessageContext context, ILogger<
             AllowedTools    = winningExample?.AllowedTools ?? [],
             DisallowedTools = winningExample?.DisallowedTools ?? [],
             MaxBudgetUsd    = winningExample?.MaxBudgetUsd,
+            ExecutorImage   = winningExample?.ExecutorImage ?? "",
             ResumeSessions  = winningExample?.ResumeSessions ?? false,
             IsNewRepository = !isKnownRepo,
         };
