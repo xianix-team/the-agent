@@ -20,7 +20,7 @@ if ! command -v mise >/dev/null 2>&1; then
     exit 0
 fi
 
-MANIFEST_NAME=".tool-versions"  # unused; kept for comment clarity in allow-lists
+MANIFEST_NAME=".tool-versions"
 LOCK_WAIT_SECONDS="${XIANIX_RUNTIME_LOCK_WAIT_SECONDS:-600}"
 AUTODETECT="${XIANIX_RUNTIME_AUTODETECT:-1}"
 
@@ -46,7 +46,7 @@ ALLOWED_TOOLS="${XIANIX_RUNTIME_ALLOWED_TOOLS:-bun deno dotnet elixir erlang go 
 REPO_DECLARATION_FILES=(
     mise.toml .mise.toml mise/config.toml .mise/config.toml
     .config/mise.toml .config/mise/config.toml
-    .tool-versions
+    "${MANIFEST_NAME}"
     global.json .nvmrc .node-version .python-version .python-versions
     .ruby-version Gemfile .java-version .sdkmanrc .go-version go.mod
     rust-toolchain.toml .swift-version .bun-version .deno-version
