@@ -68,7 +68,6 @@ jobs:
     - name: Run integration tests
       env:
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       run: |
         SKIP_BUILD=1 IMAGE=executor.opencode:integration-test \
           bash Executor.OpenCode/tests/integration_test.sh
