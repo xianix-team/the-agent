@@ -53,7 +53,7 @@ if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -f "${SCRIPT_DIR}/.env" ]; then
     [ -n "${ANTHROPIC_API_KEY}" ] && echo "Loaded ANTHROPIC_API_KEY from tests/.env"
 fi
 
-IMAGE="${IMAGE:-executor.opencode:integration-test}"
+IMAGE="${IMAGE:-xianix-executor-opencode:integration-test}"
 
 # ── Pretty output helpers ─────────────────────────────────────────────────────
 
@@ -796,12 +796,6 @@ fi
 
 if [ -z "${SKIP_BUILD:-}" ]; then
     banner "Building Executor.OpenCode image (${IMAGE})"
-    # Dockerfile COPY vendor/plugins — ensure a minimal stub when none published.
-    mkdir -p "${EXECUTOR_DIR}/vendor/plugins/_it-stub/.claude-plugin"
-    if [ ! -f "${EXECUTOR_DIR}/vendor/plugins/_it-stub/.claude-plugin/plugin.json" ]; then
-        printf '%s\n' '{"name":"_it-stub","version":"0.0.0"}' \
-            > "${EXECUTOR_DIR}/vendor/plugins/_it-stub/.claude-plugin/plugin.json"
-    fi
     docker build -t "${IMAGE}" "${EXECUTOR_DIR}"
 else
     banner "Using existing image (${IMAGE})"
