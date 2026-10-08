@@ -15,7 +15,6 @@ OpenCode-only Docker image for Xianix. Same prepare / worktree / mise isolation 
 | `execute_opencode.py` | `opencode run` → JSON envelope |
 | `host_context.py` | Platform / runtime / plugin recipe preamble |
 | `plugin_runtime.py` | Convert Claude plugin `.md` → OpenCode overlay + slash-command match |
-| `scripts/publish_plugins.py` | Optional offline helper (not used by the image) |
 | `generate_context.sh` | Deterministic orientation + symbol map |
 | `provision_runtimes.sh` | mise from **repo** version files only |
 | `maintain_volume.sh` | git gc, sessions, mise prune |
