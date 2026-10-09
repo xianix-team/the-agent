@@ -10,8 +10,11 @@ on:
       - '.github/workflows/publish-executor-opencode.yml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
-  IMAGE_NAME: executor.opencode
+  IMAGE_NAME: xianix-executor-opencode
   DOCKERHUB_USERNAME: hasithy99x
   DOCKERHUB_ORG: 99xio
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -21,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
 
     - name: Run shellcheck on Executor.OpenCode scripts
       run: shellcheck --severity=warning Executor.OpenCode/*.sh Executor.OpenCode/tests/*.sh
@@ -32,12 +35,12 @@ jobs:
     timeout-minutes: 30
     steps:
     - name: Checkout code
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
 
     # Local builds expect a sibling ../plugins-official; CI checks it out into the
     # workspace and passes --plugins-root so publish_plugins.py can find it.
     - name: Checkout plugins-official
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
       with:
         repository: xianix-team/plugins-official
         path: plugins-official
@@ -51,38 +54,53 @@ jobs:
       run: python Executor.OpenCode/scripts/publish_plugins.py --plugins-root plugins-official/plugins
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@v4
 
     - name: Build OpenCode executor image for testing
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@v7
       with:
         context: ./Executor.OpenCode
         file: ./Executor.OpenCode/Dockerfile
         platforms: linux/amd64
         load: true
         push: false
-        tags: executor.opencode:integration-test
-        cache-from: type=gha,scope=executor-opencode
-        cache-to: type=gha,mode=max,scope=executor-opencode
+        tags: xianix-executor-opencode:integration-test
+        # Share layer cache with the amd64 publish build.
+        cache-from: type=gha,scope=executor-opencode-amd64
+        cache-to: type=gha,mode=max,scope=executor-opencode-amd64
 
     - name: Run integration tests
       env:
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       run: |
-        SKIP_BUILD=1 IMAGE=executor.opencode:integration-test \
+        SKIP_BUILD=1 IMAGE=xianix-executor-opencode:integration-test \
           bash Executor.OpenCode/tests/integration_test.sh
 
-  build-and-push:
-    runs-on: ubuntu-latest
+  # Each architecture is built on a native runner. Combining platforms in one
+  # buildx invocation emulates arm64 via QEMU and has hung sibling images.
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
     needs: [shellcheck, integration-test]
     if: github.event_name != 'pull_request'
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
 
     - name: Checkout plugins-official
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
       with:
         repository: xianix-team/plugins-official
         path: plugins-official
@@ -96,17 +114,112 @@ jobs:
       run: python Executor.OpenCode/scripts/publish_plugins.py --plugins-root plugins-official/plugins
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@v4
 
     - name: Log in to DockerHub
-      uses: docker/login-action@v3
+      uses: docker/login-action@v4
       with:
         username: ${{ env.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+    - name: Extract image labels
+      id: meta
+      uses: docker/metadata-action@v6
+      with:
+        images: ${{ env.DOCKERHUB_ORG }}/${{ env.IMAGE_NAME }}
+        labels: |
+          org.opencontainers.image.title=${{ env.IMAGE_NAME }}
+          org.opencontainers.image.description=Xianix OpenCode Executor — isolated container for tenant-scoped OpenCode execution
+          org.opencontainers.image.vendor=${{ env.DOCKERHUB_ORG }}
+
+    - name: Build and push by digest
+      id: build
+      uses: docker/build-push-action@v7
+      with:
+        context: ./Executor.OpenCode
+        file: ./Executor.OpenCode/Dockerfile
+        platforms: ${{ matrix.platform }}
+        labels: ${{ steps.meta.outputs.labels }}
+        # Provenance adds an extra manifest per platform, which conflicts with
+        # assembling the manifest list by digest in the publish job.
+        provenance: false
+        cache-from: type=gha,scope=executor-opencode-${{ matrix.arch }}
+        cache-to: type=gha,mode=max,scope=executor-opencode-${{ matrix.arch }}
+        outputs: type=image,name=${{ env.DOCKERHUB_ORG }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+
+    - name: Export digest
+      run: |
+        mkdir -p "${{ runner.temp }}/digests"
+        digest="${{ steps.build.outputs.digest }}"
+        touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+    - name: Upload digest
+      uses: actions/upload-artifact@v7
+      with:
+        name: digest-${{ matrix.arch }}
+        path: ${{ runner.temp }}/digests/*
+        if-no-files-found: error
+        retention-days: 1
+
+  publish:
+    name: Publish manifest
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 15
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+      with:
+        # Full history so we can tell whether the tagged commit is on main.
+        fetch-depth: 0
+
+    - name: Download digests
+      uses: actions/download-artifact@v8
+      with:
+        path: ${{ runner.temp }}/digests
+        pattern: digest-*
+        merge-multiple: true
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+
+    - name: Log in to DockerHub
+      uses: docker/login-action@v4
+      with:
+        username: ${{ env.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Check if tag is releasable as latest
+      id: latest_check
+      env:
+        REF_TYPE: ${{ github.ref_type }}
+        REF_NAME: ${{ github.ref_name }}
+        SHA: ${{ github.sha }}
+      run: |
+        # ":latest" only for the newest stable release cut from main.
+        # Manual runs, pre-releases, tags off main, and older versions never move it.
+        is_latest=false
+        git fetch origin main --tags --quiet
+        highest=$(git tag -l 'v*' --sort=-v:refname | grep -v -e '-' | head -n1)
+        if [ "$REF_TYPE" != "tag" ]; then
+          reason="not a tag push"
+        elif [[ "$REF_NAME" == *-* ]]; then
+          reason="pre-release tag"
+        elif ! git merge-base --is-ancestor "$SHA" origin/main; then
+          reason="tagged commit is not on main branch history"
+        elif [ "$REF_NAME" != "$highest" ]; then
+          reason="not the highest release (highest is $highest)"
+        else
+          is_latest=true
+          reason="newest stable release on main"
+        fi
+        echo "$REF_NAME: is_latest=$is_latest ($reason)"
+        echo "is_latest=$is_latest" >> "$GITHUB_OUTPUT"
+
     - name: Extract metadata
       id: meta
-      uses: docker/metadata-action@v5
+      uses: docker/metadata-action@v6
       with:
         images: ${{ env.DOCKERHUB_ORG }}/${{ env.IMAGE_NAME }}
         tags: |
@@ -114,23 +227,22 @@ jobs:
           type=semver,pattern={{version}}
           type=semver,pattern={{major}}.{{minor}}
           type=semver,pattern={{major}}
-          type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
-        labels: |
-          org.opencontainers.image.title=${{ env.IMAGE_NAME }}
-          org.opencontainers.image.description=Xianix OpenCode Executor — isolated container for tenant-scoped OpenCode execution
-          org.opencontainers.image.vendor=${{ env.DOCKERHUB_ORG }}
+          type=raw,value=latest,enable=${{ steps.latest_check.outputs.is_latest == 'true' }}
+        # Disable latest=auto so only the check above can emit :latest.
+        flavor: |
+          latest=false
 
-    - name: Build and push Docker image
-      uses: docker/build-push-action@v6
-      with:
-        context: ./Executor.OpenCode
-        file: ./Executor.OpenCode/Dockerfile
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha,scope=executor-opencode
-        cache-to: type=gha,mode=max,scope=executor-opencode
+    - name: Create and push manifest list
+      working-directory: ${{ runner.temp }}/digests
+      run: |
+        docker buildx imagetools create \
+          $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+          $(printf '${{ env.DOCKERHUB_ORG }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+
+    - name: Inspect published image
+      run: |
+        docker buildx imagetools inspect \
+          "${{ env.DOCKERHUB_ORG }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}"
 
     - name: Generate build summary
       run: |
@@ -140,6 +252,8 @@ jobs:
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
         echo '${{ steps.meta.outputs.tags }}' | sed 's/^/- `/' | sed 's/$/`/' >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Eligible for :latest:** ${{ steps.latest_check.outputs.is_latest }}" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "**Platforms:** linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
