@@ -1,5 +1,4 @@
-﻿vendor/
-*.pyc
+﻿*.pyc
 __pycache__/
 .pytest_cache/
 tests/.env
