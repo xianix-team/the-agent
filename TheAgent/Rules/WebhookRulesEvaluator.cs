@@ -243,6 +243,7 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
                 AllowedTools:         execution.AllowedTools,
                 DisallowedTools:      execution.DisallowedTools,
                 MaxBudgetUsd:         execution.MaxBudgetUsd,
+                ExecutorImage:        execution.ExecutorImage?.Trim() ?? "",
                 ResumeSessions:       execution.ResumeSessions,
                 RaiseEvents:          raiseEvents.Count > 0 ? raiseEvents : null));
         }

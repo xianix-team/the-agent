@@ -135,6 +135,7 @@ public class ProcessingWorkflow
             AllowedTools = result.Execution.AllowedTools,
             DisallowedTools = result.Execution.DisallowedTools,
             MaxBudgetUsd = result.Execution.MaxBudgetUsd,
+            ExecutorImage = result.Execution.ExecutorImage,
             ResumeSessions = result.Execution.ResumeSessions,
         };
     }
