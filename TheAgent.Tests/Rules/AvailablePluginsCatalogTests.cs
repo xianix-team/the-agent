@@ -261,7 +261,7 @@ public class AvailablePluginsCatalogTests
                 allowedTools: ["Read", "Bash"],
                 disallowedTools: ["WebSearch"],
                 resumeSessions: true,
-                executorImage: "xianix-open-executor:latest"),
+                executorImage: "99xio/xianix-executor-opencode:latest"),
         };
 
         var plugin  = Assert.Single(AvailablePluginsCatalog.BuildCatalog([], chatRules));
@@ -272,7 +272,7 @@ public class AvailablePluginsCatalogTests
         Assert.Equal(20, example.MaxTurns);
         Assert.Equal(new[] { "Read", "Bash" }, example.AllowedTools);
         Assert.Equal(new[] { "WebSearch" }, example.DisallowedTools);
-        Assert.Equal("xianix-open-executor:latest", example.ExecutorImage);
+        Assert.Equal("99xio/xianix-executor-opencode:latest", example.ExecutorImage);
         Assert.True(example.ResumeSessions);
         Assert.Equal("", example.ExecutePrompt);
         Assert.Empty(example.Inputs);

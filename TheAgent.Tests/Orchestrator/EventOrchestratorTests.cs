@@ -163,7 +163,7 @@ public class EventOrchestratorTests
             Platform: "github",
             RepositoryUrl: "https://github.com/acme/app.git",
             RepositoryName: "acme/app",
-            ExecutorImage: "xianix-open-executor:latest");
+            ExecutorImage: "99xio/xianix-executor-opencode:latest");
 
         _evaluator.EvaluateAsync("Default", Arg.Any<object?>())
                   .Returns(Task.FromResult(EvaluationOutcome.Match(evaluation)));
@@ -176,7 +176,7 @@ public class EventOrchestratorTests
         Assert.Equal("github", execution!.Platform);
         Assert.Equal("https://github.com/acme/app.git", execution.RepositoryUrl);
         Assert.Equal("acme/app", execution.RepositoryName);
-        Assert.Equal("xianix-open-executor:latest", execution.ExecutorImage);
+        Assert.Equal("99xio/xianix-executor-opencode:latest", execution.ExecutorImage);
     }
 
     [Fact]

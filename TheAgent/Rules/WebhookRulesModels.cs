@@ -238,7 +238,7 @@ public sealed class WebhookExecution
     public double? MaxBudgetUsd { get; init; }
 
     /// <summary>
-    /// Optional Docker image for this execution's harness (e.g. <c>xianix-open-executor:latest</c>
+    /// Optional Docker image for this execution's harness (e.g. <c>99xio/xianix-executor-opencode:latest</c>
     /// or <c>99xio/xianix-executor:latest</c>). When set, the control plane starts the container
     /// with this image instead of the host <c>EXECUTOR-IMAGE</c>. Empty means "use the host
     /// default". Lets different executions use different harnesses without restarting the agent.

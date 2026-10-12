@@ -260,7 +260,7 @@
         "conversation-key": "pull_request.number",
         "model": "openai/gpt-5.3-codex",
         "max-budget-usd": 3,
-        "executor-image": "executor.opencode:latest",
+        "executor-image": "99xio/xianix-executor-opencode:latest",
         "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}}. Run /pr-review {{pr-number}} to perform the automated review."
       },
       {
