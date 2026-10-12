@@ -89,9 +89,10 @@ def build_plugin_recipe_block(prompt: str) -> str | None:
 
     return (
         f"{RECIPE_CONTEXT_MARKER}\n"
-        f"This is an OpenCode executor — Claude marketplace plugin loaders are "
-        f"not available. Plugin `{plugin_id}` uses its harness-native "
-        f"`.opencode/` recipe.\n"
+        f"This is an OpenCode executor — plugins are installed with "
+        f"`claude plugin marketplace add/install` (same as the Claude executor), "
+        f"then converted to a harness-native `.opencode/` recipe. "
+        f"Plugin `{plugin_id}` is staged under CLAUDE_PLUGIN_ROOT.\n"
         f"Matched command: /{matched}. Read and follow {lead} exactly.\n"
         f"Use scripts under CLAUDE_PLUGIN_ROOT={plugin_root} "
         f"(also exported as XIANIX_PLUGIN_ROOT). Do not invent a shallow "
