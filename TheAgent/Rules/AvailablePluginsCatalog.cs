@@ -270,6 +270,7 @@ internal static class AvailablePluginsCatalog
                 AllowedTools:    execution.AllowedTools,
                 DisallowedTools: execution.DisallowedTools,
                 MaxBudgetUsd:    execution.MaxBudgetUsd,
+                ExecutorImage:   execution.ExecutorImage?.Trim() ?? "",
                 ResumeSessions:  execution.ResumeSessions);
 
             _webhookUsages.Add(usage);
@@ -319,6 +320,7 @@ internal static class AvailablePluginsCatalog
                 AllowedTools:    set.AllowedTools,
                 DisallowedTools: set.DisallowedTools,
                 MaxBudgetUsd:    set.MaxBudgetUsd,
+                ExecutorImage:   set.ExecutorImage?.Trim() ?? "",
                 ResumeSessions:  set.ResumeSessions));
 
             foreach (var env in set.WithEnvs)
@@ -403,10 +405,11 @@ internal sealed record CatalogEnvRequirement(string Name, bool Mandatory);
 
 /// <summary>
 /// One way this plugin is normally invoked. The <c>Model</c>/<c>MaxTurns</c>/<c>AllowedTools</c>/
-/// <c>DisallowedTools</c>/<c>MaxBudgetUsd</c>/<c>ResumeSessions</c> fields mirror the cost/control
-/// knobs of the <see cref="WebhookExecution"/> this example was built from, so a chat dispatch
-/// that wins this example can apply the same tuning a webhook run of the same execution block
-/// would get — instead of silently falling back to the executor's untuned defaults.
+/// <c>DisallowedTools</c>/<c>MaxBudgetUsd</c>/<c>ExecutorImage</c>/<c>ResumeSessions</c> fields
+/// mirror the cost/control knobs of the <see cref="WebhookExecution"/> this example was built
+/// from, so a chat dispatch that wins this example can apply the same tuning a webhook run of
+/// the same execution block would get — instead of silently falling back to the executor's
+/// untuned defaults.
 /// </summary>
 internal sealed record CatalogUsageExample(
     string ExecutionName,
@@ -417,6 +420,7 @@ internal sealed record CatalogUsageExample(
     IReadOnlyList<string> AllowedTools,
     IReadOnlyList<string> DisallowedTools,
     double? MaxBudgetUsd,
+    string ExecutorImage,
     bool ResumeSessions);
 
 /// <summary>
