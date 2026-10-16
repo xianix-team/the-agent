@@ -62,6 +62,36 @@ TheAgent/.env.production
 # Local History for Visual Studio
 *.lscache
 
+# IDE / editor state
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+.idea/
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Environment files (keep examples)
+.env.*
+!.env.example
+
+# Python virtual environments / caches
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Test coverage output
+coverage/
+*.coverage
+*.coveragexml
+
 # Python (Executor/) bytecode caches
 __pycache__/
 *.py[cod]
