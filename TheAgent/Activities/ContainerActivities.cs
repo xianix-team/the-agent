@@ -273,14 +273,25 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
         ArgumentNullException.ThrowIfNull(input);
         ArgumentException.ThrowIfNullOrWhiteSpace(input.TenantId);
 
-        var image = string.IsNullOrWhiteSpace(input.ExecutorImage)
-            ? EnvConfig.ExecutorImage
-            : input.ExecutorImage.Trim();
         var logger = ActivityExecutionContext.Current.Logger;
+        var decision = ExecutorImagePolicy.Resolve(
+            input.ExecutorImage, EnvConfig.ExecutorImage, EnvConfig.ExecutorImageAllowlist);
+        if (!decision.Allowed)
+        {
+            logger.LogError(
+                "Refusing executor-image override for tenant={TenantId}: {Reason}.",
+                input.TenantId, decision.Reason);
+            throw new ApplicationFailureException(
+                $"executor-image rejected: {decision.Reason}. Use an image from an allowed repository " +
+                "or ask the operator to add it to EXECUTOR-IMAGE-ALLOWLIST.",
+                nonRetryable: true);
+        }
+
+        var image = decision.Image;
         logger.LogInformation(
             "Starting container for tenant={TenantId}, image={Image} (source={ImageSource}).",
             input.TenantId, image,
-            string.IsNullOrWhiteSpace(input.ExecutorImage) ? "host EXECUTOR-IMAGE" : "rules.json executor-image");
+            decision.IsOverride ? "execution executor-image" : "host EXECUTOR-IMAGE");
 
         var env = await BuildEnvVarsAsync(input);
 

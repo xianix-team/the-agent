@@ -98,6 +98,7 @@ public static class EnvConfig
 
     // Docker executor
     public static string ExecutorImage      => Get("EXECUTOR-IMAGE", "99xio/xianix-executor:latest");
+    public static string ExecutorImageAllowlist => Get("EXECUTOR-IMAGE-ALLOWLIST");
     public static long   ContainerMemoryBytes =>
         long.TryParse(Get("CONTAINER-MEMORY-MB", "1024"), out var mb) ? mb * 1024 * 1024 : 1024L * 1024 * 1024;
     public static double ContainerCpuCount =>

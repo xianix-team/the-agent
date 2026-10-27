@@ -261,7 +261,34 @@
         "model": "openai/gpt-5.3-codex",
         "max-budget-usd": 3,
         "executor-image": "99xio/xianix-executor-opencode:latest",
-        "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}}. Run /pr-review {{pr-number}} to perform the automated review."
+        "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}}. Run /pr-review {{pr-number}} to perform the automated review.",
+        "raise-events": [
+          {
+            "name": "ai-hub-metrics",
+            "url": "https://ai-hub-api.99x.io/metrics/nodes/nd_FNZoN9xQkP/node-activities/na_Tjd72dAipX/events",
+            "with-headers": [
+              {
+                "name": "X-Api-Key",
+                "value": "secrets.AIHUB-API-KEY",
+                "mandatory": true
+              }
+            ],
+            "payload": [
+              {
+                "correlationId": "{{correlationId}}",
+                "actors": [
+                  "{{plugin-name}}"
+                ],
+                "dimensions": {
+                  "tokens": "{{metrics.tokens.total}}",
+                  "costUsd": "{{metrics.cost-usd}}",
+                  "model": "{{metrics.model}}",
+                  "status": "{{metrics.status}}"
+                }
+              }
+            ]
+          }
+        ]
       },
       {
         "name": "github-performance-optimizer",

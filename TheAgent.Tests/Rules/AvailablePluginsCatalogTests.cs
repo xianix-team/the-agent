@@ -235,12 +235,20 @@ public class AvailablePluginsCatalogTests
     [Fact]
     public void BuildCatalog_PluginNotInChatRuleSet_FallsBackToWebhookUsageExamples()
     {
-        var rules = new[] { RuleSetWith(Execution("github", "pr-reviewer")) };
+        var execution = new WebhookExecution
+        {
+            Name          = "github-pr-reviewer",
+            Platform      = "github",
+            Plugins       = [new PluginEntry { PluginName = "pr-reviewer", Marketplace = "mp" }],
+            ExecutorImage = " 99xio/xianix-executor-opencode:latest ",
+        };
+        var rules = new[] { RuleSetWith(execution) };
 
         var plugin  = Assert.Single(AvailablePluginsCatalog.BuildCatalog(rules));
         var example = Assert.Single(plugin.UsageExamples);
 
         Assert.Equal("github-pr-reviewer", example.ExecutionName);
+        Assert.Equal("99xio/xianix-executor-opencode:latest", example.ExecutorImage);
     }
 
     /// <summary>
