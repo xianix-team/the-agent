@@ -86,6 +86,7 @@ public class ClaudeCodeChatWorkflow
             AllowedTools      = req.AllowedTools,
             DisallowedTools   = req.DisallowedTools,
             MaxBudgetUsd      = req.MaxBudgetUsd,
+            ExecutorImage     = req.ExecutorImage,
             ResumeSessions    = req.ResumeSessions,
             VolumeName        = volumeName,
             RuntimeVolumeName = runtimeVolumeName,

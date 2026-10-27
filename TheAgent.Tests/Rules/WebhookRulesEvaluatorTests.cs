@@ -697,6 +697,38 @@ public class WebhookRulesEvaluatorTests
         Assert.Equal("42", outcome.Results![0].Inputs["conversation-id"]);
     }
 
+    [Theory]
+    [InlineData("\"executor-image\": \"99xio/xianix-executor-opencode:latest\",",     "99xio/xianix-executor-opencode:latest")]
+    [InlineData("\"executor-image\": \"  99xio/xianix-executor-opencode:latest  \",", "99xio/xianix-executor-opencode:latest")]
+    [InlineData("",                                                                    "")]
+    public void EvaluateWithRules_ExecutorImage_IsBoundTrimmedAndDefaultsToEmpty(string executorImageJson, string expected)
+    {
+        using var doc = JsonDocument.Parse("""{ "action": "opened" }""");
+        var ruleSets = _sut.ParseRules(
+            $$"""
+            [
+              {
+                "webhook": "Default",
+                "executions": [
+                  {
+                    "name": "opencode-block",
+                    {{executorImageJson}}
+                    "match-any": [ { "rule": "action==opened" } ],
+                    "use-inputs": [],
+                    "use-plugins": [],
+                    "execute-prompt": "review"
+                  }
+                ]
+              }
+            ]
+            """);
+
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.True(outcome.Matched);
+        Assert.Equal(expected, outcome.Results![0].ExecutorImage);
+    }
+
     [Fact]
     public void EvaluateWithRules_ConversationKeyUnresolvable_IsBestEffortAndDoesNotSkip()
     {
@@ -1471,5 +1503,30 @@ public class WebhookRulesEvaluatorTests
         Assert.Equal("@xianix", match.Inputs["user-instruction"]?.ToString());
         Assert.Equal("hasith", match.Inputs["comment-author"]?.ToString());
         Assert.Equal("4958276471", match.Inputs["comment-id"]?.ToString());
+    }
+
+    [Fact]
+    public void EvaluateWithRules_GithubPrLabeledOpencode_RoutesToOpencodeExecutorImage()
+    {
+        var rulesJson = File.ReadAllText(
+            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "TheAgent", "Knowledge", "rules.json"));
+
+        using var doc = JsonDocument.Parse(
+            """
+            {
+              "action": "labeled",
+              "label": { "name": "ai-dlc/pr/pr-review-opencode" },
+              "pull_request": { "number": 7, "state": "open", "labels": [ { "name": "ai-dlc/pr/pr-review-opencode" } ] },
+              "repository": { "clone_url": "https://github.com/acme/app.git" }
+            }
+            """);
+        var ruleSets = _sut.ParseRules(rulesJson);
+        var outcome = _sut.EvaluateWithRules("Default", doc.RootElement, ruleSets);
+
+        Assert.True(outcome.Matched);
+        Assert.DoesNotContain(outcome.Results!, r => r.ExecutionBlockName == "github-pull-request-review");
+        var match = outcome.Results!.Single(r => r.ExecutionBlockName == "github-pull-request-review-opencode");
+        Assert.Equal("99xio/xianix-executor-opencode:latest", match.ExecutorImage);
+        Assert.NotEmpty(match.RaiseEvents);
     }
 }
