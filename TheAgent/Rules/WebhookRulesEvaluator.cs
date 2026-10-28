@@ -122,13 +122,41 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
         foreach (var execution in set.Executions)
         {
             // OR logic: pass if the match list is empty (no restrictions) or any entry matches.
-            if (execution.Match.Count > 0 && !execution.Match.Any(m => EvaluateFilter(m.Rule, root)))
+            var matchedEntries = execution.Match.Where(m => EvaluateFilter(m.Rule, root)).ToList();
+            if (execution.Match.Count > 0 && matchedEntries.Count == 0)
             {
                 failedExecutionOrdinal++;
                 failedExecutionSections.Add(
                     BuildSkippedExecutionSection(execution, failedExecutionOrdinal, root));
                 continue;
             }
+
+            // Group review: a `use-group-of` execution borrows the referenced execution's
+            // group block, plugins and tuning. A dangling reference is a rules.json mistake —
+            // skip loudly rather than run a group review with no plugin.
+            var groupSource = execution;
+            if (execution.Group is { UseGroupOf.Length: > 0 } groupRef)
+            {
+                var referenced = set.Executions.FirstOrDefault(e =>
+                    e.Group is not null && string.Equals(e.Name, groupRef.UseGroupOf, StringComparison.OrdinalIgnoreCase));
+                if (referenced is not null)
+                {
+                    groupSource = referenced;
+                }
+                else
+                {
+                    failedExecutionOrdinal++;
+                    var title = string.IsNullOrWhiteSpace(execution.Name) ? $"Execution block {failedExecutionOrdinal}" : execution.Name.Trim();
+                    _logger.LogError(
+                        "Execution '{ExecutionBlock}' for webhook '{WebhookName}' skipped: use-group-of '{Ref}' does not name an execution with a group block.",
+                        title, webhookName, groupRef.UseGroupOf);
+                    failedExecutionSections.Add(
+                        $"[{title}] Skipped — use-group-of '{groupRef.UseGroupOf}' does not name an execution with a group block.");
+                    continue;
+                }
+            }
+            var group = execution.Group is null ? null : MergeGroup(execution.Group, groupSource.Group!);
+            var requiresGroupOnly = matchedEntries.Count > 0 && matchedEntries.All(m => m.RequiresGroup);
 
             var dict = new Dictionary<string, object?>(StringComparer.Ordinal);
             var missingMandatory = new List<string>();
@@ -220,7 +248,8 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             // unambiguous (a rule-set mandatory entry overridden by an execution non-mandatory
             // entry shouldn't still trip the missing-mandatory check) and produces cleaner
             // env-provenance logs in ContainerActivities.
-            var mergedEnvs = MergeWithEnvs(set.WithEnvs, execution.WithEnvs);
+            var mergedEnvs = MergeWithEnvs(set.WithEnvs,
+                ReferenceEquals(groupSource, execution) ? execution.WithEnvs : MergeWithEnvs(groupSource.WithEnvs, execution.WithEnvs));
 
             _logger.LogInformation(
                 "Rules matched execution '{ExecutionBlock}' for webhook '{WebhookName}': {InputCount} input(s), {PluginCount} plugin(s), {WithEnvsCount} with-envs entry/entries (ruleSetCommon={CommonEnvCount}, executionOwn={OwnEnvCount}), platform='{Platform}', repo='{RepoName}', executePrompt={HasPrompt}.",
@@ -229,22 +258,29 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
                 platform.Length == 0 ? "(none)" : platform,
                 string.IsNullOrEmpty(repoName) ? (string.IsNullOrEmpty(repoUrl) ? "(none)" : repoUrl) : repoName,
                 hasPrompt);
+            // The PR description is only needed for GitHub planning-repo references; resolved
+            // here because the payload never leaves the evaluator.
+            if (group is { PrText.Length: > 0 } && TryGetElementAtPath(root, group.PrText, out var prTextEl))
+                dict["pr-text"] = JsonElementToObject(prTextEl);
+
             matches.Add(new EvaluationResult(
                 Inputs:               dict,
-                Plugins:              execution.Plugins,
+                Plugins:              groupSource.Plugins.Count > 0 && execution.Plugins.Count == 0 ? groupSource.Plugins : execution.Plugins,
                 Prompt:               prompt,
                 ExecutionBlockName:   blockName,
                 WithEnvs:             mergedEnvs,
                 Platform:             platform,
                 RepositoryUrl:        repoUrl,
                 RepositoryName:       repoName,
-                Model:                execution.Model,
-                MaxTurns:             execution.MaxTurns,
-                AllowedTools:         execution.AllowedTools,
-                DisallowedTools:      execution.DisallowedTools,
-                MaxBudgetUsd:         execution.MaxBudgetUsd,
-                ResumeSessions:       execution.ResumeSessions,
-                RaiseEvents:          raiseEvents.Count > 0 ? raiseEvents : null));
+                Model:                string.IsNullOrEmpty(execution.Model) ? groupSource.Model : execution.Model,
+                MaxTurns:             execution.MaxTurns ?? groupSource.MaxTurns,
+                AllowedTools:         execution.AllowedTools.Count > 0 ? execution.AllowedTools : groupSource.AllowedTools,
+                DisallowedTools:      execution.DisallowedTools.Count > 0 ? execution.DisallowedTools : groupSource.DisallowedTools,
+                MaxBudgetUsd:         execution.MaxBudgetUsd ?? groupSource.MaxBudgetUsd,
+                ResumeSessions:       execution.ResumeSessions || groupSource.ResumeSessions,
+                RaiseEvents:          raiseEvents.Count > 0 ? raiseEvents : null,
+                Group:                group,
+                RequiresGroupOnly:    requiresGroupOnly));
         }
 
         if (matches.Count > 0)
@@ -597,6 +633,28 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
 
         return (resolved, null);
     }
+
+    /// <summary>
+    /// Effective group block for an execution: its own <c>trigger</c> / <c>use-group-of</c>
+    /// (and <c>pr-text</c>, whose path depends on the event shape) on top of the referenced
+    /// execution's label, planning repo, caps and prompt. Without a reference, its own block.
+    /// </summary>
+    private static GroupReviewConfig MergeGroup(GroupReviewConfig own, GroupReviewConfig source) =>
+        ReferenceEquals(own, source)
+            ? own
+            : new GroupReviewConfig
+            {
+                Trigger            = own.Trigger,
+                UseGroupOf         = own.UseGroupOf,
+                PrText             = string.IsNullOrEmpty(own.PrText) ? source.PrText : own.PrText,
+                WorkItemLabel      = source.WorkItemLabel,
+                PlanningRepository = source.PlanningRepository,
+                AllowedOwners      = source.AllowedOwners,
+                DebounceSeconds    = source.DebounceSeconds,
+                MaxMembers         = source.MaxMembers,
+                MaxTotalDiffLines  = source.MaxTotalDiffLines,
+                GroupPrompt        = source.GroupPrompt,
+            };
 
     /// <summary>
     /// Merges rule-set-wide common <c>with-envs</c> with an execution's own <c>with-envs</c>.

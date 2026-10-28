@@ -257,6 +257,16 @@ public sealed class WebhookExecution
     public RepoFieldBinding? ConversationKey { get; init; }
 
     /// <summary>
+    /// Optional multi-PR group review. When present, a match is routed through work-item
+    /// discovery instead of straight to <c>ProcessingWorkflow</c>: if the PR's work item
+    /// carries the opt-in label and links two or more open PRs, the group workflow reviews
+    /// them together; otherwise the execution runs as an ordinary single-PR review (or is
+    /// ignored when only <c>requires-group</c> entries matched). See <see cref="GroupReviewConfig"/>.
+    /// </summary>
+    [JsonPropertyName("group")]
+    public GroupReviewConfig? Group { get; init; }
+
+    /// <summary>
     /// Prompt template to execute after all plugins are installed.
     /// Supports <c>{{input-name}}</c> placeholders that are replaced with resolved input values.
     /// </summary>
@@ -373,6 +383,88 @@ public sealed class MatchEntry
 {
     public string Name { get; init; } = "";
     public string Rule { get; init; } = "";
+
+    /// <summary>
+    /// When true, this entry only counts if work-item discovery finds an opted-in group for
+    /// the PR. Used for PR events that should be reviewed as part of a group but never on
+    /// their own (e.g. a GitHub PR that references the planning repo but has no review label).
+    /// </summary>
+    [JsonPropertyName("requires-group")]
+    public bool RequiresGroup { get; init; }
+}
+
+/// <summary>
+/// The <c>group</c> block of an execution — opts it into multi-PR group review.
+/// A group is the set of open PRs linked to one work item (Azure DevOps work item, or a
+/// GitHub issue in <see cref="PlanningRepository"/>) that carries <see cref="WorkItemLabel"/>.
+/// </summary>
+public sealed class GroupReviewConfig
+{
+    public const string DefaultLabel = "ai-dlc/pr/group-review";
+
+    /// <summary>
+    /// What fired this execution: <c>pull-request</c> (default — a PR event; discovery goes
+    /// PR → work item → linked PRs), <c>work-item</c> (the opt-in label was added to or removed
+    /// from the work item) or <c>comment</c> (an <c>@xianix review group</c> request on a PR).
+    /// </summary>
+    [JsonPropertyName("trigger")]
+    public string Trigger { get; init; } = GroupTriggers.PullRequest;
+
+    /// <summary>
+    /// Name of another execution in the same rule set whose <c>group</c> block, plugins and
+    /// tuning this one reuses — so a work-item or comment execution can never drift from the
+    /// PR execution it serves.
+    /// </summary>
+    [JsonPropertyName("use-group-of")]
+    public string UseGroupOf { get; init; } = "";
+
+    /// <summary>The opt-in label (GitHub) / tag (Azure DevOps) on the work item.</summary>
+    [JsonPropertyName("work-item-label")]
+    public string WorkItemLabel { get; init; } = DefaultLabel;
+
+    /// <summary>
+    /// GitHub only, optional: <c>owner/repo</c> holding the planning issues. When set, only issues
+    /// in that repo can be a group's work item. When empty, any issue the PR references that
+    /// carries <see cref="WorkItemLabel"/> can be — limited to the PR owner's repos (and
+    /// <see cref="AllowedOwners"/>) — so one generic rules.json works for every tenant.
+    /// </summary>
+    [JsonPropertyName("planning-repository")]
+    public string PlanningRepository { get; init; } = "";
+
+    /// <summary>
+    /// GitHub only: extra owners (orgs/users) whose repos and issues may be in a group. The
+    /// work item's owner (and, for issue lookup, the PR's owner) is always allowed; a link into
+    /// any other owner is dropped.
+    /// </summary>
+    [JsonPropertyName("allowed-owners")]
+    public List<string> AllowedOwners { get; init; } = [];
+
+    /// <summary>JSON path to the PR description in the webhook payload (GitHub planning refs).</summary>
+    [JsonPropertyName("pr-text")]
+    public string PrText { get; init; } = "";
+
+    [JsonPropertyName("debounce-seconds")]
+    public int DebounceSeconds { get; init; } = 180;
+
+    [JsonPropertyName("max-members")]
+    public int MaxMembers { get; init; } = 6;
+
+    [JsonPropertyName("max-total-diff-lines")]
+    public int MaxTotalDiffLines { get; init; } = 6000;
+
+    /// <summary>
+    /// Prompt for a group run. Placeholders: <c>{{work-item-title}}</c>, <c>{{work-item-url}}</c>,
+    /// <c>{{group-size}}</c>, <c>{{group-key}}</c>.
+    /// </summary>
+    [JsonPropertyName("group-prompt")]
+    public string GroupPrompt { get; init; } = "";
+}
+
+public static class GroupTriggers
+{
+    public const string PullRequest = "pull-request";
+    public const string WorkItem = "work-item";
+    public const string Comment = "comment";
 }
 
 /// <summary>

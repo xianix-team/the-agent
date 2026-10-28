@@ -179,7 +179,46 @@ prepare_empty_workspace() {
     mkdir -p "${WORK_DIR}"
 }
 
-if [ -n "${REPOSITORY_URL}" ]; then
+# Multi-PR group run: the same clone/refresh/maintain steps as a single repo, once
+# per distinct member repo, then one worktree per member under ${WORK_DIR}/<slug>.
+# Writes ${WORK_DIR}/.xianix/group.json (the inputs plus each member's worktree
+# `path`) for the plugin, which reads it instead of re-deriving the group.
+prepare_group_workspace() {
+    local primary_dir="${REPO_DIR}" primary_url="${REPOSITORY_URL}"
+    local slug url dir prepared=" "
+    mkdir -p "${WORK_DIR}/.xianix"
+
+    while IFS=$'\x1f' read -r slug url dir; do
+        [ -n "${slug}" ] || continue
+        REPO_DIR="${dir}"
+        REPOSITORY_URL="${url}"
+        log "--- Group member '${slug}': ${url} (bare clone at ${dir}) ---"
+        mkdir -p "${REPO_DIR}"
+        if [[ "${prepared}" != *" ${dir} "* ]]; then
+            configure_credentials
+            ensure_bare_repo
+            pull_default_branch
+            "${SCRIPT_DIR}/maintain_volume.sh" "${REPO_DIR}" \
+                || log "WARNING: volume maintenance failed for '${slug}' — continuing."
+            prepared+="${dir} "
+        fi
+        if [ "${XIANIX_MODE}" != "prepare" ]; then
+            git -C "${REPO_DIR}" worktree add "${WORK_DIR}/${slug}" HEAD --detach >&2
+        fi
+    done < <(group_members)
+
+    REPO_DIR="${primary_dir}"
+    REPOSITORY_URL="${primary_url}"
+
+    echo "${XIANIX_INPUTS}" | jq --arg w "${WORK_DIR}" --argjson repos "${XIANIX_GROUP_REPOS}" \
+        'del(.repositories) + {repositories: [$repos[] | . + {path: ($w + "/" + .slug)}]}' \
+        > "${WORK_DIR}/.xianix/group.json"
+    log "--- Group workspace ready: $(echo "${XIANIX_GROUP_REPOS}" | jq length) member(s) ---"
+}
+
+if [ "${XIANIX_GROUP_MODE}" = "1" ]; then
+    prepare_group_workspace
+elif [ -n "${REPOSITORY_URL}" ]; then
     configure_credentials
     ensure_bare_repo
     # Refresh the default branch unconditionally — both webhook executions and

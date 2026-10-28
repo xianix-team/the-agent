@@ -19,6 +19,7 @@ public class XianixAgent(
     ILoggerFactory loggerFactory)
 {
     private readonly WebhookVerificationGate _webhookVerificationGate = new(logger);
+    private readonly PrGroupDispatcher _groupDispatcher = new(loggerFactory.CreateLogger<PrGroupDispatcher>());
 
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
@@ -151,6 +152,14 @@ public class XianixAgent(
             .AddActivity<RaiseEventActivities>();
 
         xiansAgent.Workflows
+            .DefineCustom<PrGroupReviewWorkflow>(
+                new WorkflowOptions { Activable = false },
+                typeName: EnvConfig.AgentName + ":PrGroupReview Workflow")
+            .AddActivity<ContainerActivities>()
+            .AddActivity<RaiseEventActivities>()
+            .AddActivity<PrGroupActivities>();
+
+        xiansAgent.Workflows
             .DefineCustom<ClaudeCodeChatWorkflow>(new WorkflowOptions { Activable = false },
             typeName: EnvConfig.AgentName + ":ClaudeCodeChat Workflow")
             .AddActivity<ContainerActivities>();
@@ -225,21 +234,31 @@ public class XianixAgent(
                     return;
                 }
 
+                var outcomes = new List<string?>();
                 foreach (var result in batch.Matches)
                 {
+                    if (result.Group is not null)
+                    {
+                        // Group-enabled execution: discovery decides between the group
+                        // workflow, a single-PR review, or nothing.
+                        outcomes.Add(await _groupDispatcher.DispatchAsync(result, cancellationToken));
+                        continue;
+                    }
                     await XiansContext.Workflows.StartAsync<ProcessingWorkflow>(
                         new object[] { result },
                         Guid.NewGuid().ToString());
+                    outcomes.Add(null);
                 }
 
                 context.Respond(new
                 {
                     status = "success",
                     matchCount = batch.Matches.Count,
-                    matches = batch.Matches.Select(m => new
+                    matches = batch.Matches.Select((m, i) => new
                     {
                         m.ExecutionBlockName,
                         inputs = m.Inputs,
+                        group = outcomes[i],
                     }),
                 });
             }

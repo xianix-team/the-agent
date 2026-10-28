@@ -285,6 +285,8 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
         // (e.g. older histories mid-flight during a deploy) the executor falls back to a
         // per-repo runtime cache under /workspace/repo/xianix-runtimes.
         var binds = new List<string> { $"{input.VolumeName}:/workspace/repo" };
+        foreach (var extra in input.AdditionalVolumes)
+            binds.Add($"{extra.VolumeName}:{extra.MountPath}");
         if (!string.IsNullOrWhiteSpace(input.RuntimeVolumeName))
             binds.Add($"{input.RuntimeVolumeName}:/workspace/runtimes");
 

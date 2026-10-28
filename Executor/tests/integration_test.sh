@@ -24,6 +24,7 @@
 #     2. A second "prepare" run reuses the existing clone (fetch, not re-clone).
 #     3. A new commit pushed to the fixture is picked up on the next run.
 #     4. A bad repository URL produces the structured prepare error envelope.
+#     5b. Group run: one worktree per member across volumes + .xianix/group.json.
 #     5. Worktree is created from the default branch (HEAD); plugins resolve
 #        any task-specific refs from the prompt themselves.
 #     6. Runtime provisioner: plugin `.tool-versions` entries are collected,
@@ -118,9 +119,10 @@ STDERR_FILE="${WORK_ROOT}/last-stderr"
 VOLUME_MAIN="xianix-it-main-$$"
 VOLUME_BADURL="xianix-it-badurl-$$"
 VOLUME_RUNTIMES="xianix-it-runtimes-$$"
+VOLUME_GROUP2="xianix-it-group2-$$"
 
 cleanup() {
-    docker volume rm -f "${VOLUME_MAIN}" "${VOLUME_BADURL}" "${VOLUME_RUNTIMES}" >/dev/null 2>&1 || true
+    docker volume rm -f "${VOLUME_MAIN}" "${VOLUME_BADURL}" "${VOLUME_RUNTIMES}" "${VOLUME_GROUP2}" >/dev/null 2>&1 || true
     rm -rf "${WORK_ROOT}"
 }
 trap cleanup EXIT
@@ -394,6 +396,78 @@ test_worktree_uses_default_branch() {
     else
         t_fail "bare-clone HEAD is '${volume_sha}', expected '${main_sha}'"
     fi
+}
+
+test_group_workspace() {
+    banner "Test 5b: group run prepares one worktree per member across volumes"
+
+    # A second fixture repo on its own volume, plus a second PR on the first repo
+    # (same volume, second worktree) — the multi-PR group review layout.
+    local second_src="${WORK_ROOT}/second-src"
+    mkdir -p "${second_src}"
+    git -C "${second_src}" init -q -b main
+    printf 'second repo\n' > "${second_src}/SECOND.md"
+    git -C "${second_src}" -c user.name=xianix-it -c user.email=it@xianix.test add -A
+    git -C "${second_src}" -c user.name=xianix-it -c user.email=it@xianix.test commit -q -m "second"
+    rm -rf "${FIXTURE_MOUNT_DIR}/second.git"
+    git clone -q --bare "${second_src}" "${FIXTURE_MOUNT_DIR}/second.git"
+
+    local inputs
+    inputs="$(jq -cn '{
+        "platform": "local", "group-key": "wi:local:it",
+        "repositories": [
+          {"slug": "fixture",   "url": "/fixtures/fixture.git", "repo-dir": "/workspace/repo",         "pr-number": 1},
+          {"slug": "second",    "url": "/fixtures/second.git",  "repo-dir": "/workspace/repos/1", "pr-number": 2},
+          {"slug": "fixture-2", "url": "/fixtures/fixture.git", "repo-dir": "/workspace/repo",         "pr-number": 3}
+        ]}')"
+
+    local out
+    set +e
+    out="$(docker run --rm --entrypoint bash \
+        -v "${FIXTURE_MOUNT_DIR}:/fixtures:ro" \
+        -v "${VOLUME_MAIN}:/workspace/repo" \
+        -v "${VOLUME_GROUP2}:/workspace/repos/1" \
+        -e "GIT_CONFIG_GLOBAL=${GITCONFIG_IN_CONTAINER}" \
+        -e "TENANT-ID=integration-test" \
+        -e "EXECUTION-ID=it-group" \
+        -e "XIANIX-MODE=prepare-and-execute" \
+        -e "XIANIX-INPUTS=${inputs}" \
+        "${IMAGE}" -c '
+            /workspace/prepare_repo.sh 2>/dev/null || { echo PREPARE_FAILED; exit 1; }
+            W=/workspace/exec-it-group
+            for s in fixture second fixture-2; do
+              [ -f "$W/$s/.git" ] && echo "WORKTREE_OK $s"
+            done
+            [ -f "$W/fixture/SECRET.md" ] && echo "FIXTURE_CONTENT_OK"
+            [ -f "$W/second/SECOND.md" ] && echo "SECOND_CONTENT_OK"
+            jq -r ".repositories[] | \"PATH \(.slug) \(.path)\"" "$W/.xianix/group.json"
+            jq -r "\"KEY \(.\"group-key\")\"" "$W/.xianix/group.json"
+        ' 2>&1)"
+    set -e
+
+    if echo "${out}" | grep -q PREPARE_FAILED; then
+        t_fail "prepare_repo.sh failed in group mode"
+        echo "${out}" | tail -20 | sed 's/^/  │ /'
+        return
+    fi
+    local s
+    for s in fixture second fixture-2; do
+        if echo "${out}" | grep -qx "WORKTREE_OK ${s}"; then
+            t_pass "worktree created for member '${s}'"
+        else
+            t_fail "no worktree for member '${s}'"
+        fi
+    done
+    echo "${out}" | grep -q FIXTURE_CONTENT_OK && t_pass "first member checked out from its own repo" \
+        || t_fail "first member worktree is missing fixture content"
+    echo "${out}" | grep -q SECOND_CONTENT_OK && t_pass "second member checked out from the second volume" \
+        || t_fail "second member worktree is missing its content"
+    echo "${out}" | grep -qx "PATH second /workspace/exec-it-group/second" \
+        && t_pass "group.json records each member's worktree path" \
+        || t_fail "group.json missing member paths"
+    echo "${out}" | grep -qx "KEY wi:local:it" \
+        && t_pass "group.json keeps the group inputs" \
+        || t_fail "group.json lost the group key"
 }
 
 # ── Tier 1 (cont.): runtime provisioner — hermetic, no network ────────────────
@@ -920,6 +994,7 @@ test_prepare_reuses_clone
 test_new_commit_is_picked_up
 test_bad_url_error_envelope
 test_worktree_uses_default_branch
+test_group_workspace
 test_runtime_provisioner_hermetic
 test_runtime_autodetects_repo_version_file
 test_runtime_fallback_hook_hermetic

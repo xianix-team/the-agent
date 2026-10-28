@@ -619,6 +619,54 @@ Only the fields declared here are transmitted. Be deliberate about that — a li
 
 ---
 
+## 8. `group` — Multi-PR group review
+
+A feature split across several repositories becomes several PRs linked to **one work item** (an Azure DevOps work item, or a GitHub issue). When that work item carries the label / tag `ai-dlc/pr/group-review`, those PRs are reviewed together by `/pr-group-review` (`pr-reviewer` plugin): each PR still gets its own review, plus cross-repo findings and a shared group summary. Design: [`multi-pr-group-review-design.md`](multi-pr-group-review-design.md).
+
+Add a `group` block to the PR review execution:
+
+```jsonc
+"group": {
+  "work-item-label": "ai-dlc/pr/group-review",   // opt-in label (GitHub) / tag (Azure DevOps) on the work item
+  "planning-repository": "",                      // GitHub only, optional: restrict work items to issues in this owner/repo
+  "allowed-owners": [],                           // GitHub only: extra owners whose repos/issues may be in a group
+  "pr-text": "pull_request.body",                 // JSON path to the PR description (GitHub issue references)
+  "debounce-seconds": 180,                        // quiet period before a group run
+  "max-members": 6,                               // open PRs per run (max 13: 1 + 12 extra repo mounts)
+  "group-prompt": "… Run /pr-group-review …"      // {{work-item-title}} {{work-item-url}} {{group-size}} {{group-key}}
+}
+```
+
+On every PR event that execution matches, the agent looks up the PR's work item (2–3 REST calls, no LLM):
+
+| Work item labelled? | Open PRs linked | Result |
+|---|---|---|
+| Yes | ≥ 2 | Signal the group's `PrGroupReviewWorkflow` (one per work item: debounced, single-flight). No single-PR review. |
+| Yes | 1 | Ordinary single-PR review (`execute-prompt`). |
+| No, or no work item | — | Ordinary single-PR review — unless only `requires-group` entries matched, then ignored. |
+
+**GitHub work items.** A PR joins a GitHub group through an issue it references — `owner/repo#12`, `#12` (same repo), an issue URL, a closing keyword, or the issue's *Development* link. With `planning-repository` empty (the default), any such issue counts if it carries the label and belongs to the PR's owner (or an `allowed-owners` entry); set `planning-repository` to accept only issues from one repo. Prefer a non-closing reference (`Part of owner/repo#12`): closing keywords and Development links close the issue when the first PR merges.
+
+**`requires-group` on a `match-any` entry** marks a trigger that should only ever produce a group review — e.g. on GitHub, PR events of PRs that carry no per-PR review label:
+
+```jsonc
+{ "name": "github-pr-group-candidate-synchronize", "requires-group": true,
+  "rule": "action==synchronize&&pull_request.state=='open'" }
+```
+
+Each such event costs one GitHub API call (no LLM, no container) to check for a labelled issue.
+
+**Companion executions** reuse the PR execution's group block, plugins and tuning through `use-group-of`:
+
+| `group.trigger` | Fires on | Does |
+|---|---|---|
+| `work-item` | Label / tag added or removed on the work item. Azure DevOps: input `work-item-url` = `resource.url`. GitHub: inputs `work-item-number` = `issue.number` and `work-item-repository` = `repository.full_name` (`issues` events). | Added: start the group. Removed: disable it. |
+| `comment` | `@xianix review group` on a member PR (inputs as for the PR execution). | Forced group run (15 s debounce, unchanged members re-reviewed), or one reply explaining how to enable group review. |
+
+The shipped `rules.json` enables this for both platforms with no tenant-specific values — GitHub (`github-pull-request-review`, `github-work-item-group-review-label`, `github-pr-group-review-requested`) and Azure DevOps (`azuredevops-pull-request-review`, `azuredevops-work-item-group-review-tag`, `azuredevops-pr-group-review-requested`) — and guards the generic `@xianix` comment executions with `!*='@xianix review group'`. On GitHub, label events need the repo holding the issue to send `issues` webhooks.
+
+---
+
 ## Complete example (GitHub PR opened)
 
 ```json

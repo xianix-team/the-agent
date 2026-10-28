@@ -79,6 +79,14 @@ public sealed record ContainerExecutionInput
     public string VolumeName { get; init; } = string.Empty;
 
     /// <summary>
+    /// Extra tenant+repo volumes for a multi-PR group run, mounted next to <see cref="VolumeName"/>
+    /// (which stays at <c>/workspace/repo</c> for the first member). Each entry's mount path is the
+    /// <c>repo-dir</c> the executor reads from <c>XIANIX-INPUTS.repositories</c>. Empty for every
+    /// single-repo run.
+    /// </summary>
+    public IReadOnlyList<VolumeMount> AdditionalVolumes { get; init; } = [];
+
+    /// <summary>
     /// Name of the shared per-tenant runtime volume mounted at <c>/workspace/runtimes</c>,
     /// holding plugin-declared runtime installs (dotnet SDKs, alternate node versions,
     /// package caches). Empty means no runtime volume is mounted — the executor then falls
@@ -97,3 +105,6 @@ public sealed record ContainerExecutionInput
     /// </summary>
     public string Mode { get; init; } = "prepare-and-execute";
 }
+
+/// <summary>A named Docker volume and where the executor container mounts it.</summary>
+public sealed record VolumeMount(string VolumeName, string MountPath);

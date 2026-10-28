@@ -72,7 +72,14 @@ cleanup_workspace() {
     summarize_runtimes
     log "--- Cleaning up workspace ---"
     cd /workspace 2>/dev/null || true
-    if [ -n "${REPOSITORY_URL:-}" ]; then
+    if [ "${XIANIX_GROUP_MODE:-0}" = "1" ]; then
+        local slug url dir
+        while IFS=$'\x1f' read -r slug url dir; do
+            [ -n "${slug}" ] || continue
+            git -C "${dir}" worktree remove "${WORK_DIR}/${slug}" --force >&2 2>/dev/null || true
+        done < <(group_members)
+        rm -rf "${WORK_DIR}" 2>/dev/null || true
+    elif [ -n "${REPOSITORY_URL:-}" ]; then
         git -C "${REPO_DIR}" worktree remove "${WORK_DIR}" --force >&2 2>/dev/null || true
     else
         rm -rf "${WORK_DIR}" 2>/dev/null || true
@@ -237,7 +244,15 @@ fi
 # ── Prepare cached repo context (CLAUDE.md + symbol map) ─────────────────────
 # Deterministic, token-free orientation cached on the volume and injected into the worktree
 # so the agent doesn't re-explore the codebase from scratch. Best-effort: never fails the run.
-if [ -n "${REPOSITORY_URL:-}" ]; then
+if [ "${XIANIX_GROUP_MODE:-0}" = "1" ]; then
+    # One cached context per member worktree, each cached on that member's own volume.
+    while IFS=$'\x1f' read -r _slug _url _dir; do
+        [ -n "${_slug}" ] || continue
+        log "--- Preparing repo context for group member '${_slug}' ---"
+        "${SCRIPT_DIR}/generate_context.sh" "${WORK_DIR}/${_slug}" "${_dir}/xianix-context" \
+            || log "WARNING: context generation failed for '${_slug}' — continuing without it."
+    done < <(group_members)
+elif [ -n "${REPOSITORY_URL:-}" ]; then
     log "--- Preparing repo context (CLAUDE.md + symbol map) ---"
     "${SCRIPT_DIR}/generate_context.sh" "${WORK_DIR}" "${REPO_DIR}/xianix-context" \
         || log "WARNING: context generation failed — continuing without it."

@@ -162,8 +162,13 @@ RUN chmod +x /entrypoint.sh /workspace/prepare_repo.sh /workspace/run_prompt.sh 
 # /workspace/runtimes is the mount point for the shared per-tenant runtime
 # volume (mise-managed SDK installs + package caches). Created and chowned here
 # so the non-root user can write to it on first mount.
+# /workspace/repos/1..12 are the mount points for the extra member repos of a
+# multi-PR group run (the first member stays on /workspace/repo). A fresh named
+# volume takes its ownership from the image directory it is mounted on, so the
+# points must exist here — a path Docker creates on the fly would be root-owned.
 RUN groupadd -r xianix && useradd -r -g xianix -d /workspace xianix \
     && mkdir -p /workspace/repo /workspace/runtimes \
+    && for i in $(seq 1 12); do mkdir -p "/workspace/repos/$i"; done \
     && chown -R xianix:xianix /workspace
 USER xianix
 

@@ -43,6 +43,24 @@ REPOSITORY_URL=$(echo "${XIANIX_INPUTS}" | jq -r '."repository-url" // empty')
 # MSB4126 ("Debug|github is invalid") and can send the agent into retry/OOM.
 XIANIX_PLATFORM=$(echo "${XIANIX_INPUTS}" | jq -r '.platform // empty')
 
+# Group runs (multi-PR group review) carry a `repositories` array instead of one
+# repository: [{ "slug", "url", "repo-dir", "pr-number", … }]. `repo-dir` is where
+# the control plane mounted that repo's tenant volume: /workspace/repo for the first
+# member (so CLAUDE_CONFIG_DIR, session resume and the plugin cache stay on the same
+# volume as a single-repo run) and /workspace/repos/<n> (pre-created in the image)
+# for each further distinct repo. Each member gets its own worktree at
+# ${WORK_DIR}/<slug>, and the agent runs from ${WORK_DIR}, the group root.
+# A member without a `repo-dir` is dropped rather than defaulted: guessing a mount
+# could fetch one repo into another repo's bare clone.
+XIANIX_GROUP_REPOS=$(echo "${XIANIX_INPUTS}" | jq -c '[(.repositories // [])[] | select((.url // "") != "" and (.slug // "") != "" and (."repo-dir" // "") != "")]')
+if [ "${XIANIX_GROUP_REPOS}" != "[]" ]; then
+    XIANIX_GROUP_MODE=1
+    [ -n "${REPOSITORY_URL}" ] || REPOSITORY_URL=$(echo "${XIANIX_GROUP_REPOS}" | jq -r '.[0].url')
+else
+    XIANIX_GROUP_MODE=0
+fi
+export XIANIX_GROUP_REPOS XIANIX_GROUP_MODE
+
 if [ -n "${REPOSITORY_URL}" ] && [ -z "${XIANIX_PLATFORM}" ]; then
     XIANIX_PLATFORM="github"
 fi
@@ -56,6 +74,13 @@ REPO_DIR="/workspace/repo"
 WORK_DIR="/workspace/exec-${EXECUTION_ID}"
 GIT_CRED_FILE="/tmp/.git-credentials"
 export REPO_DIR WORK_DIR GIT_CRED_FILE
+
+# Emits one line per group member: <slug>\x1f<url>\x1f<repo-dir>. \x1f rather than a
+# tab so an empty field can never shift the others (IFS whitespace collapses).
+group_members() {
+    echo "${XIANIX_GROUP_REPOS}" | jq -r \
+        '.[] | [.slug, .url, ."repo-dir"] | join("\u001f")'
+}
 
 # ── Platform-specific credential & URL setup ─────────────────────────────────
 # Strip surrounding whitespace/CR/LF from a token. Vault-stored secrets often
