@@ -45,11 +45,7 @@ public class ProcessingWorkflow
         }
     }
 
-    /// <summary>
-    /// Volume → container → wait → report → cleanup for one request. Also used by
-    /// <see cref="PrGroupReviewWorkflow"/> for group runs (same activities, same worker).
-    /// </summary>
-    internal static async Task ExecuteContainerPipelineAsync(ProcessingRequest orchestrationResult)
+    private static async Task ExecuteContainerPipelineAsync(ProcessingRequest orchestrationResult)
     {
         var execution = orchestrationResult.Execution!;
         var repositoryUrl = execution.RepositoryUrl;
@@ -88,21 +84,7 @@ public class ProcessingWorkflow
             (ContainerActivities a) => a.EnsureRuntimeVolumeAsync(orchestrationResult.TenantId),
             ContainerWorkflowOptions.Standard);
 
-        var additionalVolumes = new List<VolumeMount>();
-        foreach (var member in orchestrationResult.GroupRepositories)
-        {
-            var memberVolume = await Workflow.ExecuteActivityAsync(
-                (ContainerActivities a) => a.EnsureWorkspaceVolumeAsync(orchestrationResult.TenantId, member.RepositoryUrl),
-                ContainerWorkflowOptions.Standard);
-            additionalVolumes.Add(new VolumeMount(memberVolume, member.MountPath));
-        }
-
-        input = input with
-        {
-            VolumeName = volumeName,
-            RuntimeVolumeName = runtimeVolumeName,
-            AdditionalVolumes = additionalVolumes,
-        };
+        input = input with { VolumeName = volumeName, RuntimeVolumeName = runtimeVolumeName };
 
         var containerId = await Workflow.ExecuteActivityAsync(
             (ContainerActivities a) => a.StartContainerAsync(input),

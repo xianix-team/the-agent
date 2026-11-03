@@ -26,7 +26,7 @@
           "match-any": [
             {
               "name": "azuredevops-pr-agent-re-review-requested",
-              "rule": "eventType==ms.vss-code.git-pullrequest-comment-event&&resource.comment.commentType=='text'&&resource.comment.content*='@xianix'&&resource.comment.content!*='@xianix review group'"
+              "rule": "eventType==ms.vss-code.git-pullrequest-comment-event&&resource.comment.commentType=='text'&&resource.comment.content*='@xianix'"
             }
           ],
           "use-inputs": [
@@ -108,7 +108,7 @@
           "match-any": [
             {
               "name": "github-pr-agent-re-instruction-requested",
-              "rule": "action==created&&comment.body*='@xianix'&&comment.body!*='@xianix review group'&&issue.pull_request?"
+              "rule": "action==created&&comment.body*='@xianix'&&issue.pull_request?"
             }
           ],
           "use-inputs": [

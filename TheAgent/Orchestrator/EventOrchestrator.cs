@@ -72,9 +72,7 @@ public sealed class EventOrchestrator : IEventOrchestrator
         var matches = new List<ProcessingRequest>();
         foreach (var evaluation in outcome.Results!)
         {
-            // Group executions (work-item / comment triggers) may have no execute-prompt of
-            // their own: their run prompt is the group prompt, built once the group is known.
-            var execution = !string.IsNullOrWhiteSpace(evaluation.Prompt) || evaluation.Group is not null
+            var execution = !string.IsNullOrWhiteSpace(evaluation.Prompt)
                 ? new ExecutionSpec(
                     evaluation.Plugins,
                     evaluation.Prompt,
@@ -96,9 +94,7 @@ public sealed class EventOrchestrator : IEventOrchestrator
                 Inputs = evaluation.Inputs,
                 Execution = execution,
                 ExecutionBlockName = evaluation.ExecutionBlockName,
-                RaiseEvents = evaluation.RaiseEvents,
-                Group = evaluation.Group,
-                RequiresGroupOnly = evaluation.RequiresGroupOnly,
+                RaiseEvents = evaluation.RaiseEvents
             });
         }
 
