@@ -31,6 +31,7 @@ public sealed record EvaluationResult(
     IReadOnlyList<string>? AllowedTools = null,
     IReadOnlyList<string>? DisallowedTools = null,
     double? MaxBudgetUsd = null,
+    string ExecutorImage = "",
     bool ResumeSessions = false,
     IReadOnlyList<RaiseEventEntry>? RaiseEvents = null);
 

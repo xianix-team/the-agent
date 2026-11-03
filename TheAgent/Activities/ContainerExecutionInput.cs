@@ -71,6 +71,13 @@ public sealed record ContainerExecutionInput
     public double? MaxBudgetUsd { get; init; }
 
     /// <summary>
+    /// Optional Docker image override from <c>rules.json</c> (<c>executor-image</c>). When
+    /// non-empty, <see cref="ContainerActivities.StartContainerAsync"/> uses this instead of
+    /// the host <c>EXECUTOR-IMAGE</c>. Empty means the host default.
+    /// </summary>
+    public string ExecutorImage { get; init; } = string.Empty;
+
+    /// <summary>
     /// When true, the executor resumes the prior session for this conversation (best-effort).
     /// Seeded as <c>XIANIX-RESUME-SESSIONS</c>. Defaults to <c>false</c>.
     /// </summary>

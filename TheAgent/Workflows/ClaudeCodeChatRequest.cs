@@ -83,6 +83,12 @@ public sealed record ClaudeCodeChatRequest
     /// <summary>Optional hard spend cap (USD) for this chat-driven run; null means no cap.</summary>
     public double? MaxBudgetUsd { get; init; }
 
+    /// <summary>
+    /// Optional Docker image override from the winning chat/webhook usage example. Empty means
+    /// the host <c>EXECUTOR-IMAGE</c> default.
+    /// </summary>
+    public string ExecutorImage { get; init; } = string.Empty;
+
     /// <summary>When true, resume the prior session for this conversation (best-effort). Defaults to false.</summary>
     public bool ResumeSessions { get; init; }
 

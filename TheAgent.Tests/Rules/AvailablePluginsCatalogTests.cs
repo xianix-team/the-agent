@@ -57,7 +57,8 @@ public class AvailablePluginsCatalogTests
         IReadOnlyList<string>? disallowedTools = null,
         bool resumeSessions = false,
         IEnumerable<EnvEntry>? withEnvs = null,
-        string slashCommand = "") =>
+        string slashCommand = "",
+        string executorImage = "") =>
         new()
         {
             ChatName        = "chat",
@@ -75,6 +76,7 @@ public class AvailablePluginsCatalogTests
             MaxTurns        = maxTurns,
             AllowedTools    = (allowedTools ?? []).ToList(),
             DisallowedTools = (disallowedTools ?? []).ToList(),
+            ExecutorImage   = executorImage,
             ResumeSessions  = resumeSessions,
             WithEnvs        = (withEnvs ?? []).ToList(),
         };
@@ -233,12 +235,20 @@ public class AvailablePluginsCatalogTests
     [Fact]
     public void BuildCatalog_PluginNotInChatRuleSet_FallsBackToWebhookUsageExamples()
     {
-        var rules = new[] { RuleSetWith(Execution("github", "pr-reviewer")) };
+        var execution = new WebhookExecution
+        {
+            Name          = "github-pr-reviewer",
+            Platform      = "github",
+            Plugins       = [new PluginEntry { PluginName = "pr-reviewer", Marketplace = "mp" }],
+            ExecutorImage = " 99xio/xianix-executor-opencode:latest ",
+        };
+        var rules = new[] { RuleSetWith(execution) };
 
         var plugin  = Assert.Single(AvailablePluginsCatalog.BuildCatalog(rules));
         var example = Assert.Single(plugin.UsageExamples);
 
         Assert.Equal("github-pr-reviewer", example.ExecutionName);
+        Assert.Equal("99xio/xianix-executor-opencode:latest", example.ExecutorImage);
     }
 
     /// <summary>
@@ -258,7 +268,8 @@ public class AvailablePluginsCatalogTests
                 maxTurns: 20,
                 allowedTools: ["Read", "Bash"],
                 disallowedTools: ["WebSearch"],
-                resumeSessions: true),
+                resumeSessions: true,
+                executorImage: "99xio/xianix-executor-opencode:latest"),
         };
 
         var plugin  = Assert.Single(AvailablePluginsCatalog.BuildCatalog([], chatRules));
@@ -269,6 +280,7 @@ public class AvailablePluginsCatalogTests
         Assert.Equal(20, example.MaxTurns);
         Assert.Equal(new[] { "Read", "Bash" }, example.AllowedTools);
         Assert.Equal(new[] { "WebSearch" }, example.DisallowedTools);
+        Assert.Equal("99xio/xianix-executor-opencode:latest", example.ExecutorImage);
         Assert.True(example.ResumeSessions);
         Assert.Equal("", example.ExecutePrompt);
         Assert.Empty(example.Inputs);
