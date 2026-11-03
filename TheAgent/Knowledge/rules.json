@@ -213,6 +213,253 @@
           ]
         },
         {
+          "name": "github-pr-group-review-label",
+          "platform": "github",
+          "repository": {
+            "url": "repository.clone_url"
+          },
+          "match-any": [
+            {
+              "name": "github-issue-group-label-added",
+              "rule": "action==labeled&&label.name=='ai-dlc/pr/group-review'&&issue.number?&&issue.pull_request!?"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "work-item-number",
+              "value": "issue.number",
+              "mandatory": true
+            },
+            {
+              "name": "work-item-repository",
+              "value": "repository.full_name",
+              "mandatory": true
+            },
+            {
+              "name": "work-item-action",
+              "value": "action"
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "pr-reviewer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "GITHUB-TOKEN",
+              "value": "secrets.GITHUB-TOKEN",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 15,
+          "execute-prompt": "Issue {{work-item-repository}}#{{work-item-number}} was labelled for group review. Run /pr-group-review --work-item {{work-item-repository}}#{{work-item-number}} to review all pull requests linked to it together."
+        },
+        {
+          "name": "github-pr-group-review-on-push",
+          "platform": "github",
+          "repository": {
+            "url": "repository.clone_url"
+          },
+          "match-any": [
+            {
+              "name": "github-pr-pushed",
+              "rule": "action==synchronize&&pull_request.state=='open'"
+            },
+            {
+              "name": "github-pr-opened",
+              "rule": "action==opened&&pull_request.state=='open'"
+            },
+            {
+              "name": "github-pr-reopened",
+              "rule": "action==reopened&&pull_request.state=='open'"
+            },
+            {
+              "name": "github-pr-description-edited",
+              "rule": "action==edited&&changes.body?&&pull_request.state=='open'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "pr-number",
+              "value": "pull_request.number",
+              "mandatory": true
+            },
+            {
+              "name": "head-sha",
+              "value": "pull_request.head.sha"
+            },
+            {
+              "name": "pr-action",
+              "value": "action"
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "pr-reviewer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "GITHUB-TOKEN",
+              "value": "secrets.GITHUB-TOKEN",
+              "mandatory": true
+            },
+            {
+              "name": "PR-GROUP-SETTLE-SECONDS",
+              "value": "180",
+              "constant": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 15,
+          "execute-prompt": "Pull request #{{pr-number}} in {{repository-name}} was opened, received new commits, or its description changed. Run /pr-group-review --pr {{pr-number}}. If the PR is not part of a review group, the command stops at once; do nothing else."
+        },
+        {
+          "name": "github-pr-group-review-links-changed",
+          "platform": "github",
+          "repository": {
+            "url": "repository.clone_url"
+          },
+          "match-any": [
+            {
+              "name": "github-issue-group-description-edited",
+              "rule": "action==edited&&changes.body?&&comment.id!?&&issue.labels.*.name=='ai-dlc/pr/group-review'&&issue.pull_request!?"
+            },
+            {
+              "name": "github-issue-group-comment-added",
+              "rule": "action==created&&issue.labels.*.name=='ai-dlc/pr/group-review'&&issue.pull_request!?&&comment.body!*='@xianix'&&comment.body!*='xianix:'"
+            },
+            {
+              "name": "github-issue-group-comment-edited",
+              "rule": "action==edited&&comment.id?&&issue.labels.*.name=='ai-dlc/pr/group-review'&&issue.pull_request!?&&comment.body!*='@xianix'&&comment.body!*='xianix:'"
+            },
+            {
+              "name": "github-issue-group-comment-deleted",
+              "rule": "action==deleted&&comment.id?&&issue.labels.*.name=='ai-dlc/pr/group-review'&&issue.pull_request!?&&comment.body!*='@xianix'&&comment.body!*='xianix:'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "work-item-number",
+              "value": "issue.number",
+              "mandatory": true
+            },
+            {
+              "name": "work-item-repository",
+              "value": "repository.full_name",
+              "mandatory": true
+            },
+            {
+              "name": "work-item-action",
+              "value": "action"
+            },
+            {
+              "name": "comment-id",
+              "value": "comment.id"
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "pr-reviewer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "GITHUB-TOKEN",
+              "value": "secrets.GITHUB-TOKEN",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 15,
+          "execute-prompt": "The pull request links of issue {{work-item-repository}}#{{work-item-number}} may have changed. Run /pr-group-review --work-item {{work-item-repository}}#{{work-item-number}}. If the issue has no review group, or nothing changed, the command stops at once; do nothing else."
+        },
+        {
+          "name": "github-pr-group-review-requested",
+          "platform": "github",
+          "repository": {
+            "url": "repository.clone_url"
+          },
+          "match-any": [
+            {
+              "name": "github-pr-comment-review-group",
+              "rule": "action==created&&comment.body*='@xianix review group'&&comment.body!*='xianix:group-follow-up'&&issue.pull_request?"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "pr-number",
+              "value": "issue.number",
+              "mandatory": true
+            },
+            {
+              "name": "comment-id",
+              "value": "comment.id"
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "pr-reviewer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "GITHUB-TOKEN",
+              "value": "secrets.GITHUB-TOKEN",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 15,
+          "execute-prompt": "A group review was requested on pull request #{{pr-number}} in {{repository-name}}. Run /pr-group-review --pr {{pr-number}} --force."
+        },
+        {
+          "name": "github-pr-group-review-follow-up",
+          "platform": "github",
+          "repository": {
+            "url": "repository.clone_url"
+          },
+          "match-any": [
+            {
+              "name": "github-pr-comment-group-follow-up",
+              "rule": "action==created&&comment.body*='@xianix review group'&&comment.body*='xianix:group-follow-up'&&issue.pull_request?"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "pr-number",
+              "value": "issue.number",
+              "mandatory": true
+            },
+            {
+              "name": "comment-id",
+              "value": "comment.id"
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "pr-reviewer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "GITHUB-TOKEN",
+              "value": "secrets.GITHUB-TOKEN",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 15,
+          "execute-prompt": "Pull requests in the review group of #{{pr-number}} in {{repository-name}} received new commits during the last group review. Run /pr-group-review --pr {{pr-number}} to review the group again."
+        },
+        {
           "name": "github-performance-optimizer",
           "platform": "github",
           "repository": {
@@ -336,6 +583,209 @@
           "model": "claude-sonnet-5",
           "max-budget-usd": 5,
           "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}}. Run /pr-review {{pr-number}} to perform the automated review."
+        },
+        {
+          "name": "azuredevops-pr-group-review-tag",
+          "platform": "azuredevops",
+          "match-any": [
+            {
+              "name": "azuredevops-workitem-group-tag-added",
+              "rule": "eventType==workitem.updated&&resource.fields.\"System.Tags\".newValue*='ai-dlc/pr/group-review'&&resource.fields.\"System.Tags\".oldValue!*='ai-dlc/pr/group-review'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "work-item-url",
+              "value": "resource.url",
+              "mandatory": true
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "pr-reviewer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "AZURE-DEVOPS-TOKEN",
+              "value": "secrets.AZURE-DEVOPS-TOKEN",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-5",
+          "max-budget-usd": 15,
+          "execute-prompt": "Work item {{work-item-url}} was tagged for group review. Run /pr-group-review --work-item {{work-item-url}} to review all pull requests linked to it together."
+        },
+        {
+          "name": "azuredevops-pr-group-review-on-push",
+          "platform": "azuredevops",
+          "repository": {
+            "url": "resource.repository.remoteUrl"
+          },
+          "match-any": [
+            {
+              "name": "azuredevops-pr-pushed",
+              "rule": "eventType==git.pullrequest.updated&&message.text*='updated the source branch'&&resource.status=='active'"
+            },
+            {
+              "name": "azuredevops-pr-created",
+              "rule": "eventType==git.pullrequest.created&&resource.status=='active'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "pr-number",
+              "value": "resource.pullRequestId",
+              "mandatory": true
+            },
+            {
+              "name": "head-sha",
+              "value": "resource.lastMergeSourceCommit.commitId"
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "pr-reviewer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "AZURE-DEVOPS-TOKEN",
+              "value": "secrets.AZURE-DEVOPS-TOKEN",
+              "mandatory": true
+            },
+            {
+              "name": "PR-GROUP-SETTLE-SECONDS",
+              "value": "180",
+              "constant": true
+            }
+          ],
+          "model": "claude-sonnet-5",
+          "max-budget-usd": 15,
+          "execute-prompt": "Pull request #{{pr-number}} in {{repository-name}} was opened or received new commits. Run /pr-group-review --pr {{pr-number}}. If the PR is not part of a review group, the command stops at once; do nothing else."
+        },
+        {
+          "name": "azuredevops-pr-group-review-links-changed",
+          "platform": "azuredevops",
+          "match-any": [
+            {
+              "name": "azuredevops-workitem-group-pr-linked",
+              "rule": "eventType==workitem.updated&&resource.relations.added.*.url*='PullRequestId'&&resource.revision.fields.\"System.Tags\"*='ai-dlc/pr/group-review'"
+            },
+            {
+              "name": "azuredevops-workitem-group-pr-unlinked",
+              "rule": "eventType==workitem.updated&&resource.relations.removed.*.url*='PullRequestId'&&resource.revision.fields.\"System.Tags\"*='ai-dlc/pr/group-review'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "work-item-url",
+              "value": "resource.url",
+              "mandatory": true
+            },
+            {
+              "name": "work-item-rev",
+              "value": "resource.rev"
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "pr-reviewer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "AZURE-DEVOPS-TOKEN",
+              "value": "secrets.AZURE-DEVOPS-TOKEN",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-5",
+          "max-budget-usd": 15,
+          "execute-prompt": "A pull request was linked to or unlinked from work item {{work-item-url}}. Run /pr-group-review --work-item {{work-item-url}}. If the work item has no review group, or nothing changed, the command stops at once; do nothing else."
+        },
+        {
+          "name": "azuredevops-pr-group-review-requested",
+          "platform": "azuredevops",
+          "repository": {
+            "url": "resource.pullRequest.repository.remoteUrl"
+          },
+          "match-any": [
+            {
+              "name": "azuredevops-pr-comment-review-group",
+              "rule": "eventType==ms.vss-code.git-pullrequest-comment-event&&resource.comment.commentType=='text'&&resource.comment.content*='@xianix review group'&&resource.comment.content!*='xianix:group-follow-up'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "pr-number",
+              "value": "resource.pullRequest.pullRequestId",
+              "mandatory": true
+            },
+            {
+              "name": "comment-id",
+              "value": "resource.comment.id"
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "pr-reviewer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "AZURE-DEVOPS-TOKEN",
+              "value": "secrets.AZURE-DEVOPS-TOKEN",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-5",
+          "max-budget-usd": 15,
+          "execute-prompt": "A group review was requested on pull request #{{pr-number}} in {{repository-name}}. Run /pr-group-review --pr {{pr-number}} --force."
+        },
+        {
+          "name": "azuredevops-pr-group-review-follow-up",
+          "platform": "azuredevops",
+          "repository": {
+            "url": "resource.pullRequest.repository.remoteUrl"
+          },
+          "match-any": [
+            {
+              "name": "azuredevops-pr-comment-group-follow-up",
+              "rule": "eventType==ms.vss-code.git-pullrequest-comment-event&&resource.comment.commentType=='text'&&resource.comment.content*='@xianix review group'&&resource.comment.content*='xianix:group-follow-up'"
+            }
+          ],
+          "use-inputs": [
+            {
+              "name": "pr-number",
+              "value": "resource.pullRequest.pullRequestId",
+              "mandatory": true
+            },
+            {
+              "name": "comment-id",
+              "value": "resource.comment.id"
+            }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "pr-reviewer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "AZURE-DEVOPS-TOKEN",
+              "value": "secrets.AZURE-DEVOPS-TOKEN",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-5",
+          "max-budget-usd": 15,
+          "execute-prompt": "Pull requests in the review group of #{{pr-number}} in {{repository-name}} received new commits during the last group review. Run /pr-group-review --pr {{pr-number}} to review the group again."
         },
         {
           "name": "github-issue-requirement-analysis",
