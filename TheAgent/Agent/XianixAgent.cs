@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Temporalio.Exceptions;
 using TheAgent;
 using Xianix.Activities;
 using Xianix.Orchestrator;
@@ -225,22 +226,39 @@ public class XianixAgent(
                     return;
                 }
 
-                foreach (var result in batch.Matches)
+                // Each run's workflow ID ends with the delivery's request ID, so a delivery can be
+                // traced to the runs it started. A retry of this handler for the same request
+                // reuses the run already going instead of starting a second review.
+                var workflowIds = new List<string>();
+                for (var i = 0; i < batch.Matches.Count; i++)
                 {
-                    await XiansContext.Workflows.StartAsync<ProcessingWorkflow>(
-                        new object[] { result },
-                        Guid.NewGuid().ToString());
+                    var runKey = DeliveryRunKey(context.Webhook.RequestId, i, batch.Matches.Count);
+                    try
+                    {
+                        workflowIds.Add(await XiansContext.Workflows.StartAsync<ProcessingWorkflow>(
+                            new object[] { batch.Matches[i] },
+                            runKey));
+                    }
+                    catch (WorkflowAlreadyStartedException ex)
+                    {
+                        logger.LogInformation(
+                            "Run '{WorkflowId}' for this delivery is already running; not starting it again.",
+                            ex.WorkflowId);
+                        workflowIds.Add(ex.WorkflowId);
+                    }
                 }
 
                 context.Respond(new
                 {
                     status = "success",
                     matchCount = batch.Matches.Count,
-                    matches = batch.Matches.Select(m => new
+                    matches = batch.Matches.Select((m, i) => new
                     {
                         m.ExecutionBlockName,
                         inputs = m.Inputs,
+                        workflowId = workflowIds[i],
                     }),
+                    workflowIds,
                 });
             }
             catch (OperationCanceledException)
@@ -255,6 +273,17 @@ public class XianixAgent(
                 context.Respond(new { status = "error", reason = "Internal processing error." });
             }
         });
+    }
+
+    /// <summary>
+    /// Unique key for the run a delivery starts: its request ID, plus the match number when one
+    /// delivery matches several execution blocks. A delivery without a request ID gets a random key.
+    /// </summary>
+    internal static string DeliveryRunKey(string? requestId, int matchIndex, int matchCount)
+    {
+        if (string.IsNullOrWhiteSpace(requestId))
+            return Guid.NewGuid().ToString();
+        return matchCount > 1 ? $"{requestId}-{matchIndex + 1}" : requestId;
     }
 
     private static async Task<XiansAgent> CreateAndRegisterAgentAsync(CancellationToken cancellationToken)
