@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Temporalio.Exceptions;
 using TheAgent;
 using Xianix.Activities;
 using Xianix.Orchestrator;
@@ -225,11 +226,24 @@ public class XianixAgent(
                     return;
                 }
 
-                foreach (var result in batch.Matches)
+                // Each run's workflow ID ends with the delivery's request ID, so Studio can open
+                // a delivery's run from the request ID alone. A retry of this handler for the same request
+                // reuses the run already going instead of starting a second review.
+                for (var i = 0; i < batch.Matches.Count; i++)
                 {
-                    await XiansContext.Workflows.StartAsync<ProcessingWorkflow>(
-                        new object[] { result },
-                        Guid.NewGuid().ToString());
+                    var runKey = DeliveryRunKey(context.Webhook.RequestId, i);
+                    try
+                    {
+                        await XiansContext.Workflows.StartAsync<ProcessingWorkflow>(
+                            new object[] { batch.Matches[i] },
+                            runKey);
+                    }
+                    catch (WorkflowAlreadyStartedException ex)
+                    {
+                        logger.LogInformation(
+                            "Run '{WorkflowId}' for this delivery is already running; not starting it again.",
+                            ex.WorkflowId);
+                    }
                 }
 
                 context.Respond(new
@@ -255,6 +269,18 @@ public class XianixAgent(
                 context.Respond(new { status = "error", reason = "Internal processing error." });
             }
         });
+    }
+
+    /// <summary>
+    /// Unique key for a run a delivery starts. The first run is keyed by the request ID itself, so
+    /// it can be found from the delivery alone; further matches add their number (-2, -3, ...).
+    /// A delivery without a request ID gets a random key.
+    /// </summary>
+    internal static string DeliveryRunKey(string? requestId, int matchIndex)
+    {
+        if (string.IsNullOrWhiteSpace(requestId))
+            return Guid.NewGuid().ToString();
+        return matchIndex == 0 ? requestId : $"{requestId}-{matchIndex + 1}";
     }
 
     private static async Task<XiansAgent> CreateAndRegisterAgentAsync(CancellationToken cancellationToken)
