@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Logging;
-using Temporalio.Exceptions;
 using TheAgent;
 using Xianix.Activities;
 using Xianix.Orchestrator;
@@ -227,23 +226,16 @@ public class XianixAgent(
                 }
 
                 // Each run's workflow ID ends with the delivery's request ID, so Studio can open
-                // a delivery's run from the request ID alone. A retry of this handler for the same request
-                // reuses the run already going instead of starting a second review.
+                // a delivery's run from the request ID alone. This handler runs in an activity, so the
+                // runs are started through the Temporal client with IdConflictPolicy.UseExisting: a retry
+                // for the same request while its run is still going attaches to that run instead of
+                // starting a second review. Once the run has finished, a retry starts a new one under
+                // the same ID.
                 for (var i = 0; i < batch.Matches.Count; i++)
                 {
-                    var runKey = DeliveryRunKey(context.Webhook.RequestId, i);
-                    try
-                    {
-                        await XiansContext.Workflows.StartAsync<ProcessingWorkflow>(
-                            new object[] { batch.Matches[i] },
-                            runKey);
-                    }
-                    catch (WorkflowAlreadyStartedException ex)
-                    {
-                        logger.LogInformation(
-                            "Run '{WorkflowId}' for this delivery is already running; not starting it again.",
-                            ex.WorkflowId);
-                    }
+                    await XiansContext.Workflows.StartAsync<ProcessingWorkflow>(
+                        new object[] { batch.Matches[i] },
+                        DeliveryRunKey(context.Webhook.RequestId, i));
                 }
 
                 context.Respond(new
