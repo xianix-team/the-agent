@@ -26,7 +26,7 @@
           "match-any": [
             {
               "name": "azuredevops-pr-agent-re-review-requested",
-              "rule": "eventType==ms.vss-code.git-pullrequest-comment-event&&resource.comment.commentType=='text'&&resource.comment.content*='@xianix'"
+              "rule": "eventType==ms.vss-code.git-pullrequest-comment-event&&resource.comment.commentType=='text'&&resource.comment.content*='@xianix'&&resource.comment.content!*='@xianix review group'"
             }
           ],
           "use-inputs": [
@@ -108,7 +108,7 @@
           "match-any": [
             {
               "name": "github-pr-agent-re-instruction-requested",
-              "rule": "action==created&&comment.body*='@xianix'&&issue.pull_request?"
+              "rule": "action==created&&comment.body*='@xianix'&&comment.body!*='@xianix review group'&&issue.pull_request?"
             }
           ],
           "use-inputs": [
@@ -211,6 +211,81 @@
               ]
             }
           ]
+        },
+        {
+          "name": "github-pr-group-review",
+          "platform": "github",
+          "repository": {
+            "url": "repository.clone_url"
+          },
+          "match-any": [
+            {
+              "name": "github-issue-group-label-added",
+              "rule": "action==labeled&&label.name=='ai-dlc/pr/group-review'&&issue.number?&&issue.pull_request!?"
+            },
+            {
+              "name": "github-issue-group-description-edited",
+              "rule": "action==edited&&changes.body?&&comment.id!?&&issue.labels.*.name=='ai-dlc/pr/group-review'&&issue.pull_request!?"
+            },
+            {
+              "name": "github-issue-group-comment-added",
+              "rule": "action==created&&issue.labels.*.name=='ai-dlc/pr/group-review'&&issue.pull_request!?&&comment.body!*='@xianix'&&comment.body!*='xianix:'"
+            },
+            {
+              "name": "github-issue-group-comment-edited",
+              "rule": "action==edited&&comment.id?&&issue.labels.*.name=='ai-dlc/pr/group-review'&&issue.pull_request!?&&comment.body!*='@xianix'&&comment.body!*='xianix:'"
+            },
+            {
+              "name": "github-issue-group-comment-deleted",
+              "rule": "action==deleted&&comment.id?&&issue.labels.*.name=='ai-dlc/pr/group-review'&&issue.pull_request!?&&comment.body!*='@xianix'&&comment.body!*='xianix:'"
+            },
+            {
+              "name": "github-pr-opened",
+              "rule": "action==opened&&pull_request.state=='open'"
+            },
+            {
+              "name": "github-pr-pushed",
+              "rule": "action==synchronize&&pull_request.state=='open'"
+            },
+            {
+              "name": "github-pr-reopened",
+              "rule": "action==reopened&&pull_request.state=='open'"
+            },
+            {
+              "name": "github-pr-description-edited",
+              "rule": "action==edited&&changes.body?&&pull_request.state=='open'"
+            },
+            {
+              "name": "github-pr-comment-review-group",
+              "rule": "action==created&&comment.body*='@xianix review group'&&issue.pull_request?"
+            }
+          ],
+          "use-inputs": [
+            { "name": "action", "value": "action" },
+            { "name": "pr-number", "value": "pull_request.number" },
+            { "name": "head-sha", "value": "pull_request.head.sha" },
+            { "name": "issue-number", "value": "issue.number" },
+            { "name": "issue-is-pr", "value": "issue.pull_request.url" },
+            { "name": "work-item-repository", "value": "repository.full_name" },
+            { "name": "comment-id", "value": "comment.id" },
+            { "name": "comment-body", "value": "comment.body" }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "pr-reviewer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "GITHUB-TOKEN",
+              "value": "secrets.GITHUB-TOKEN",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-4-5",
+          "max-budget-usd": 15,
+          "execute-prompt": "A GitHub event in {{repository-name}} may concern a pull-request review group. Run /pr-group-review --from-event. If it is not a group event, or the PR or issue is not in a labelled group, the command stops at once; do nothing else."
         },
         {
           "name": "github-performance-optimizer",
@@ -336,6 +411,64 @@
           "model": "claude-sonnet-5",
           "max-budget-usd": 5,
           "execute-prompt": "You are reviewing pull request #{{pr-number}} in the repository {{repository-name}}. Run /pr-review {{pr-number}} to perform the automated review."
+        },
+        {
+          "name": "azuredevops-pr-group-review",
+          "platform": "azuredevops",
+          "match-any": [
+            {
+              "name": "azuredevops-workitem-group-tag-added",
+              "rule": "eventType==workitem.updated&&resource.fields.\"System.Tags\".newValue*='ai-dlc/pr/group-review'&&resource.fields.\"System.Tags\".oldValue!*='ai-dlc/pr/group-review'"
+            },
+            {
+              "name": "azuredevops-workitem-group-pr-linked",
+              "rule": "eventType==workitem.updated&&resource.relations.added.*.url*='PullRequestId'&&resource.revision.fields.\"System.Tags\"*='ai-dlc/pr/group-review'"
+            },
+            {
+              "name": "azuredevops-workitem-group-pr-unlinked",
+              "rule": "eventType==workitem.updated&&resource.relations.removed.*.url*='PullRequestId'&&resource.revision.fields.\"System.Tags\"*='ai-dlc/pr/group-review'"
+            },
+            {
+              "name": "azuredevops-pr-pushed",
+              "rule": "eventType==git.pullrequest.updated&&message.text*='updated the source branch'&&resource.status=='active'"
+            },
+            {
+              "name": "azuredevops-pr-created",
+              "rule": "eventType==git.pullrequest.created&&resource.status=='active'"
+            },
+            {
+              "name": "azuredevops-pr-comment-review-group",
+              "rule": "eventType==ms.vss-code.git-pullrequest-comment-event&&resource.comment.commentType=='text'&&resource.comment.content*='@xianix review group'"
+            }
+          ],
+          "use-inputs": [
+            { "name": "event-type", "value": "eventType" },
+            { "name": "work-item-url", "value": "resource.url" },
+            { "name": "work-item-rev", "value": "resource.rev" },
+            { "name": "pr-number", "value": "resource.pullRequestId" },
+            { "name": "pr-repo-url", "value": "resource.repository.remoteUrl" },
+            { "name": "head-sha", "value": "resource.lastMergeSourceCommit.commitId" },
+            { "name": "comment-pr-number", "value": "resource.pullRequest.pullRequestId" },
+            { "name": "comment-pr-repo-url", "value": "resource.pullRequest.repository.remoteUrl" },
+            { "name": "comment-id", "value": "resource.comment.id" },
+            { "name": "comment-body", "value": "resource.comment.content" }
+          ],
+          "use-plugins": [
+            {
+              "plugin-name": "pr-reviewer@xianix-plugins-official",
+              "marketplace": "xianix-team/plugins-official"
+            }
+          ],
+          "with-envs": [
+            {
+              "name": "AZURE-DEVOPS-TOKEN",
+              "value": "secrets.AZURE-DEVOPS-TOKEN",
+              "mandatory": true
+            }
+          ],
+          "model": "claude-sonnet-5",
+          "max-budget-usd": 15,
+          "execute-prompt": "An Azure DevOps event may concern a pull-request review group. Run /pr-group-review --from-event. If it is not a group event, or the PR or work item is not in a labelled group, the command stops at once; do nothing else."
         },
         {
           "name": "github-issue-requirement-analysis",
