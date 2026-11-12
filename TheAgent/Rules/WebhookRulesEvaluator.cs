@@ -637,7 +637,7 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
         return merged;
     }
 
-    private static List<RaiseEventEntry> BuildRaiseEvents(WebhookExecution execution)
+    private List<RaiseEventEntry> BuildRaiseEvents(WebhookExecution execution)
     {
         if (execution.RaiseEvents.Count == 0)
             return [];
@@ -648,9 +648,20 @@ public sealed class WebhookRulesEvaluator : IWebhookRulesEvaluator
             if (string.IsNullOrWhiteSpace(entry.Url))
                 continue;
 
+            var name = string.IsNullOrWhiteSpace(entry.Name) ? "raise-event" : entry.Name.Trim();
+            var type = RaiseEventTypes.Normalize(entry.Type);
+            if (type is null)
+            {
+                _logger.LogWarning(
+                    "raise-events entry '{Event}' on execution '{Execution}' has unknown type '{Type}' (expected '{Before}' or '{After}'); skipping it.",
+                    name, execution.Name, entry.Type, RaiseEventTypes.Before, RaiseEventTypes.After);
+                continue;
+            }
+
             entries.Add(new RaiseEventEntry
             {
-                Name = string.IsNullOrWhiteSpace(entry.Name) ? "raise-event" : entry.Name.Trim(),
+                Name = name,
+                Type = type,
                 Url = entry.Url.Trim(),
                 WithHeaders = entry.WithHeaders,
                 Payload = entry.Payload,

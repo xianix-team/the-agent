@@ -556,7 +556,7 @@ Placeholders are replaced case-insensitively. Any `{{name}}` with no matching in
 
 ## 7. `raise-events` — Outbound execution notifications
 
-After an execution finishes, `raise-events` notifies **external listeners** that the run happened and what it cost — an AI Hub node, a billing pipeline, a Slack relay. Each entry is one HTTP `POST`.
+`raise-events` notifies **external listeners** that a run is starting, or that it happened and what it cost — an AI Hub node, a billing pipeline, a Slack relay. Each entry is one HTTP `POST`, raised either **before** the container starts or **after** the execution finishes (the default), per its `type`.
 
 It is declared **per execution**, alongside `execute-prompt`. That keeps the scope unambiguous — an entry covers exactly the block it sits on, so there's no separate trigger list or `match-any` filter deciding which runs are in scope — and it means the placeholders resolve against the same values the prompt already used. When several execution blocks match one payload, each one raises its own events, exactly as each starts its own container.
 
@@ -564,6 +564,7 @@ It is declared **per execution**, alongside `execute-prompt`. That keeps the sco
 "raise-events": [
   {
     "name": "ai-hub-metrics",
+    "type": "after",
     "url": "https://app-ai-hub-api-h3c5cwascnetb2cj.northeurope-01.azurewebsites.net/nodes/nd_blscMVsoz0?activity=pr-review&corelationid={{pr-number}}&actors=xianix-pr-reviewer",
     "with-headers": [
       { "name": "Authorization", "value": "secrets.AIHUB-API-KEY", "mandatory": true }
@@ -583,6 +584,7 @@ It is declared **per execution**, alongside `execute-prompt`. That keeps the sco
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | No | Label for logs and delivery-failure reasons, like the `name` on `match-any` / `use-inputs` / `with-envs` entries. |
+| `type` | No | When the event is raised: `before` (just before the container starts) or `after` (once the execution has finished). Case-insensitive. **Defaults to `after`**, so existing entries keep their behaviour. Any other value is logged as a warning and the entry is skipped. |
 | `url` | Yes | Listener endpoint. Interpolated (see below), so run data can be carried in the path or query string. |
 | `with-headers` | No | Request headers, using the **same entry shape as [`with-envs`](#5-with-envs--container-environment-variables)** (`name` / `value` / `constant` / `mandatory`) — so `secrets.*`, `host.*`, and `constant` literals resolve identically. This is how authorization is declared: name the header explicitly rather than leaving the scheme implicit. |
 | `payload` | No | JSON body, sent as-is apart from interpolation. Arbitrarily nested — the listener's own schema dictates the shape. Omit for endpoints that take everything in the URL. |
@@ -593,7 +595,9 @@ Several entries mean several independent listeners: each is delivered on its own
 
 `{{...}}` means the same thing it does in `execute-prompt` — resolved `use-inputs` names, plus the auto-injected structural keys `platform`, `repository-url`, and `repository-name`. Nothing new to learn: if the prompt can reference `{{pr-number}}`, so can an event.
 
-The one addition is the `metrics.*` namespace, which carries what the run *produced* rather than what triggered it (cost, tokens, model, status). Inputs are known before the container starts; metrics only exist once it has finished — which is why events are raised **after** the execution completes.
+The one addition is the `metrics.*` namespace, which carries what the run *produced* rather than what triggered it (cost, tokens, model, status). Inputs are known before the container starts; metrics only exist once it has finished — which is why events default to **after** the execution completes.
+
+`correlationId` is generated once per run and is the **same on the `before` and `after` events** of that run, so a listener can pair the start and end. On `before` events, `metrics.status` is `started`, `metrics.model` is the block's configured `model` (if any), and `metrics.tokens.total` / `metrics.cost-usd` resolve to an empty string. On `after` events, `metrics.status` is `success` or `error`.
 
 > **`metrics.*` is not implemented yet.** The names above are the intended shape, not a live contract. Until it lands, keep events on `use-inputs` and structural values.
 
@@ -714,4 +718,4 @@ When the run doesn't operate on a specific repo, just omit the `repository` bloc
 5. `execute-prompt` is interpolated against the merged inputs dict.
 6. The agent merges rule-set-level common `with-envs` with the matched execution's own `with-envs` (execution-level entries override rule-set entries by env name), resolves each entry (literals, `host.*`, `secrets.*`), and injects them into the executor container alongside the runtime values it manages itself.
 7. The executor uses `platform` to pick the right credential helper, `git clone`s `repository-url` into the per-tenant workspace volume, checks out the default-branch HEAD into the per-run worktree, installs `use-plugins`, and runs the prompt. Plugins perform any further task-specific checkout themselves.
-8. Once the run has finished and its metrics are recorded, each `raise-events` entry on the matched block is delivered to its listener — best-effort, so a failed notification is logged and dropped without touching the run's outcome.
+8. `raise-events` entries with `"type": "before"` are delivered just before the container starts; once the run has finished and its metrics are recorded, the `after` entries (including any with no `type`) are delivered. Both are best-effort, so a failed notification is logged and dropped without touching the run's outcome.
