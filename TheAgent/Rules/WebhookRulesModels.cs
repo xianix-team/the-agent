@@ -180,7 +180,8 @@ public sealed class WebhookExecution
     public List<EnvEntry> WithEnvs { get; init; } = [];
 
     /// <summary>
-    /// Best-effort HTTP events raised after the execution completes. Each entry
+    /// Best-effort HTTP events raised before and/or after the execution (see
+    /// <see cref="RaiseEventEntry.Type"/>; default after). Each entry
     /// declares its own URL, optional headers (same <c>with-headers</c> shape as
     /// <see cref="WithEnvs"/>), and optional JSON <c>payload</c> template.
     /// </summary>
@@ -343,13 +344,21 @@ public sealed class EnvEntry
 }
 
 /// <summary>
-/// Post-execution HTTP event declared on a <see cref="WebhookExecution"/>. Delivered
-/// best-effort after the container run completes.
+/// HTTP event declared on a <see cref="WebhookExecution"/>. Delivered best-effort either
+/// before the container starts or after it completes, depending on <see cref="Type"/>.
 /// </summary>
 public sealed class RaiseEventEntry
 {
     [JsonPropertyName("name")]
     public string Name { get; init; } = "";
+
+    /// <summary>
+    /// When the event is raised: <c>before</c> (just before the container starts — no
+    /// <c>metrics.*</c> yet) or <c>after</c> (once the run has finished). Optional and
+    /// case-insensitive; omitted means <c>after</c>. See <see cref="RaiseEventTypes"/>.
+    /// </summary>
+    [JsonPropertyName("type")]
+    public string? Type { get; init; }
 
     [JsonPropertyName("url")]
     public string Url { get; init; } = "";
@@ -367,6 +376,28 @@ public sealed class RaiseEventEntry
     /// </summary>
     [JsonPropertyName("payload")]
     public JsonNode? Payload { get; init; }
+}
+
+/// <summary>Allowed values of <see cref="RaiseEventEntry.Type"/>.</summary>
+public static class RaiseEventTypes
+{
+    public const string Before = "before";
+    public const string After = "after";
+
+    /// <summary>
+    /// Normalizes a configured type: null/blank → <see cref="After"/>, <c>before</c>/<c>after</c>
+    /// (any case, trimmed) → the canonical value, anything else → <c>null</c> (invalid).
+    /// </summary>
+    public static string? Normalize(string? type)
+    {
+        if (string.IsNullOrWhiteSpace(type))
+            return After;
+
+        var trimmed = type.Trim();
+        if (string.Equals(trimmed, Before, StringComparison.OrdinalIgnoreCase)) return Before;
+        if (string.Equals(trimmed, After, StringComparison.OrdinalIgnoreCase)) return After;
+        return null;
+    }
 }
 
 public sealed class MatchEntry

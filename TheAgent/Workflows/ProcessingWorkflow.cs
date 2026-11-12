@@ -86,6 +86,15 @@ public class ProcessingWorkflow
 
         input = input with { VolumeName = volumeName, RuntimeVolumeName = runtimeVolumeName };
 
+        // One id shared by the before and after raise-events of this run, so listeners can
+        // pair them. Workflow.NewGuid is replay-safe (Guid.NewGuid is not in workflow code).
+        var correlationId = Workflow.NewGuid().ToString("D");
+
+        await ReportRaiseEventsAsync(
+            orchestrationResult,
+            RaiseEventTypes.Before,
+            () => RaiseEventVariables.BuildBefore(orchestrationResult.Inputs, execution.Plugins, correlationId));
+
         var containerId = await Workflow.ExecuteActivityAsync(
             (ContainerActivities a) => a.StartContainerAsync(input),
             ContainerWorkflowOptions.Standard);
@@ -103,7 +112,11 @@ public class ProcessingWorkflow
             ContainerOutputParser.Parse(executionResult);
             LogOutcome(executionResult, executionLabel, executionId, orchestrationResult.TenantId, repoLabel, keyInputs);
             await ReportExecutionMetricsAsync(orchestrationResult, executionResult);
-            await ReportRaiseEventsAsync(orchestrationResult, executionResult);
+            await ReportRaiseEventsAsync(
+                orchestrationResult,
+                RaiseEventTypes.After,
+                () => RaiseEventVariables.Build(
+                    orchestrationResult.Inputs, execution.Plugins, executionResult, correlationId));
         }
         finally
         {
@@ -311,18 +324,23 @@ public class ProcessingWorkflow
         }
     }
 
+    /// <summary>
+    /// Delivers the raise-events whose <see cref="RaiseEventEntry.Type"/> matches
+    /// <paramref name="type"/> (a missing type counts as <c>after</c>). Best-effort: a failed
+    /// delivery is logged and never affects the run.
+    /// </summary>
     private static async Task ReportRaiseEventsAsync(
         ProcessingRequest orchestrationResult,
-        ContainerExecutionResult executionResult)
+        string type,
+        Func<Dictionary<string, string>> buildVariables)
     {
-        var raiseEvents = orchestrationResult.RaiseEvents;
+        var raiseEvents = orchestrationResult.RaiseEvents?
+            .Where(e => RaiseEventTypes.Normalize(e.Type) == type)
+            .ToList();
         if (raiseEvents is not { Count: > 0 })
             return;
 
-        var variables = RaiseEventVariables.Build(
-            orchestrationResult.Inputs,
-            orchestrationResult.Execution?.Plugins,
-            executionResult);
+        var variables = buildVariables();
 
         // Prefer the configured execution model when the run didn't report one.
         if (!variables.ContainsKey("metrics.model")
@@ -349,7 +367,8 @@ public class ProcessingWorkflow
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Workflow.Logger.LogWarning(ex,
-                    "Failed to deliver raise-event '{Event}' for '{Name}', block '{Block}'. The call is non-critical.",
+                    "Failed to deliver {Type} raise-event '{Event}' for '{Name}', block '{Block}'. The call is non-critical.",
+                    type,
                     raiseEvent.Name,
                     orchestrationResult.Name,
                     orchestrationResult.ExecutionBlockName ?? "—");
