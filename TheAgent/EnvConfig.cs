@@ -78,6 +78,29 @@ public static class EnvConfig
     public static bool AgentIsTemplate =>
         Get("AGENT-IS-TEMPLATE", "true").Trim().ToLowerInvariant() is "1" or "true" or "yes" or "on";
 
+    /// <summary>
+    /// How long an Integrator Workflow waits for another message before it completes.
+    /// Each webhook delivery runs in a workflow of its own, so after its one message there is
+    /// nothing left to wait for. Its Processing runs are abandoned children and keep running.
+    /// Defaults to 300 seconds; <c>0</c> means never time out.
+    /// </summary>
+    public static TimeSpan? IntegratorInactivityTimeout =>
+        InactivityTimeout("INTEGRATOR-INACTIVITY-TIMEOUT-SECONDS", defaultSeconds: 300);
+
+    /// <summary>
+    /// How long a Supervisor (chat) workflow waits for the next message before it completes.
+    /// Defaults to 43200 seconds (12 hours, the Xians.Lib default); <c>0</c> means never time out.
+    /// </summary>
+    public static TimeSpan? SupervisorInactivityTimeout =>
+        InactivityTimeout("SUPERVISOR-INACTIVITY-TIMEOUT-SECONDS", defaultSeconds: 43200);
+
+    /// <summary>Seconds from <paramref name="key"/>; <c>0</c> is no timeout, an invalid value uses the default.</summary>
+    private static TimeSpan? InactivityTimeout(string key, int defaultSeconds)
+    {
+        var seconds = int.TryParse(Get(key), out var v) && v >= 0 ? v : defaultSeconds;
+        return seconds == 0 ? null : TimeSpan.FromSeconds(seconds);
+    }
+
     // LLM / Anthropic
     //
     // Returns the host env value if set, otherwise an empty string. The Anthropic key

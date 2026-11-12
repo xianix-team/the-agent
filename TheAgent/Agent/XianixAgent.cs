@@ -38,7 +38,8 @@ public class XianixAgent(
 
     private void ConfigureConversationWorkflow(XiansAgent xiansAgent, CancellationToken cancellationToken)
     {
-        var conversationWorkflow = xiansAgent.Workflows.DefineSupervisor();
+        var conversationWorkflow = xiansAgent.Workflows.DefineSupervisor(
+            new WorkflowOptions { InactivityTimeout = EnvConfig.SupervisorInactivityTimeout });
 
         // The Anthropic key resolver runs on the supervisor's first message per
         // tenant (SupervisorSubagent caches one AIAgent per TenantId; see
@@ -171,7 +172,8 @@ public class XianixAgent(
 
     private void ConfigureWebhookWorkflow(XiansAgent xiansAgent, CancellationToken cancellationToken)
     {
-        var webhookWorkflow = xiansAgent.Workflows.DefineIntegrator();
+        var webhookWorkflow = xiansAgent.Workflows.DefineIntegrator(
+            new WorkflowOptions { InactivityTimeout = EnvConfig.IntegratorInactivityTimeout });
 
         webhookWorkflow.OnWebhook(async (context) =>
         {
