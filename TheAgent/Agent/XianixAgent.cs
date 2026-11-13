@@ -38,7 +38,8 @@ public class XianixAgent(
 
     private void ConfigureConversationWorkflow(XiansAgent xiansAgent, CancellationToken cancellationToken)
     {
-        var conversationWorkflow = xiansAgent.Workflows.DefineSupervisor();
+        var conversationWorkflow = xiansAgent.Workflows.DefineSupervisor(
+            new WorkflowOptions { InactivityTimeout = EnvConfig.SupervisorInactivityTimeout });
 
         // The Anthropic key resolver runs on the supervisor's first message per
         // tenant (SupervisorSubagent caches one AIAgent per TenantId; see
@@ -171,7 +172,8 @@ public class XianixAgent(
 
     private void ConfigureWebhookWorkflow(XiansAgent xiansAgent, CancellationToken cancellationToken)
     {
-        var webhookWorkflow = xiansAgent.Workflows.DefineIntegrator();
+        var webhookWorkflow = xiansAgent.Workflows.DefineIntegrator(
+            new WorkflowOptions { InactivityTimeout = EnvConfig.IntegratorInactivityTimeout });
 
         webhookWorkflow.OnWebhook(async (context) =>
         {
@@ -225,11 +227,17 @@ public class XianixAgent(
                     return;
                 }
 
-                foreach (var result in batch.Matches)
+                // Each run's workflow ID ends with the delivery's request ID, so Studio can open
+                // a delivery's run from the request ID alone. This handler runs in an activity, so the
+                // runs are started through the Temporal client with IdConflictPolicy.UseExisting: a retry
+                // for the same request while its run is still going attaches to that run instead of
+                // starting a second review. Once the run has finished, a retry starts a new one under
+                // the same ID.
+                for (var i = 0; i < batch.Matches.Count; i++)
                 {
                     await XiansContext.Workflows.StartAsync<ProcessingWorkflow>(
-                        new object[] { result },
-                        Guid.NewGuid().ToString());
+                        new object[] { batch.Matches[i] },
+                        DeliveryRunKey(context.Webhook.RequestId, i));
                 }
 
                 context.Respond(new
@@ -255,6 +263,18 @@ public class XianixAgent(
                 context.Respond(new { status = "error", reason = "Internal processing error." });
             }
         });
+    }
+
+    /// <summary>
+    /// Unique key for a run a delivery starts. The first run is keyed by the request ID itself, so
+    /// it can be found from the delivery alone; further matches add their number (-2, -3, ...).
+    /// A delivery without a request ID gets a random key.
+    /// </summary>
+    internal static string DeliveryRunKey(string? requestId, int matchIndex)
+    {
+        if (string.IsNullOrWhiteSpace(requestId))
+            return Guid.NewGuid().ToString();
+        return matchIndex == 0 ? requestId : $"{requestId}-{matchIndex + 1}";
     }
 
     private static async Task<XiansAgent> CreateAndRegisterAgentAsync(CancellationToken cancellationToken)
