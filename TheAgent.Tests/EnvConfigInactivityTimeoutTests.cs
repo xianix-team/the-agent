@@ -23,9 +23,9 @@ public class EnvConfigInactivityTimeoutTests : IDisposable
     }
 
     [Fact]
-    public void Defaults_CloseAnIntegratorAfterFiveMinutes_AndKeepChatsForTwelveHours()
+    public void Defaults_CloseAnIntegratorAfterAnHour_AndKeepChatsForTwelveHours()
     {
-        Assert.Equal(TimeSpan.FromMinutes(5), EnvConfig.IntegratorInactivityTimeout);
+        Assert.Equal(TimeSpan.FromHours(1), EnvConfig.IntegratorInactivityTimeout);
         Assert.Equal(TimeSpan.FromHours(12), EnvConfig.SupervisorInactivityTimeout);
     }
 
@@ -54,6 +54,6 @@ public class EnvConfigInactivityTimeoutTests : IDisposable
     {
         Environment.SetEnvironmentVariable(IntegratorKey, value);
 
-        Assert.Equal(TimeSpan.FromMinutes(5), EnvConfig.IntegratorInactivityTimeout);
+        Assert.Equal(TimeSpan.FromHours(1), EnvConfig.IntegratorInactivityTimeout);
     }
 }

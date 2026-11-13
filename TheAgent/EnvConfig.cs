@@ -82,10 +82,10 @@ public static class EnvConfig
     /// How long an Integrator Workflow waits for another message before it completes.
     /// Each webhook delivery runs in a workflow of its own, so after its one message there is
     /// nothing left to wait for. Its Processing runs are abandoned children and keep running.
-    /// Defaults to 300 seconds; <c>0</c> means never time out.
+    /// Defaults to 3600 seconds (1 hour); <c>0</c> means never time out.
     /// </summary>
     public static TimeSpan? IntegratorInactivityTimeout =>
-        InactivityTimeout("INTEGRATOR-INACTIVITY-TIMEOUT-SECONDS", defaultSeconds: 300);
+        InactivityTimeout("INTEGRATOR-INACTIVITY-TIMEOUT-SECONDS", defaultSeconds: 3600);
 
     /// <summary>
     /// How long a Supervisor (chat) workflow waits for the next message before it completes.
