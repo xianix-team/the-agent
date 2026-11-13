@@ -503,6 +503,16 @@ Examples:
 | `GITHUB-TOKEN` (secrets.X, mandatory)                          | `AZURE-DEVOPS-TOKEN` (secrets.Y, mandatory)                            | `GITHUB-TOKEN=secrets.X` (mandatory), `AZURE-DEVOPS-TOKEN=secrets.Y` (mand.) |
 | `GITHUB-TOKEN` (secrets.X, mandatory)                          | `GITHUB-TOKEN` (secrets.Z, optional) — same name, override             | `GITHUB-TOKEN=secrets.Z` (optional) — execution wins                         |
 
+### Plugin settings via `constant` envs (example: PR auto-approve)
+
+Plugin behaviour toggles are plain `constant: true` envs. Hyphenated names are also exported with underscores inside the container, so the `pr-reviewer` plugin reads this one as `PR_REVIEWER_APPROVE_ON_SUCCESS`:
+
+```json
+{ "name": "PR-REVIEWER-APPROVE-ON-SUCCESS", "value": "false", "constant": true }
+```
+
+`"false"` (or omitting the entry) means the reviewer never approves a PR — it posts a comment review (GitHub) or a no-vote `0` (Azure DevOps). Set `"true"` so a review with no critical issues or warnings approves the PR.
+
 ### Chat-driven runs
 
 The same `with-envs` declarations also flow through to **chat-initiated** runs (e.g. when a user asks the agent to run a plugin via `RunClaudeCodeOnRepository` instead of via a webhook). A chat dispatch doesn't bind to a specific execution block, so the chat tool reads `rules.json` as the manifest of *every* credential the agent could need and ships:
