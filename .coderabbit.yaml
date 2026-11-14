@@ -1,0 +1,327 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en-US"
+early_access: false
+tone_instructions: 'Expert .NET/C#, Python and Bash reviewer for an agent-orchestration platform. Provide concise feedback; elaborate only when requested. Enterprise standards apply. Treat security and tenant isolation as top priority.'
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+
+  # Walkthrough options (https://docs.coderabbit.ai/pr-reviews/walkthroughs)
+  high_level_summary: true
+  high_level_summary_in_walkthrough: false
+  collapse_walkthrough: false
+  changed_files_summary: true
+  sequence_diagrams: true
+  estimate_code_review_effort: true
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: true
+  suggested_labels: true
+  suggested_reviewers: true
+  poem: false
+  review_status: true
+
+  path_filters:
+    # Exclude build output and dependencies
+    - "!**/bin/**"
+    - "!**/obj/**"
+    - "!**/node_modules/**"
+    - "!**/__pycache__/**"
+    - "!**/*.pyc"
+    - "!**/.venv/**"
+
+    # Exclude test and coverage artifacts
+    - "!**/TestResults/**"
+    - "!**/coverage/**"
+    - "!**/*.trx"
+
+    # Exclude lock files
+    - "!**/package-lock.json"
+
+    # Exclude IDE and OS files
+    - "!**/.vs/**"
+    - "!**/.vscode/**"
+    - "!**/.idea/**"
+    - "!**/.DS_Store"
+    - "!**/*.user"
+
+    # Exclude generated / binary documentation assets
+    - "!Docs/architecture-diagrams.html"
+
+    # Exclude sensitive local environment files
+    - "!**/.env"
+    - "!**/.env.local"
+
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches: ["main", "develop", "release"]
+
+  path_instructions:
+    # ---------------------------------------------------------------- TheAgent (.NET)
+    - path: "TheAgent/**/*.cs"
+      instructions: |
+        Review the .NET 10 / C# code. Ensure that:
+        - Nullable reference types are respected; no null-forgiving (!) without justification.
+        - Async methods return Task/ValueTask, are awaited, and accept CancellationToken where appropriate; no async void, no .Result/.Wait().
+        - Dependencies are injected, not created with `new` or static state.
+        - Configuration is read via EnvConfig / Constants, never hardcoded (URLs, image names, keys, tenant IDs).
+        - Secrets, tokens and webhook payload contents are never logged.
+        - Exceptions are handled deliberately; do not swallow them silently; log with structured logging.
+        - IDisposable/IAsyncDisposable resources (Docker clients, streams, HttpClient) are disposed or reused correctly.
+        - Public types and members follow .NET naming conventions (PascalCase, I-prefix for interfaces, Async suffix).
+        - New behaviour has matching tests in TheAgent.Tests.
+
+    - path: "TheAgent/Workflows/**/*.cs"
+      instructions: |
+        Review the workflow code. Ensure that:
+        - [WorkflowRun] methods are deterministic: no DateTime.Now, Guid.NewGuid, Random, direct I/O or network calls; side effects go through activities.
+        - Changes to existing workflow logic consider replay/versioning compatibility for in-flight executions.
+        - Activity calls have sensible timeouts and retry policies.
+        - Workflow inputs/outputs are serializable and backwards compatible.
+        - Tenant context is propagated and never mixed between workflows.
+
+    - path: "TheAgent/Activities/**/*.cs"
+      instructions: |
+        Review the activity code. Ensure that:
+        - Activities are idempotent or safe to retry.
+        - All I/O (Docker, HTTP, file system) happens here, not in workflows.
+        - Long-running work honours cancellation and heartbeats where supported.
+        - Errors surface meaningful messages without leaking secrets.
+
+    - path: "TheAgent/Containers/**/*.cs"
+      instructions: |
+        Review the Docker container management code. Ensure that:
+        - Executor containers are always cleaned up (success, failure, timeout, cancellation).
+        - Resource limits (CPU, memory, timeout) are applied to spawned containers.
+        - Only the minimum required mounts are used; the Docker socket and host paths are never exposed to untrusted input.
+        - Environment variables passed to containers are explicitly allow-listed; secrets are not echoed in logs.
+        - Container names, images and commands are not built from unsanitised webhook data (command/argument injection).
+        - Tenant isolation is preserved (separate volumes/workspaces per tenant, see Docs/tenant-isolation-design.md).
+
+    - path: "TheAgent/Orchestrator/**/*.cs"
+      instructions: |
+        Review the orchestrator code. Ensure that:
+        - Task dispatch logic is deterministic and handles duplicate/out-of-order events.
+        - Failures in one task do not block or corrupt others.
+        - Concurrency is bounded and shared state is thread-safe.
+
+    - path: "TheAgent/Rules/**/*.cs"
+      instructions: |
+        Review the webhook rules engine code. Ensure that:
+        - Webhook verification (WebhookVerificationGate) cannot be bypassed and fails closed.
+        - Rule matching handles missing/malformed payload fields without throwing unhandled exceptions.
+        - Platform differences (GitHub vs Azure DevOps) are handled consistently.
+        - Models in WebhookRulesModels stay backwards compatible with existing rules.json files; schema changes are reflected in Docs/rules-json.md and TheAgent/Knowledge/rules.json.
+        - Regular expressions are safe from catastrophic backtracking (use timeouts) when applied to external input.
+        - Rule-derived values used in shell commands or paths are validated.
+
+    - path: "TheAgent/Rules/Schedule/**/*.cs"
+      instructions: |
+        Review the scheduling code. Ensure that:
+        - Cron expressions are validated and time zones handled explicitly (UTC by default).
+        - Scheduled runs are not duplicated across restarts or multiple instances.
+        - Invalid schedules fail with clear errors rather than silently never running.
+
+    - path: "TheAgent/Agent/**/*.cs"
+      instructions: |
+        Review the AI agent code. Ensure that:
+        - Prompts built from webhook/user content are treated as untrusted input (prompt-injection awareness); no secrets are put in prompts.
+        - Model/provider settings come from configuration, not hardcoded.
+        - LLM calls have timeouts, error handling and bounded retries.
+        - Tool/function definitions grant the least privilege required.
+
+    - path: "TheAgent/Knowledge/**"
+      instructions: |
+        Review the agent knowledge files (system prompts and rules.json). Ensure that:
+        - Prompts are clear, unambiguous and consistent with the current code behaviour.
+        - rules.json is valid JSON and matches the schema documented in Docs/rules-json.md.
+        - No secrets, tokens or tenant-specific data are embedded (these files are embedded resources).
+
+    - path: "TheAgent/Program.cs"
+      instructions: |
+        Review the application entry point. Ensure that:
+        - Startup validates required configuration and fails fast with a clear message.
+        - Services are registered with correct lifetimes.
+        - Graceful shutdown is supported.
+
+    - path: "TheAgent/EnvConfig.cs"
+      instructions: |
+        Review the environment configuration. Ensure that:
+        - Every new variable is documented in TheAgent/.env.example (with a placeholder, never a real value).
+        - Required vs optional variables are distinguished and defaults are safe.
+        - Secrets are never logged or included in exception messages.
+
+    - path: "TheAgent/TheAgent.csproj"
+      instructions: |
+        Review the project file. Ensure that:
+        - New NuGet packages are necessary, reputable and pinned to explicit versions; flag pre-release (beta/rc) additions.
+        - TargetFramework, Nullable and ImplicitUsings settings are unchanged unless intended.
+        - No local-path ProjectReference is committed.
+
+    - path: "TheAgent/Dockerfile"
+      instructions: |
+        Review the Dockerfile. Ensure that:
+        - Multi-stage build with pinned, official base images.
+        - Runtime image contains no SDK, source or secrets.
+        - Runs as a non-root user where possible.
+        - Layer ordering supports build caching (restore before copy of sources).
+
+    # ---------------------------------------------------------------- .NET tests
+    - path: "TheAgent.Tests/**/*.cs"
+      instructions: |
+        Review the xUnit test code. Ensure that:
+        - Tests follow Arrange-Act-Assert and have descriptive names (Method_Scenario_ExpectedResult).
+        - Both success and failure/edge cases are covered.
+        - Dependencies are mocked with NSubstitute; no real network, Docker or file-system dependency in unit tests.
+        - Tests are deterministic and independent; no shared mutable state, no Thread.Sleep.
+        - No [Fact(Skip=...)] or commented-out tests are committed.
+        - Assertions are specific (avoid Assert.True(x != null)).
+        - Empty placeholder tests (e.g. UnitTest1.cs) are removed or replaced with real coverage.
+
+    # ---------------------------------------------------------------- Executor (Python + Bash + Docker)
+    - path: "Executor/**/*.py"
+      instructions: |
+        Review the Executor Python code. Ensure that:
+        - Code follows PEP 8 with type hints on public functions.
+        - Subprocess calls use argument lists (no shell=True) and never interpolate untrusted input.
+        - Secrets and tokens from the environment are never printed or logged.
+        - Errors produce clear messages and non-zero exit codes; no bare `except:`.
+        - File paths are validated and confined to the workspace.
+        - Claude Agent SDK usage restricts allowed tools/permissions to what the plugin requires.
+        - Behaviour changes are mirrored in Executor.OpenCode where both executors share logic (host_context.py).
+
+    - path: "Executor.OpenCode/**/*.py"
+      instructions: |
+        Review the Executor.OpenCode Python code. Ensure that:
+        - Code follows PEP 8 with type hints on public functions.
+        - Subprocess calls use argument lists (no shell=True) and never interpolate untrusted input.
+        - Secrets and tokens are never printed or logged.
+        - Plugin runtime/publishing logic (plugin_runtime.py, scripts/publish_plugins.py) validates inputs and fails clearly.
+        - Behaviour stays aligned with the Executor (Claude Code) variant where logic is shared.
+
+    - path: "{Executor,Executor.OpenCode,Scripts,TestScripts,tests}/**/*.sh"
+      instructions: |
+        Review the shell script. Ensure that:
+        - Starts with a proper shebang and uses `set -euo pipefail` (or documents why not).
+        - All variable expansions are quoted; no unquoted `$VAR` in commands or paths.
+        - Passes `shellcheck --severity=warning` (enforced in CI).
+        - No secrets or tokens are echoed, written to logs, or passed on the command line where visible in `ps`.
+        - Temporary files use mktemp and are cleaned up with trap.
+        - Git/CLI operations on external repositories validate and sanitise repository URLs and branch names.
+        - Scripts are POSIX/bash compatible with the base image and use LF line endings.
+
+    - path: "{Executor,Executor.OpenCode}/Dockerfile"
+      instructions: |
+        Review the Executor Dockerfile. Ensure that:
+        - Base images and tool versions (Node, GitHub CLI, Azure CLI, opencode-ai, mise) are pinned.
+        - apt layers use --no-install-recommends and clean package lists.
+        - The container runs as the non-root `xianix` user at runtime.
+        - No secrets are baked into image layers; credentials are injected at runtime only.
+        - Installed tooling is limited to what the executor needs (minimise attack surface).
+
+    - path: "{Executor,Executor.OpenCode}/requirements.txt"
+      instructions: |
+        Review Python dependencies. Ensure that:
+        - Versions are pinned exactly.
+        - New packages are necessary and from reputable sources.
+        - Versions stay compatible with the other executor image where relevant.
+
+    - path: "{Executor,Executor.OpenCode}/tests/**"
+      instructions: |
+        Review the Executor tests. Ensure that:
+        - Python tests use unittest/pytest conventions, are deterministic and need no network.
+        - Integration tests clean up containers and temporary files.
+        - Tests cover failure paths, not only the happy path.
+
+    # ---------------------------------------------------------------- E2E / scripts / docs
+    - path: "tests/e2e/**"
+      instructions: |
+        Review the end-to-end test harness. Ensure that:
+        - Credentials come from .env (see tests/e2e/.env.example); none are committed.
+        - Tests clean up created PRs, containers and temporary data.
+        - Timeouts and polling are bounded; no infinite loops.
+        - The README stays in sync with the supported scenarios.
+
+    - path: "TestScripts/**"
+      instructions: |
+        Review the test scripts and sample payloads. Ensure that:
+        - Sample JSON payloads are valid and contain no real tokens, emails or customer data.
+        - Scripts quote variables and fail clearly on missing arguments.
+        - Samples remain consistent with the supported webhook formats in Docs/webhook-headers-guide.md.
+
+    - path: "Scripts/**"
+      instructions: |
+        Review the deployment and VM scripts. Ensure that:
+        - No secrets are hardcoded; values come from environment or a secret store.
+        - Destructive operations (delete-envs.sh) require explicit confirmation or targeted scoping.
+        - The systemd unit (xianix-agent.service) runs with least privilege and restarts safely.
+        - Scripts are idempotent where possible.
+
+    - path: ".github/workflows/**"
+      instructions: |
+        Review the GitHub Actions workflows. Ensure that:
+        - Third-party actions are pinned to a version or commit SHA.
+        - `permissions:` is set to the minimum required (least privilege).
+        - Secrets are only used via `secrets.*` and never echoed; untrusted PR input is not interpolated into `run:` steps (script injection).
+        - Image tags/publishing only happen from trusted branches or tags.
+        - shellcheck, unit tests and Docker builds remain part of the pipeline.
+
+    - path: "Docs/**/*.md"
+      instructions: |
+        Review the documentation. Ensure that:
+        - Content is accurate and consistent with the code (architecture, rules.json schema, webhook headers, deployment).
+        - Diagrams and commands are correct and up to date.
+        - No secrets, internal tokens or real tenant identifiers are included.
+
+    - path: "{README.md,REVIEW_RULES.md,**/README.md}"
+      instructions: |
+        Review the README/rules documentation. Ensure that:
+        - Setup, build and test commands are correct and runnable.
+        - Descriptions match the current project structure and behaviour.
+        - No secrets or environment-specific values are included.
+
+    - path: "**/.env.example"
+      instructions: |
+        Review the example environment file. Ensure that:
+        - Only placeholder values are used; no real secrets, tokens or URLs with credentials.
+        - Every variable required by the code is present and briefly documented.
+
+    - path: "**/*.json"
+      instructions: |
+        Review the JSON file. Ensure that:
+        - JSON is valid and consistently formatted.
+        - No secrets, tokens or personal data are included.
+        - Structure matches the consuming code or documented schema.
+
+    # ---------------------------------------------------------------- Cross-cutting
+    - path: "**/*.{cs,py,sh}"
+      instructions: |
+        General guidelines. Ensure that:
+        - No hardcoded credentials, API keys, tokens or connection strings.
+        - Webhook payloads, repository names and branch names are treated as untrusted input.
+        - No leftover debug output (Console.WriteLine, print, echo debugging) in production code.
+        - No commented-out code or unresolved TODOs without a tracking issue.
+        - Changes preserve multi-tenant isolation.
+
+  # Tools run by CodeRabbit on matching files
+  tools:
+    shellcheck:
+      enabled: true
+    ruff:
+      enabled: true
+    hadolint:
+      enabled: true
+    actionlint:
+      enabled: true
+    markdownlint:
+      enabled: true
+    gitleaks:
+      enabled: true
+    checkov:
+      enabled: true
+    semgrep:
+      enabled: true
+
+chat:
+  auto_reply: true
