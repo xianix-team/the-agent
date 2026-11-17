@@ -529,6 +529,16 @@ Some credentials are consumed by the agent process itself, not just the containe
 
 The host env var is **optional**. `EnvConfig.ValidateRequiredVariables()` gates only the Xians platform credentials (`XIANS-SERVER-URL`, `XIANS-API-KEY`) so the agent can register and upload knowledge before any chat traffic arrives — Anthropic key absence does not block boot. If neither the rule-set-level entry nor the host env resolves at first-message time, the supervisor raises a clear `Anthropic API key resolver returned an empty value for tenant '<tenant>'` error which the conversation workflow logs and surfaces to the user as a generic apology; fix it by adding either a rule-set-level `with-envs` entry (constant / `host.*` / `secrets.*`) or a host env value. No restart needed — `SupervisorSubagent.EnsureAgentForTenantAsync` only caches successful constructions, so the next message from that tenant retries the resolver. When a host value is present, a rule-set-level `ANTHROPIC-API-KEY` entry in `rules.json` *overrides* it on the first chat message per tenant, after which the resolved `AnthropicClient` is cached for the lifetime of the process *for that tenant*. The container path also picks up rule-set commons via the normal `with-envs` merge, so the same declaration covers both the supervisor and every executor run.
 
+### Plugin settings via `constant` (example: PR approval)
+
+Non-secret plugin tuning flags are plain `constant` entries. The `pr-reviewer` plugin reads `PR_REVIEWER_APPROVE_ON_SUCCESS` (default `false`): when `true`, a clean review (no critical issues, no warnings) **approves** the PR on both GitHub (`gh pr review --approve`) and Azure DevOps (vote `10` / `5`); when `false` or omitted it never approves (GitHub `--comment`, Azure DevOps vote `0`).
+
+```json
+{ "name": "PR_REVIEWER_APPROVE_ON_SUCCESS", "value": "true", "constant": true }
+```
+
+Declare it at the rule-set level to apply to every execution, or on a single execution to override it there. Underscored names are injected as-is (only dashed names are re-exported as underscored aliases by the executor).
+
 ### Resolving `secrets.*`
 
 ```json

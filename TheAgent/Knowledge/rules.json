@@ -16,6 +16,11 @@
           "name": "ANTHROPIC-API-KEY",
           "value": "secrets.ANTHROPIC-API-KEY",
           "mandatory": false
+        },
+        {
+          "name": "PR_REVIEWER_APPROVE_ON_SUCCESS",
+          "value": "false",
+          "constant": true
         }
       ],
       "executions": [
