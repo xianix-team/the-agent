@@ -153,6 +153,12 @@ public sealed class ExecutionSpec
     /// <summary>Optional hard spend cap (USD); null means no cap. Flows as <c>XIANIX-MAX-BUDGET-USD</c>.</summary>
     public double? MaxBudgetUsd { get; init; }
 
+    /// <summary>
+    /// Optional Docker image for this execution. Empty means the host <c>EXECUTOR-IMAGE</c>
+    /// default. Flows to <see cref="Activities.ContainerExecutionInput.ExecutorImage"/>.
+    /// </summary>
+    public string ExecutorImage { get; init; } = string.Empty;
+
     /// <summary>When true, resume the prior session for this conversation. Flows as <c>XIANIX-RESUME-SESSIONS</c>.</summary>
     public bool ResumeSessions { get; init; }
 
@@ -170,7 +176,8 @@ public sealed class ExecutionSpec
         IReadOnlyList<string>? allowedTools = null,
         IReadOnlyList<string>? disallowedTools = null,
         double? maxBudgetUsd = null,
-        bool resumeSessions = false)
+        bool resumeSessions = false,
+        string executorImage = "")
     {
         Plugins         = [.. plugins];
         WithEnvs        = withEnvs is null ? [] : [.. withEnvs];
@@ -184,5 +191,6 @@ public sealed class ExecutionSpec
         DisallowedTools = disallowedTools is null ? [] : [.. disallowedTools];
         MaxBudgetUsd    = maxBudgetUsd;
         ResumeSessions  = resumeSessions;
+        ExecutorImage   = executorImage ?? "";
     }
 }
