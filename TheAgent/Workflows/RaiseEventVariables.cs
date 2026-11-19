@@ -1,6 +1,8 @@
 using System.Globalization;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Xianix.Activities;
+using Xianix.Containers;
 using Xianix.Rules;
 
 namespace Xianix.Workflows;
@@ -23,6 +25,9 @@ internal static class RaiseEventVariables
             ["correlationId"] = Guid.NewGuid().ToString("D"),
             ["metrics.status"] = result.Succeeded ? "success" : "error",
         };
+
+        if (!result.Succeeded)
+            vars["metrics.error"] = FormatError(result);
 
         if (plugins is not null)
         {
@@ -67,6 +72,36 @@ internal static class RaiseEventVariables
 
         return vars;
     }
+
+    private const int MaxErrorLength = 500;
+
+    /// <summary>
+    /// Short failure reason for <c>metrics.error</c>: the executor's JSON <c>error</c> field
+    /// when present, otherwise the tail of stderr (where the last lines carry the cause).
+    /// JSON-escaped because placeholders are substituted straight into the payload text,
+    /// and error messages routinely contain quotes and newlines.
+    /// </summary>
+    private static string FormatError(ContainerExecutionResult result)
+    {
+        var error = ContainerOutputParser.ExtractField(result.StdOut, "error");
+        if (string.IsNullOrWhiteSpace(error) || error == result.StdOut)
+            error = result.StdErr;
+
+        error = string.IsNullOrWhiteSpace(error)
+            ? $"Execution failed with exit code {result.ExitCode}."
+            : error.Trim();
+
+        if (error.Length > MaxErrorLength)
+            error = "…" + error[^MaxErrorLength..];
+
+        return JsonSerializer.Serialize(error, ErrorJsonOptions)[1..^1];
+    }
+
+    // Relaxed so non-ASCII (e.g. "…") stays readable; quotes and control chars are still escaped.
+    private static readonly JsonSerializerOptions ErrorJsonOptions = new()
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
 
     private static string? FormatInput(object? value) => value switch
     {

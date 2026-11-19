@@ -1,0 +1,53 @@
+[
+    {
+        "webhook": "Default",
+        "executions": [
+            {
+                "name": "raise-event-failure-test",
+                "platform": "github",
+                "repository": {
+                    "url": "repository.clone_url"
+                },
+                "match-any": [
+                    {
+                        "name": "pr-opened",
+                        "rule": "action==opened"
+                    }
+                ],
+                "use-inputs": [
+                    {
+                        "name": "pr-number",
+                        "value": "number"
+                    }
+                ],
+                "with-envs": [
+                    {
+                        "name": "FORCE-FAILURE",
+                        "value": "secrets.XIANIX-TEST-SECRET-THAT-DOES-NOT-EXIST",
+                        "mandatory": true
+                    }
+                ],
+                "use-plugins": [
+                    {
+                        "plugin-name": "pr-reviewer@xianix-plugins-official",
+                        "marketplace": "xianix-team/plugins-official"
+                    }
+                ],
+                "execute-prompt": "Run /pr-review {{pr-number}}.",
+                "raise-events": [
+                    {
+                        "name": "local-failure-listener",
+                        "url": "http://localhost:8787/notify",
+                        "payload": {
+                            "status": "{{metrics.status}}",
+                            "error": "{{metrics.error}}",
+                            "plugin": "{{plugin-name}}",
+                            "pr": "{{pr-number}}",
+                            "repository": "{{repository-name}}"
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+]

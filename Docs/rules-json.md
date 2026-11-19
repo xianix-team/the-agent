@@ -612,6 +612,23 @@ Notifications are **best-effort and never affect the run**: the execution's succ
 
 Only the fields declared here are transmitted. Be deliberate about that — a listener is a third-party endpoint, and interpolating repository content or prompt text sends tenant data off-platform.
 
+### Failed runs
+
+Events are raised for failed runs too, so a listener can alert on them (e.g. send a failure email):
+
+- **The plugin fails** (the container exits non-zero, hits its budget, or times out) — events fire with `metrics.status` = `error`.
+- **The executor throws before a result exists** (workspace/volume setup, container start, waiting on the container, or parsing its output) — events still fire once, with `metrics.status` = `error`, before the workflow fails.
+
+On any failure, `{{metrics.error}}` carries a short reason (at most ~500 characters, JSON-escaped): the executor's `error` field when present, otherwise the tail of the container log or the exception message. It is absent on successful runs.
+
+```jsonc
+"payload": {
+  "status": "{{metrics.status}}",
+  "error":  "{{metrics.error}}",
+  "plugin": "{{plugin-name}}"
+}
+```
+
 ### Known gaps
 
 - **Chat runs.** A chat rule set has no `executions`, so chat-initiated runs have nowhere to declare an event. Webhook and schedule rule sets both carry executions, so both work unchanged.

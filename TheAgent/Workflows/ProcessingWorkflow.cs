@@ -13,6 +13,9 @@ namespace Xianix.Workflows;
 [Workflow]
 public class ProcessingWorkflow
 {
+    // Set once raise-events delivery starts, so a later failure (e.g. container cleanup)
+    // doesn't deliver them a second time from the catch in WorkflowRun.
+    private bool _raiseEventsReported;
 
     [WorkflowRun]
     public async Task WorkflowRun(ProcessingRequest orchestrationResult)
@@ -40,12 +43,18 @@ public class ProcessingWorkflow
                 orchestrationResult.TenantId,
                 orchestrationResult.Name,
                 orchestrationResult.ExecutionBlockName ?? "—");
+
+            // The run never produced a container result, so raise-events would otherwise be
+            // skipped entirely — listeners (e.g. failure-email relays) still need to hear about it.
+            if (!_raiseEventsReported)
+                await ReportRaiseEventsAsync(orchestrationResult, BuildFailureResult(orchestrationResult, ex));
+
             throw new ApplicationFailureException(
                 $"Processing workflow failed: {ex.Message}", ex, nonRetryable: true);
         }
     }
 
-    private static async Task ExecuteContainerPipelineAsync(ProcessingRequest orchestrationResult)
+    private async Task ExecuteContainerPipelineAsync(ProcessingRequest orchestrationResult)
     {
         var execution = orchestrationResult.Execution!;
         var repositoryUrl = execution.RepositoryUrl;
@@ -103,6 +112,7 @@ public class ProcessingWorkflow
             ContainerOutputParser.Parse(executionResult);
             LogOutcome(executionResult, executionLabel, executionId, orchestrationResult.TenantId, repoLabel, keyInputs);
             await ReportExecutionMetricsAsync(orchestrationResult, executionResult);
+            _raiseEventsReported = true;
             await ReportRaiseEventsAsync(orchestrationResult, executionResult);
         }
         finally
@@ -115,6 +125,19 @@ public class ProcessingWorkflow
     }
 
     // ── Pipeline steps ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Stand-in result for a run that threw before the container produced one, so
+    /// raise-events can still report <c>metrics.status=error</c> and <c>metrics.error</c>.
+    /// </summary>
+    internal static ContainerExecutionResult BuildFailureResult(ProcessingRequest orchestrationResult, Exception ex) => new()
+    {
+        TenantId       = orchestrationResult.TenantId,
+        ExecutionLabel = $"name={orchestrationResult.Name}",
+        ExitCode       = -1,
+        StdOut         = string.Empty,
+        StdErr         = WorkflowErrors.UserFacingMessage(ex),
+    };
 
     private static ContainerExecutionInput BuildContainerInput(ProcessingRequest result)
     {

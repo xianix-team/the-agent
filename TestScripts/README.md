@@ -64,3 +64,38 @@ After the response comes back, the `ActivationWorkflow` will receive a signal, s
 
 - **Agent logs** (`dotnet run`) — look for `"Webhook 'pull requests' matched"` and then container lifecycle messages.
 - **Docker** — `docker ps` to see the executor container while it runs; `docker volume ls` to confirm the workspace volume was created.
+
+## Failure notifications (raise-events on a failed run)
+
+Checks that a run which **fails** still fires its `raise-events` with `metrics.status=error` and a `metrics.error` reason — the hook a failure-email relay listens on.
+
+`rules-raise-event-failure.json` forces a failure on purpose: it requires a secret that doesn't exist (`secrets.XIANIX-TEST-SECRET-THAT-DOES-NOT-EXIST`), so the container never starts and the workflow throws. Its raise-event points at a local listener instead of a real email service.
+
+1. Start the listener (stands in for the email service):
+
+   ```bash
+   python3 TestScripts/raise-event-listener.py
+   ```
+
+2. In Xians Agent Studio, back up the tenant's **Rules** knowledge, then replace it with `rules-raise-event-failure.json`. Change `"webhook": "Default"` if your webhook has another name.
+3. Run the agent locally (`dotnet run --project TheAgent`). The listener URL is `localhost`, so the agent must run on the same machine (use `host.docker.internal` if the agent runs in Docker).
+4. Fire a PR-opened webhook:
+
+   ```bash
+   ./simulate-pr-opened.sh '<webhook-url>' 42
+   ```
+
+**Expected** — the listener prints one event within a few seconds:
+
+```json
+{
+  "status": "error",
+  "error": "Missing mandatory environment variable(s): FORCE-FAILURE. Ensure these are configured ...",
+  "plugin": "pr-reviewer@xianix-plugins-official",
+  "pr": "42",
+  "repository": "example-repo"
+}
+>>> FAILURE EVENT — this is where the failure email would be sent.
+```
+
+The agent log shows `[fatal] ProcessingWorkflow failed ...` — the run still fails; the event is sent on the way out. Restore your Rules knowledge afterwards.
