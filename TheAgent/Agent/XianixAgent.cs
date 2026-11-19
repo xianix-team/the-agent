@@ -149,7 +149,8 @@ public class XianixAgent(
                 new WorkflowOptions { Activable = false },
                 typeName: EnvConfig.AgentName + ":Processing Workflow")
             .AddActivity<ContainerActivities>()
-            .AddActivity<RaiseEventActivities>();
+            .AddActivity<RaiseEventActivities>()
+            .AddActivity<FailureNotificationActivities>();
 
         xiansAgent.Workflows
             .DefineCustom<ClaudeCodeChatWorkflow>(new WorkflowOptions { Activable = false },
