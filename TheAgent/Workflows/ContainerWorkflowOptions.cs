@@ -58,4 +58,11 @@ public static class ContainerWorkflowOptions
         StartToCloseTimeout = TimeSpan.FromSeconds(30),
         RetryPolicy = new() { MaximumAttempts = 10 },
     };
+
+    /// <summary>One plugin-failure notification POST to the Xians server. Best-effort, few retries.</summary>
+    public static readonly ActivityOptions FailureNotification = new()
+    {
+        StartToCloseTimeout = TimeSpan.FromSeconds(30),
+        RetryPolicy = new() { MaximumAttempts = 3 },
+    };
 }

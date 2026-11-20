@@ -279,6 +279,24 @@ def extract_usage(result_message: ResultMessage | None) -> dict:
     return usage if isinstance(usage, dict) else {}
 
 
+class PluginRunError(RuntimeError):
+    """Claude Code finished the stream but reported the plugin run itself as failed."""
+
+
+def result_error(result_message: ResultMessage | None) -> str | None:
+    """The SDK's own verdict that the run failed (e.g. max turns hit, API error), or None.
+
+    Without this check such a run would still exit 0 with status "completed", so the control
+    plane would never treat it as a failure (no failure comment, no failure notification).
+    """
+    if result_message is None or not getattr(result_message, "is_error", False):
+        return None
+    subtype = getattr(result_message, "subtype", None) or "error"
+    detail = getattr(result_message, "result", None)
+    detail = detail.strip() if isinstance(detail, str) else ""
+    return f"Claude Code reported the run failed ({subtype})" + (f": {truncate(detail, 1000)}" if detail else ".")
+
+
 def truncate(text: str, max_len: int = 300) -> str:
     text = text.strip()
     if len(text) <= max_len:
@@ -570,6 +588,12 @@ async def main() -> None:
 
     if skey:
         persist_session(skey, getattr(_run.result_message, "session_id", None))
+
+    # Hand an SDK-reported failure to the top-level handler, which emits the error envelope
+    # (keeping the partial output and usage) and exits 1 so the control plane sees a failure.
+    sdk_error = result_error(_run.result_message)
+    if sdk_error:
+        raise PluginRunError(sdk_error)
 
     duration = time.monotonic() - _start_time
 

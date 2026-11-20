@@ -6,6 +6,7 @@ using Xianix.Activities;
 using Xianix.Containers;
 using Xianix.Orchestrator;
 using Xianix.Rules;
+using TheAgent;
 using Xians.Lib.Agents.Core;
 
 namespace Xianix.Workflows;
@@ -13,6 +14,10 @@ namespace Xianix.Workflows;
 [Workflow]
 public class ProcessingWorkflow
 {
+    // A failed container run reports the failure itself; this stops the catch in WorkflowRun
+    // (e.g. a later cleanup failure) from reporting it a second time.
+    private bool _failureReported;
+    private string? _executionId;
 
     [WorkflowRun]
     public async Task WorkflowRun(ProcessingRequest orchestrationResult)
@@ -40,12 +45,13 @@ public class ProcessingWorkflow
                 orchestrationResult.TenantId,
                 orchestrationResult.Name,
                 orchestrationResult.ExecutionBlockName ?? "—");
+            await ReportFailureAsync(orchestrationResult, WorkflowErrors.UserFacingMessage(ex));
             throw new ApplicationFailureException(
                 $"Processing workflow failed: {ex.Message}", ex, nonRetryable: true);
         }
     }
 
-    private static async Task ExecuteContainerPipelineAsync(ProcessingRequest orchestrationResult)
+    private async Task ExecuteContainerPipelineAsync(ProcessingRequest orchestrationResult)
     {
         var execution = orchestrationResult.Execution!;
         var repositoryUrl = execution.RepositoryUrl;
@@ -56,6 +62,7 @@ public class ProcessingWorkflow
 
         var input = BuildContainerInput(orchestrationResult);
         var executionId = input.ExecutionId;
+        _executionId = executionId;
         var keyInputs = FormatKeyInputs(orchestrationResult.Inputs);
         var pluginSummary = FormatPluginSummary(execution.Plugins);
         var repoLabel = string.IsNullOrEmpty(execution.RepositoryName)
@@ -102,6 +109,8 @@ public class ProcessingWorkflow
 
             ContainerOutputParser.Parse(executionResult);
             LogOutcome(executionResult, executionLabel, executionId, orchestrationResult.TenantId, repoLabel, keyInputs);
+            if (!executionResult.Succeeded)
+                await ReportFailureAsync(orchestrationResult, FailureReason(executionResult, _executionId));
             await ReportExecutionMetricsAsync(orchestrationResult, executionResult);
             await ReportRaiseEventsAsync(orchestrationResult, executionResult);
         }
@@ -112,6 +121,91 @@ public class ProcessingWorkflow
                 (ContainerActivities a) => a.CleanupContainerAsync(containerId),
                 ContainerWorkflowOptions.Cleanup);
         }
+    }
+
+    // ── Failure notification ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Asks the Xians server to email the tenant's notification contacts (Agent Studio → Contacts)
+    /// that the run failed. Runs at most once per workflow and covers every failed run, including
+    /// scheduled ones. Best-effort: a failed notification is logged and never changes the run's outcome.
+    /// </summary>
+    private async Task ReportFailureAsync(ProcessingRequest orchestrationResult, string reason)
+    {
+        if (_failureReported || orchestrationResult.Execution is not { } execution)
+            return;
+        _failureReported = true;
+
+        var request = new PluginFailureNotificationRequest
+        {
+            TenantId     = orchestrationResult.TenantId,
+            Notification = BuildFailureNotification(orchestrationResult, execution, reason, _executionId, Workflow.UtcNow),
+        };
+
+        try
+        {
+            await Workflow.ExecuteActivityAsync(
+                (FailureNotificationActivities a) => a.NotifyPluginFailureAsync(request),
+                ContainerWorkflowOptions.FailureNotification);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Workflow.Logger.LogWarning(ex,
+                "Failed to send failure notification for '{Name}', block '{Block}'. The notification is non-critical.",
+                orchestrationResult.Name,
+                orchestrationResult.ExecutionBlockName ?? "—");
+        }
+    }
+
+    internal static PluginFailureNotification BuildFailureNotification(
+        ProcessingRequest orchestrationResult, ExecutionSpec execution, string reason, string? executionId, DateTime occurredAt)
+    {
+        var repository = string.IsNullOrWhiteSpace(execution.RepositoryName) ? execution.RepositoryUrl : execution.RepositoryName;
+
+        return new PluginFailureNotification
+        {
+            AgentName   = EnvConfig.AgentName,
+            Plugins     = execution.Plugins
+                .Select(p => p.PluginName.Split('@')[0].Trim())
+                .Where(n => n.Length > 0)
+                .ToList(),
+            Repository  = string.IsNullOrWhiteSpace(repository) ? null : repository,
+            Trigger     = DescribeTrigger(orchestrationResult),
+            ExecutionId = executionId,
+            Error       = reason,
+            OccurredAt  = occurredAt,
+        };
+    }
+
+    /// <summary>What started the run, e.g. "PR #42 (webhook 'pull requests')" or "schedule 'nightly'".</summary>
+    internal static string DescribeTrigger(ProcessingRequest orchestrationResult)
+    {
+        var source = orchestrationResult.Type == ProcessingType.Schedule
+            ? $"schedule '{orchestrationResult.Name}'"
+            : $"webhook '{orchestrationResult.Name}'";
+
+        var inputs = orchestrationResult.Inputs;
+        var item = OrchestrationResult.GetInputString(inputs, "pr-number") is { Length: > 0 } pr ? $"PR #{pr}"
+            : OrchestrationResult.GetInputString(inputs, "issue-number") is { Length: > 0 } issue ? $"issue #{issue}"
+            : OrchestrationResult.GetInputString(inputs, "work-item-id") is { Length: > 0 } workItem ? $"work item #{workItem}"
+            : null;
+
+        return item is null ? source : $"{item} ({source})";
+    }
+
+    /// <summary>
+    /// The executor's JSON <c>error</c> field, otherwise a fixed pointer to the execution. Never the raw
+    /// container output: stderr and unstructured stdout can hold code, tool-printed tokens or customer data.
+    /// </summary>
+    internal static string FailureReason(ContainerExecutionResult executionResult, string? executionId)
+    {
+        var error = ContainerOutputParser.ExtractField(executionResult.StdOut, "error");
+        if (!string.IsNullOrWhiteSpace(error) && error != executionResult.StdOut)
+            return error;
+
+        return string.IsNullOrWhiteSpace(executionId)
+            ? $"The executor exited with code {executionResult.ExitCode}. See the agent logs for details."
+            : $"The executor exited with code {executionResult.ExitCode}. See execution {executionId} in the agent logs for details.";
     }
 
     // ── Pipeline steps ───────────────────────────────────────────────────────
