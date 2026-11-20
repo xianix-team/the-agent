@@ -110,7 +110,7 @@ public class ProcessingWorkflow
             ContainerOutputParser.Parse(executionResult);
             LogOutcome(executionResult, executionLabel, executionId, orchestrationResult.TenantId, repoLabel, keyInputs);
             if (!executionResult.Succeeded)
-                await ReportFailureAsync(orchestrationResult, FailureReason(executionResult));
+                await ReportFailureAsync(orchestrationResult, FailureReason(executionResult, _executionId));
             await ReportExecutionMetricsAsync(orchestrationResult, executionResult);
             await ReportRaiseEventsAsync(orchestrationResult, executionResult);
         }
@@ -193,13 +193,19 @@ public class ProcessingWorkflow
         return item is null ? source : $"{item} ({source})";
     }
 
-    /// <summary>The executor's JSON <c>error</c> field when present, otherwise the container log.</summary>
-    internal static string FailureReason(ContainerExecutionResult executionResult)
+    /// <summary>
+    /// The executor's JSON <c>error</c> field, otherwise a fixed pointer to the execution. Never the raw
+    /// container output: stderr and unstructured stdout can hold code, tool-printed tokens or customer data.
+    /// </summary>
+    internal static string FailureReason(ContainerExecutionResult executionResult, string? executionId)
     {
         var error = ContainerOutputParser.ExtractField(executionResult.StdOut, "error");
-        return string.IsNullOrWhiteSpace(error) || error == executionResult.StdOut
-            ? executionResult.StdErr
-            : error;
+        if (!string.IsNullOrWhiteSpace(error) && error != executionResult.StdOut)
+            return error;
+
+        return string.IsNullOrWhiteSpace(executionId)
+            ? $"The executor exited with code {executionResult.ExitCode}. See the agent logs for details."
+            : $"The executor exited with code {executionResult.ExitCode}. See execution {executionId} in the agent logs for details.";
     }
 
     // ── Pipeline steps ───────────────────────────────────────────────────────
