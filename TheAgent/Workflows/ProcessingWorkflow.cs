@@ -136,16 +136,18 @@ public class ProcessingWorkflow
             return;
         _failureReported = true;
 
-        var request = new PluginFailureNotificationRequest
+        var notification = BuildFailureNotification(orchestrationResult, execution, reason, _executionId, Workflow.UtcNow);
+        var request = new ContactNotificationRequest
         {
-            TenantId     = orchestrationResult.TenantId,
-            Notification = BuildFailureNotification(orchestrationResult, execution, reason, _executionId, Workflow.UtcNow),
+            TenantId = orchestrationResult.TenantId,
+            Subject  = PluginFailureEmail.Subject(notification),
+            Body     = PluginFailureEmail.Body(orchestrationResult.TenantId, notification),
         };
 
         try
         {
             await Workflow.ExecuteActivityAsync(
-                (FailureNotificationActivities a) => a.NotifyPluginFailureAsync(request),
+                (FailureNotificationActivities a) => a.NotifyContactsAsync(request),
                 ContainerWorkflowOptions.FailureNotification);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
