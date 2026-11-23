@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Xianix.Activities;
 using Xianix.Orchestrator;
 using Xianix.Rules;
@@ -6,8 +7,8 @@ using Xianix.Workflows;
 namespace TheAgent.Tests.Activities;
 
 /// <summary>
-/// Guards the failure email sent to the tenant's contacts: it must name what failed and what
-/// started it, keep the subject on one line, and keep the end of long errors.
+/// Guards the failure notification the server turns into an email to the tenant's contacts:
+/// it must name what failed and what started it, and match the server's JSON contract.
 /// </summary>
 public class FailureNotificationActivitiesTests
 {
@@ -59,39 +60,21 @@ public class FailureNotificationActivitiesTests
     }
 
     [Fact]
-    public void Subject_NamesPluginAndRepository_OnOneLine()
+    public void Notification_SerializesToTheServerContract()
     {
-        var subject = PluginFailureEmail.Subject(Notification() with { Repository = "acme/app\r\nBcc: x@evil.com" });
+        var json = JsonSerializer.Serialize(new PluginFailureNotification
+        {
+            AgentName   = "agent",
+            Plugins     = ["pr-reviewer"],
+            Repository  = "acme/app",
+            Trigger     = "PR #42",
+            ExecutionId = "abc123",
+            Error       = "boom",
+            OccurredAt  = new DateTime(2026, 11, 19, 10, 0, 0, DateTimeKind.Utc),
+        }, JsonSerializerOptions.Web);
 
-        Assert.StartsWith("[Xians] Plugin failed: pr-reviewer (acme/app", subject);
-        Assert.DoesNotContain('\n', subject);
-        Assert.DoesNotContain('\r', subject);
+        using var doc = JsonDocument.Parse(json);
+        foreach (var field in new[] { "agentName", "plugins", "repository", "trigger", "executionId", "error", "occurredAt" })
+            Assert.True(doc.RootElement.TryGetProperty(field, out _), $"missing '{field}'");
     }
-
-    [Fact]
-    public void Body_IncludesContextAndKeepsTheTailOfLongErrors()
-    {
-        var error = new string('x', PluginFailureEmail.MaxErrorLength + 100) + "root cause";
-
-        var body = PluginFailureEmail.Body("acme", Notification(error));
-
-        Assert.Contains("Tenant: acme", body);
-        Assert.Contains("Plugin(s): pr-reviewer", body);
-        Assert.Contains("Trigger: PR #42 (webhook 'pull requests')", body);
-        Assert.Contains("Execution ID: abc123", body);
-        Assert.Contains("Time (UTC): 2026-11-19 10:00:00", body);
-        Assert.Contains("root cause", body);
-        Assert.DoesNotContain(new string('x', PluginFailureEmail.MaxErrorLength + 1), body);
-    }
-
-    [Fact]
-    public void Body_NoError_SaysSo()
-    {
-        Assert.Contains("No error details were reported.", PluginFailureEmail.Body("acme", Notification(error: null)));
-    }
-
-    private static PluginFailureNotification Notification(string? error = "boom") =>
-        ProcessingWorkflow.BuildFailureNotification(
-            Request(ProcessingType.Webhook, new Dictionary<string, object?> { ["pr-number"] = 42 }),
-            Execution, error!, "abc123", new DateTime(2026, 11, 19, 10, 0, 0, DateTimeKind.Utc));
 }
