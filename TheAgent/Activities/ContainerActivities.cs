@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Temporalio.Activities;
 using Temporalio.Exceptions;
 using TheAgent;
+using Xianix.Containers;
 using Xians.Lib.Agents.Core;
 
 namespace Xianix.Activities;
@@ -702,7 +703,7 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
                 Length: anthropic.Length, Mandatory: false, Override: false);
         }
 
-        await InjectExecutionEnvVarsAsync(input.WithEnvsJson, env, prov, input.TenantId);
+        await InjectExecutionEnvVarsAsync(input.WithEnvsJson, env, prov, input.TenantId, input.InputsJson);
 
         LogEnvProvenance(input, prov);
 
@@ -732,12 +733,21 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
     /// </list>
     /// rules.json entries always take precedence over host-derived defaults already in
     /// <paramref name="env"/> — the rules.json declaration is the source of truth.
+    /// <para>
+    /// <c>GITHUB-TOKEN</c> is special-cased when its resolved value holds GitHub App
+    /// credentials (<c>&lt;app-id&gt;,&lt;private-key&gt;</c>) instead of a PAT: on a github.com
+    /// execution a short-lived installation token scoped to the target repository is minted
+    /// and injected in its place; on any other execution the variable is left out. The App's
+    /// private key itself never reaches a container, and if minting fails the container start
+    /// fails — there is no other GitHub identity to fall back to. A PAT is passed through as before.
+    /// </para>
     /// </summary>
     private static async Task InjectExecutionEnvVarsAsync(
         string withEnvsJson,
         Dictionary<string, string> env,
         Dictionary<string, EnvProvenance> prov,
-        string tenantId)
+        string tenantId,
+        string inputsJson)
     {
         if (string.IsNullOrWhiteSpace(withEnvsJson))
             return;
@@ -758,6 +768,8 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
         }
 
         var missingMandatory = new List<string>();
+        GitHubInstallationToken? gitHubAppToken = null;
+        var gitHubAppResolved = false;
 
         foreach (var entry in entries)
         {
@@ -767,7 +779,30 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
             var mandatory = entry.TryGetProperty("mandatory", out var m) && m.GetBoolean();
             if (string.IsNullOrEmpty(name) || value is null) continue;
 
-            var (resolved, source, detail) = await ResolveEnvValueAsync(value, constant, name, logger);
+            string resolved;
+            EnvSource source;
+            string detail;
+
+            (resolved, source, detail) = await ResolveEnvValueAsync(value, constant, name, logger);
+
+            // GITHUB-TOKEN holding "<app-id>,<private-key>" is swapped for a minted installation
+            // token. Minted at most once per container start, even if GITHUB-TOKEN is declared
+            // at both the rule-set and execution level. Throws when minting fails.
+            if (name == GitHubAppTokenProvider.TokenEnvName
+                && GitHubAppTokenProvider.IsAppCredentials(resolved))
+            {
+                if (!gitHubAppResolved)
+                {
+                    gitHubAppToken = await MintGitHubAppTokenAsync(resolved, inputsJson, tenantId, logger);
+                    gitHubAppResolved = true;
+                }
+
+                (resolved, source, detail) = gitHubAppToken is { } minted
+                    ? (minted.Token, EnvSource.GitHubApp, $"installation={minted.InstallationId}")
+                    // Not a github.com run: leave the variable out rather than hand the App's
+                    // private key to the container.
+                    : (string.Empty, source, $"{detail} (GitHub App credentials; not a github.com run)");
+            }
 
             if (mandatory && string.IsNullOrWhiteSpace(resolved))
             {
@@ -797,6 +832,100 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
                 $"Missing mandatory environment variable(s): {names}. " +
                 $"Ensure these are configured on the agent host (for 'host.*' references) " +
                 $"or in the tenant Secret Vault (for 'secrets.*' references).", nonRetryable: true);
+        }
+    }
+
+    /// <summary>
+    /// Mints a GitHub App installation token for the execution's repository from a
+    /// <c>GITHUB-TOKEN</c> value of the form <c>&lt;app-id&gt;,&lt;private-key&gt;</c>. Returns
+    /// <c>null</c> when the execution does not target a github.com repository, so the caller
+    /// leaves the variable out.
+    /// <para>
+    /// Any other failure throws an <see cref="ApplicationFailureException"/> and aborts the
+    /// container start. Transient failures (GitHub unreachable, 5xx, rate limiting) are
+    /// retryable; configuration errors (malformed value, App not installed, bad key,
+    /// repository not granted) are not.
+    /// </para>
+    /// </summary>
+    private static async Task<GitHubInstallationToken?> MintGitHubAppTokenAsync(
+        string appCredentials, string inputsJson, string tenantId, ILogger logger)
+    {
+        var repositoryUrl = TryGetGitHubRepositoryUrl(inputsJson);
+        if (repositoryUrl is null)
+        {
+            logger.LogInformation(
+                "{EnvName} holds GitHub App credentials but this run does not target a github.com " +
+                "repository; the variable is not passed to the container (tenant={TenantId}).",
+                GitHubAppTokenProvider.TokenEnvName, tenantId);
+            return null;
+        }
+
+        try
+        {
+            var credentials = GitHubAppTokenProvider.ParseAppCredentials(appCredentials);
+            var token = await GitHubAppTokenProvider.Shared.MintForRepositoryAsync(credentials, repositoryUrl);
+
+            if (TimeSpan.FromSeconds(EnvConfig.ContainerExecutionTimeoutSeconds)
+                >= GitHubAppTokenProvider.TokenLifetime - TimeSpan.FromMinutes(5))
+                logger.LogWarning(
+                    "CONTAINER-EXECUTION-TIMEOUT-SECONDS ({Timeout}s) is close to or above the 1-hour " +
+                    "GitHub App token lifetime; long runs may lose GitHub access before they finish.",
+                    EnvConfig.ContainerExecutionTimeoutSeconds);
+
+            logger.LogInformation(
+                "Minted GitHub App installation token for tenant={TenantId} repository={Repository} " +
+                "installation={InstallationId} expires={ExpiresAt:O}.",
+                tenantId, repositoryUrl, token.InstallationId, token.ExpiresAt);
+            return token;
+        }
+        catch (GitHubAppTokenException ex)
+        {
+            logger.LogError(
+                "Could not mint a GitHub App token for tenant={TenantId} repository={Repository} " +
+                "(transient={Transient}); the run is stopped. Reason: {Reason}",
+                tenantId, repositoryUrl, ex.IsTransient, ex.Message);
+            throw new ApplicationFailureException(
+                $"GitHub App authentication failed for '{repositoryUrl}': {ex.Message} " +
+                $"Fix the App setup or the App credentials in {GitHubAppTokenProvider.TokenEnvName}, " +
+                "or put a personal access token there instead.",
+                nonRetryable: !ex.IsTransient);
+        }
+    }
+
+    /// <summary>
+    /// Returns the execution's repository URL when the execution targets GitHub on
+    /// github.com (the only host the executor configures GitHub credentials for), else
+    /// <c>null</c>. Mirrors <c>Executor/_common.sh</c>: a repository URL with no
+    /// <c>platform</c> is treated as GitHub.
+    /// </summary>
+    internal static string? TryGetGitHubRepositoryUrl(string? inputsJson)
+    {
+        if (string.IsNullOrWhiteSpace(inputsJson))
+            return null;
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(inputsJson);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+                return null;
+
+            var root = doc.RootElement;
+            var url = root.TryGetProperty("repository-url", out var u)
+                      && u.ValueKind == System.Text.Json.JsonValueKind.String ? u.GetString() : null;
+            var platform = root.TryGetProperty("platform", out var p)
+                           && p.ValueKind == System.Text.Json.JsonValueKind.String ? p.GetString() : null;
+
+            if (string.IsNullOrWhiteSpace(url))
+                return null;
+            if (!string.IsNullOrWhiteSpace(platform)
+                && !string.Equals(platform, RepositoryPlatform.GitHub, StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            return GitHubAppTokenProvider.TryParseGitHubRepository(url, out _, out _) ? url : null;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
         }
     }
 
@@ -936,7 +1065,7 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
         logger.LogInformation("{EnvSummary}", sb.ToString().TrimEnd());
     }
 
-    private enum EnvSource { Runtime, Constant, HostEnv, Secret }
+    private enum EnvSource { Runtime, Constant, HostEnv, Secret, GitHubApp }
 
     /// <summary>
     /// Captured per-env metadata used only for logging.
@@ -980,6 +1109,7 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
                 EnvSource.Constant => "constant",
                 EnvSource.HostEnv  => $"host:{Detail}",
                 EnvSource.Secret   => $"secrets:{Detail}",
+                EnvSource.GitHubApp => $"github-app:{Detail}",
                 _                  => "unknown",
             };
 

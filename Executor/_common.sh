@@ -88,7 +88,7 @@ configure_credentials() {
                 # private repo makes GitHub answer "Repository not found" (it masks 403
                 # as 404), which is indistinguishable from a genuinely wrong URL. Mirror
                 # the azuredevops fail-fast below so the user gets an actionable error.
-                log "FATAL: GITHUB-TOKEN is required when platform=github."
+                log "FATAL: GITHUB-TOKEN is required when platform=github (add a PAT, or <app-id>,<private-key> for a GitHub App, to the tenant Secret Vault)."
                 exit 1
             fi
             local gh_token
