@@ -47,7 +47,7 @@ public class ProcessingWorkflow
                 orchestrationResult.TenantId,
                 orchestrationResult.Name,
                 orchestrationResult.ExecutionBlockName ?? "—");
-            await ReportFailureAsync(orchestrationResult, WorkflowErrors.UserFacingMessage(ex));
+            await ReportFailureAsync(orchestrationResult, FirstLine(WorkflowErrors.UserFacingMessage(ex)));
             throw new ApplicationFailureException(
                 $"Processing workflow failed: {ex.Message}", ex, nonRetryable: true);
         }
@@ -198,21 +198,27 @@ public class ProcessingWorkflow
     /// <summary>
     /// The first line of the executor's JSON <c>error</c> field, otherwise a fixed pointer to the execution.
     /// Never the raw container output: stderr and unstructured stdout can hold code, tool-printed tokens or
-    /// customer data. Only the first line, because an exception message can carry such output on the lines
-    /// after it (e.g. "Error output: ..."); the full error stays in the agent logs.
+    /// customer data.
     /// </summary>
     internal static string FailureReason(ContainerExecutionResult executionResult, string? executionId)
     {
         var error = ContainerOutputParser.ExtractField(executionResult.StdOut, "error");
         if (!string.IsNullOrWhiteSpace(error) && error != executionResult.StdOut)
-        {
-            var firstLine = error.Trim().Split('\n')[0].TrimEnd('\r');
-            return firstLine.Length > MaxFailureReasonLength ? firstLine[..MaxFailureReasonLength] + "…" : firstLine;
-        }
+            return FirstLine(error);
 
         return string.IsNullOrWhiteSpace(executionId)
             ? $"The executor exited with code {executionResult.ExitCode}. See the agent logs for details."
             : $"The executor exited with code {executionResult.ExitCode}. See execution {executionId} in the agent logs for details.";
+    }
+
+    /// <summary>
+    /// The first line of an error, capped at <see cref="MaxFailureReasonLength"/>. The lines after it can carry
+    /// raw output (e.g. "Error output: ..."), which must not reach the email; the full error stays in the agent logs.
+    /// </summary>
+    internal static string FirstLine(string error)
+    {
+        var firstLine = error.Trim().Split('\n')[0].TrimEnd('\r');
+        return firstLine.Length > MaxFailureReasonLength ? firstLine[..MaxFailureReasonLength] + "…" : firstLine;
     }
 
     // ── Pipeline steps ───────────────────────────────────────────────────────

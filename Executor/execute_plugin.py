@@ -294,7 +294,9 @@ def result_error(result_message: ResultMessage | None) -> str | None:
     subtype = getattr(result_message, "subtype", None) or "error"
     detail = getattr(result_message, "result", None)
     detail = detail.strip() if isinstance(detail, str) else ""
-    return f"Claude Code reported the run failed ({subtype})" + (f": {truncate(detail, 1000)}" if detail else ".")
+    # The detail (often the model's last message) goes on its own line: only the first line of the
+    # error is emailed to the tenant's contacts, while logs and failure comments still get all of it.
+    return f"Claude Code reported the run failed ({subtype})." + (f"\n{truncate(detail, 1000)}" if detail else "")
 
 
 def truncate(text: str, max_len: int = 300) -> str:

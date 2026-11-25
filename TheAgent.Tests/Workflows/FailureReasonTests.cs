@@ -29,6 +29,16 @@ public class FailureReasonTests
         Assert.Equal("ProcessError: Command failed", ProcessingWorkflow.FailureReason(result, "exec-1"));
     }
 
+    [Fact]
+    public void FirstLine_KeepsOneLine_CappedInLength()
+    {
+        var reason = ProcessingWorkflow.FirstLine("Claude Code reported the run failed (error_max_turns).\n" + Secret);
+        var longLine = ProcessingWorkflow.FirstLine(new string('x', ProcessingWorkflow.MaxFailureReasonLength + 50));
+
+        Assert.Equal("Claude Code reported the run failed (error_max_turns).", reason);
+        Assert.Equal(ProcessingWorkflow.MaxFailureReasonLength + 1, longLine.Length);
+    }
+
     [Theory]
     [InlineData("", "exec-1", "The executor exited with code 137. See execution exec-1 in the agent logs for details.")]
     [InlineData("not json " + Secret, "exec-1", "The executor exited with code 137. See execution exec-1 in the agent logs for details.")]
