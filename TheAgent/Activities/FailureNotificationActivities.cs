@@ -48,9 +48,13 @@ public sealed class FailureNotificationActivities
             return;
         }
 
+        // The message lands in Temporal history and the agent logs. A 4xx body says what was wrong with
+        // the request; a 5xx body is the server's own problem and could carry internal details, so drop it.
         var status = (int)response.StatusCode;
         throw new ApplicationFailureException(
-            $"Plugin failure notification rejected: {status} {url} body={body}",
+            status < 500
+                ? $"Plugin failure notification rejected: {status} {url} body={body}"
+                : $"Plugin failure notification rejected: {status} {url}",
             nonRetryable: status < 500);
     }
 }
