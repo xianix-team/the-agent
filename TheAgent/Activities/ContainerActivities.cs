@@ -846,10 +846,16 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
     /// retryable; configuration errors (malformed value, App not installed, bad key,
     /// repository not granted) are not.
     /// </para>
+    /// <paramref name="provider"/> and <paramref name="containerTimeoutSeconds"/> default to the
+    /// shared provider and <c>CONTAINER-EXECUTION-TIMEOUT-SECONDS</c>; tests pass their own.
     /// </summary>
-    private static async Task<GitHubInstallationToken?> MintGitHubAppTokenAsync(
-        string appCredentials, string inputsJson, string tenantId, ILogger logger)
+    internal static async Task<GitHubInstallationToken?> MintGitHubAppTokenAsync(
+        string appCredentials, string inputsJson, string tenantId, ILogger logger,
+        GitHubAppTokenProvider? provider = null, int? containerTimeoutSeconds = null)
     {
+        provider ??= GitHubAppTokenProvider.Shared;
+        var timeoutSeconds = containerTimeoutSeconds ?? EnvConfig.ContainerExecutionTimeoutSeconds;
+
         var repositoryUrl = TryGetGitHubRepositoryUrl(inputsJson);
         if (repositoryUrl is null)
         {
@@ -863,14 +869,14 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
         try
         {
             var credentials = GitHubAppTokenProvider.ParseAppCredentials(appCredentials);
-            var token = await GitHubAppTokenProvider.Shared.MintForRepositoryAsync(credentials, repositoryUrl);
+            var token = await provider.MintForRepositoryAsync(credentials, repositoryUrl);
 
-            if (TimeSpan.FromSeconds(EnvConfig.ContainerExecutionTimeoutSeconds)
+            if (TimeSpan.FromSeconds(timeoutSeconds)
                 >= GitHubAppTokenProvider.TokenLifetime - TimeSpan.FromMinutes(5))
                 logger.LogWarning(
                     "CONTAINER-EXECUTION-TIMEOUT-SECONDS ({Timeout}s) is close to or above the 1-hour " +
                     "GitHub App token lifetime; long runs may lose GitHub access before they finish.",
-                    EnvConfig.ContainerExecutionTimeoutSeconds);
+                    timeoutSeconds);
 
             logger.LogInformation(
                 "Minted GitHub App installation token for tenant={TenantId} repository={Repository} " +

@@ -43,7 +43,8 @@ public sealed class GitHubAppTokenProvider
     private const string ExpectedFormat =
         "Expected '<app-id>,<private-key>': the numeric App ID or Client ID (Iv…), a comma, then the App's .pem private key.";
 
-    private static readonly Regex AppIdPattern = new(@"^(\d+|Iv[0-9A-Za-z._-]+)$", RegexOptions.Compiled);
+    // NonBacktracking: matching time stays linear in the input length whatever the input.
+    private static readonly Regex AppIdPattern = new(@"^(\d+|Iv[0-9A-Za-z._-]+)$", RegexOptions.NonBacktracking);
 
     /// <summary>How long GitHub keeps an installation token valid.</summary>
     public static readonly TimeSpan TokenLifetime = TimeSpan.FromHours(1);
@@ -55,10 +56,18 @@ public sealed class GitHubAppTokenProvider
     private static readonly TimeSpan JwtLifetime  = TimeSpan.FromMinutes(9);
 
     private static readonly Regex ScpLikeUrl = new(
-        @"^[^@\s]+@(?<host>[^:\s]+):(?<path>.+)$", RegexOptions.Compiled);
+        @"^[^@\s]+@(?<host>[^:\s]+):(?<path>.+)$", RegexOptions.NonBacktracking);
 
+    // One pooled client for the process; connections are recycled every 5 minutes so DNS
+    // changes for api.github.com are picked up.
     private static readonly Lazy<GitHubAppTokenProvider> SharedInstance = new(() =>
-        new GitHubAppTokenProvider(new HttpClient { Timeout = TimeSpan.FromSeconds(30) }));
+        new GitHubAppTokenProvider(new HttpClient(new SocketsHttpHandler
+        {
+            PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+        })
+        {
+            Timeout = TimeSpan.FromSeconds(30),
+        }));
 
     /// <summary>Shared instance with one reused <see cref="HttpClient"/>.</summary>
     public static GitHubAppTokenProvider Shared => SharedInstance.Value;
