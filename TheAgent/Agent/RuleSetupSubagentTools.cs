@@ -1738,7 +1738,9 @@ public sealed class RuleSetupSubagentTools
         var purpose = key.ToUpperInvariant() switch
         {
             "GITHUB-TOKEN" =>
-                "GitHub personal access token (repo + workflow scopes typical for marketplace plugins)",
+                "GitHub personal access token (repo + workflow scopes typical for marketplace plugins). " +
+                "For a GitHub App instead, store `<app-id>,<private-key>` (App ID, a comma, then the .pem contents) " +
+                "under the same key; the agent then mints a short-lived, repository-scoped token for each run",
             "AZURE-DEVOPS-TOKEN" =>
                 "Azure DevOps personal access token for the org/project",
             "ANTHROPIC-API-KEY" =>

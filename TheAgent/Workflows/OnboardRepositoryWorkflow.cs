@@ -202,7 +202,8 @@ public class OnboardRepositoryWorkflow
         if (Has("github-token is required") || Has("github-token is empty"))
         {
             return "No valid `GITHUB-TOKEN` is configured for this tenant. " +
-                   "Add it to the Xians Secret Vault, then retry onboarding.";
+                   "Add a PAT (or `<app-id>,<private-key>` for a GitHub App installed on the repository) " +
+                   "to the Xians Secret Vault, then retry onboarding.";
         }
 
         if (Has("azure_devops_token is required") || Has("azure-devops-token is required")
