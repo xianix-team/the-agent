@@ -34,8 +34,11 @@ public sealed class FailureNotificationActivities
         message.Content = new StringContent(
             JsonSerializer.Serialize(request.Notification, JsonSerializerOptions.Web), Encoding.UTF8, "application/json");
 
-        using var response = await Client.SendAsync(message);
-        var body = await response.Content.ReadAsStringAsync();
+        // Cancelled when the activity times out, so the server stops the emails it hasn't sent yet
+        // instead of finishing them while Temporal retries.
+        var cancellationToken = ActivityExecutionContext.Current.CancellationToken;
+        using var response = await Client.SendAsync(message, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
         if (body.Length > 500)
             body = body[..500] + "…";
 
