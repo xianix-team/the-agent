@@ -49,6 +49,23 @@ public class FailureNotificationActivitiesTests
             Assert.True(json.RootElement.TryGetProperty(field, out _), $"missing '{field}'");
     }
 
+    [Fact]
+    public void BuildFailureNotification_NoRepoName_UsesTheUrlWithoutCredentials()
+    {
+        var execution = new ExecutionSpec
+        {
+            Platform       = "github",
+            RepositoryUrl  = "https://bot:ghp_secret@github.com/acme/app.git",
+            RepositoryName = "",
+            Plugins        = Execution.Plugins,
+        };
+
+        var notification = ProcessingWorkflow.BuildFailureNotification(
+            Request(ProcessingType.Schedule), execution, "boom", null, DateTime.UtcNow);
+
+        Assert.Equal("https://github.com/acme/app.git", notification.Repository);
+    }
+
     [Theory]
     [InlineData(ProcessingType.Schedule, null, null, "schedule 'pull requests'")]
     [InlineData(ProcessingType.Webhook, "issue-number", "7", "issue #7 (webhook 'pull requests')")]

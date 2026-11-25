@@ -138,6 +138,11 @@ public class ProcessingWorkflow
             return;
         _failureReported = true;
 
+        // Runs started before this activity existed replay without it; scheduling it there would break
+        // their replay (e.g. a failed run still in its cleanup delay during a deploy).
+        if (!Workflow.Patched("plugin-failure-notification"))
+            return;
+
         var request = new PluginFailureNotificationRequest
         {
             TenantId     = orchestrationResult.TenantId,
@@ -150,7 +155,9 @@ public class ProcessingWorkflow
                 (FailureNotificationActivities a) => a.NotifyPluginFailureAsync(request),
                 ContainerWorkflowOptions.FailureNotification);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        // Temporal reports a cancelled run as its own exception type, not OperationCanceledException;
+        // that must propagate so the run stops instead of carrying on.
+        catch (Exception ex) when (!TemporalException.IsCanceledException(ex))
         {
             Workflow.Logger.LogWarning(ex,
                 "Failed to send failure notification for '{Name}', block '{Block}'. The notification is non-critical.",
@@ -162,7 +169,7 @@ public class ProcessingWorkflow
     internal static PluginFailureNotification BuildFailureNotification(
         ProcessingRequest orchestrationResult, ExecutionSpec execution, string reason, string? executionId, DateTime occurredAt)
     {
-        var repository = string.IsNullOrWhiteSpace(execution.RepositoryName) ? execution.RepositoryUrl : execution.RepositoryName;
+        var repository = string.IsNullOrWhiteSpace(execution.RepositoryName) ? WithoutCredentials(execution.RepositoryUrl) : execution.RepositoryName;
 
         return new PluginFailureNotification
         {
@@ -178,6 +185,12 @@ public class ProcessingWorkflow
             OccurredAt  = occurredAt,
         };
     }
+
+    /// <summary>The URL without any <c>user:password@</c> part, which must never be emailed.</summary>
+    private static string? WithoutCredentials(string? url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.UserInfo.Length > 0
+            ? new UriBuilder(uri) { UserName = string.Empty, Password = string.Empty }.Uri.ToString()
+            : url;
 
     /// <summary>What started the run, e.g. "PR #42 (webhook 'pull requests')" or "schedule 'nightly'".</summary>
     internal static string DescribeTrigger(ProcessingRequest orchestrationResult)
