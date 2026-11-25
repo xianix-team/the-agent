@@ -19,6 +19,8 @@ public class ProcessingWorkflow
     private bool _failureReported;
     private string? _executionId;
 
+    internal const int MaxFailureReasonLength = 300;
+
     [WorkflowRun]
     public async Task WorkflowRun(ProcessingRequest orchestrationResult)
     {
@@ -194,14 +196,19 @@ public class ProcessingWorkflow
     }
 
     /// <summary>
-    /// The executor's JSON <c>error</c> field, otherwise a fixed pointer to the execution. Never the raw
-    /// container output: stderr and unstructured stdout can hold code, tool-printed tokens or customer data.
+    /// The first line of the executor's JSON <c>error</c> field, otherwise a fixed pointer to the execution.
+    /// Never the raw container output: stderr and unstructured stdout can hold code, tool-printed tokens or
+    /// customer data. Only the first line, because an exception message can carry such output on the lines
+    /// after it (e.g. "Error output: ..."); the full error stays in the agent logs.
     /// </summary>
     internal static string FailureReason(ContainerExecutionResult executionResult, string? executionId)
     {
         var error = ContainerOutputParser.ExtractField(executionResult.StdOut, "error");
         if (!string.IsNullOrWhiteSpace(error) && error != executionResult.StdOut)
-            return error;
+        {
+            var firstLine = error.Trim().Split('\n')[0].TrimEnd('\r');
+            return firstLine.Length > MaxFailureReasonLength ? firstLine[..MaxFailureReasonLength] + "…" : firstLine;
+        }
 
         return string.IsNullOrWhiteSpace(executionId)
             ? $"The executor exited with code {executionResult.ExitCode}. See the agent logs for details."
