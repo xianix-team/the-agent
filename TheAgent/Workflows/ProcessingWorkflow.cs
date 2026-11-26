@@ -6,6 +6,7 @@ using Xianix.Activities;
 using Xianix.Containers;
 using Xianix.Orchestrator;
 using Xianix.Rules;
+using TheAgent;
 using Xians.Lib.Agents.Core;
 
 namespace Xianix.Workflows;
@@ -13,6 +14,12 @@ namespace Xianix.Workflows;
 [Workflow]
 public class ProcessingWorkflow
 {
+    // A failed container run reports the failure itself; this stops the catch in WorkflowRun
+    // (e.g. a later cleanup failure) from reporting it a second time.
+    private bool _failureReported;
+    private string? _executionId;
+
+    internal const int MaxFailureReasonLength = 300;
 
     [WorkflowRun]
     public async Task WorkflowRun(ProcessingRequest orchestrationResult)
@@ -40,12 +47,13 @@ public class ProcessingWorkflow
                 orchestrationResult.TenantId,
                 orchestrationResult.Name,
                 orchestrationResult.ExecutionBlockName ?? "—");
+            await ReportFailureAsync(orchestrationResult, FirstLine(WorkflowErrors.UserFacingMessage(ex)));
             throw new ApplicationFailureException(
                 $"Processing workflow failed: {ex.Message}", ex, nonRetryable: true);
         }
     }
 
-    private static async Task ExecuteContainerPipelineAsync(ProcessingRequest orchestrationResult)
+    private async Task ExecuteContainerPipelineAsync(ProcessingRequest orchestrationResult)
     {
         var execution = orchestrationResult.Execution!;
         var repositoryUrl = execution.RepositoryUrl;
@@ -56,6 +64,7 @@ public class ProcessingWorkflow
 
         var input = BuildContainerInput(orchestrationResult);
         var executionId = input.ExecutionId;
+        _executionId = executionId;
         var keyInputs = FormatKeyInputs(orchestrationResult.Inputs);
         var pluginSummary = FormatPluginSummary(execution.Plugins);
         var repoLabel = string.IsNullOrEmpty(execution.RepositoryName)
@@ -102,6 +111,8 @@ public class ProcessingWorkflow
 
             ContainerOutputParser.Parse(executionResult);
             LogOutcome(executionResult, executionLabel, executionId, orchestrationResult.TenantId, repoLabel, keyInputs);
+            if (!executionResult.Succeeded)
+                await ReportFailureAsync(orchestrationResult, FailureReason(executionResult, _executionId));
             await ReportExecutionMetricsAsync(orchestrationResult, executionResult);
             await ReportRaiseEventsAsync(orchestrationResult, executionResult);
         }
@@ -112,6 +123,115 @@ public class ProcessingWorkflow
                 (ContainerActivities a) => a.CleanupContainerAsync(containerId),
                 ContainerWorkflowOptions.Cleanup);
         }
+    }
+
+    // ── Failure notification ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Asks the Xians server to email the tenant's notification contacts (Agent Studio → Contacts)
+    /// that the run failed. Runs at most once per workflow and covers every failed run, including
+    /// scheduled ones. Best-effort: a failed notification is logged and never changes the run's outcome.
+    /// </summary>
+    private async Task ReportFailureAsync(ProcessingRequest orchestrationResult, string reason)
+    {
+        if (_failureReported || orchestrationResult.Execution is not { } execution)
+            return;
+        _failureReported = true;
+
+        // Runs started before this activity existed replay without it; scheduling it there would break
+        // their replay (e.g. a failed run still in its cleanup delay during a deploy).
+        if (!Workflow.Patched("plugin-failure-notification"))
+            return;
+
+        var request = new PluginFailureNotificationRequest
+        {
+            TenantId     = orchestrationResult.TenantId,
+            Notification = BuildFailureNotification(orchestrationResult, execution, reason, _executionId, Workflow.UtcNow),
+        };
+
+        try
+        {
+            await Workflow.ExecuteActivityAsync(
+                (FailureNotificationActivities a) => a.NotifyPluginFailureAsync(request),
+                ContainerWorkflowOptions.FailureNotification);
+        }
+        // Temporal reports a cancelled run as its own exception type, not OperationCanceledException;
+        // that must propagate so the run stops instead of carrying on.
+        catch (Exception ex) when (!TemporalException.IsCanceledException(ex))
+        {
+            Workflow.Logger.LogWarning(ex,
+                "Failed to send failure notification for '{Name}', block '{Block}'. The notification is non-critical.",
+                orchestrationResult.Name,
+                orchestrationResult.ExecutionBlockName ?? "—");
+        }
+    }
+
+    internal static PluginFailureNotification BuildFailureNotification(
+        ProcessingRequest orchestrationResult, ExecutionSpec execution, string reason, string? executionId, DateTime occurredAt)
+    {
+        var repository = string.IsNullOrWhiteSpace(execution.RepositoryName) ? WithoutCredentials(execution.RepositoryUrl) : execution.RepositoryName;
+
+        return new PluginFailureNotification
+        {
+            AgentName   = EnvConfig.AgentName,
+            Plugins     = execution.Plugins
+                .Select(p => p.PluginName.Split('@')[0].Trim())
+                .Where(n => n.Length > 0)
+                .ToList(),
+            Repository  = string.IsNullOrWhiteSpace(repository) ? null : repository,
+            Trigger     = DescribeTrigger(orchestrationResult),
+            ExecutionId = executionId,
+            Error       = reason,
+            OccurredAt  = occurredAt,
+        };
+    }
+
+    /// <summary>The URL without any <c>user:password@</c> part, which must never be emailed.</summary>
+    private static string? WithoutCredentials(string? url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.UserInfo.Length > 0
+            ? new UriBuilder(uri) { UserName = string.Empty, Password = string.Empty }.Uri.ToString()
+            : url;
+
+    /// <summary>What started the run, e.g. "PR #42 (webhook 'pull requests')" or "schedule 'nightly'".</summary>
+    internal static string DescribeTrigger(ProcessingRequest orchestrationResult)
+    {
+        var source = orchestrationResult.Type == ProcessingType.Schedule
+            ? $"schedule '{orchestrationResult.Name}'"
+            : $"webhook '{orchestrationResult.Name}'";
+
+        var inputs = orchestrationResult.Inputs;
+        var item = OrchestrationResult.GetInputString(inputs, "pr-number") is { Length: > 0 } pr ? $"PR #{pr}"
+            : OrchestrationResult.GetInputString(inputs, "issue-number") is { Length: > 0 } issue ? $"issue #{issue}"
+            : OrchestrationResult.GetInputString(inputs, "work-item-id") is { Length: > 0 } workItem ? $"work item #{workItem}"
+            : null;
+
+        return item is null ? source : $"{item} ({source})";
+    }
+
+    /// <summary>
+    /// The first line of the executor's JSON <c>error</c> field, otherwise a fixed pointer to the execution.
+    /// Never the raw container output: stderr and unstructured stdout can hold code, tool-printed tokens or
+    /// customer data.
+    /// </summary>
+    internal static string FailureReason(ContainerExecutionResult executionResult, string? executionId)
+    {
+        var error = ContainerOutputParser.ExtractField(executionResult.StdOut, "error");
+        if (!string.IsNullOrWhiteSpace(error) && error != executionResult.StdOut)
+            return FirstLine(error);
+
+        return string.IsNullOrWhiteSpace(executionId)
+            ? $"The executor exited with code {executionResult.ExitCode}. See the agent logs for details."
+            : $"The executor exited with code {executionResult.ExitCode}. See execution {executionId} in the agent logs for details.";
+    }
+
+    /// <summary>
+    /// The first line of an error, capped at <see cref="MaxFailureReasonLength"/>. The lines after it can carry
+    /// raw output (e.g. "Error output: ..."), which must not reach the email; the full error stays in the agent logs.
+    /// </summary>
+    internal static string FirstLine(string error)
+    {
+        var firstLine = error.Trim().Split('\n')[0].TrimEnd('\r');
+        return firstLine.Length > MaxFailureReasonLength ? firstLine[..MaxFailureReasonLength] + "…" : firstLine;
     }
 
     // ── Pipeline steps ───────────────────────────────────────────────────────

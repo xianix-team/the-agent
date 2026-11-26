@@ -857,8 +857,10 @@ public class ContainerActivities : IDisposable, IAsyncDisposable
                     "with-envs entry '{EnvName}' has an unrecognised value form '{Value}'. " +
                     "Expected 'host.VAR_NAME', 'secrets.SECRET-KEY', or set \"constant\": true.",
                     envName, value);
+                // The value is left out of the message: it may be a credential pasted without
+                // "constant": true, and this message reaches failure comments and emails.
                 throw new ApplicationFailureException(
-                    $"with-envs entry '{envName}' has an unrecognised value form '{value}'. " +
+                    $"with-envs entry '{envName}' has an unrecognised value form. " +
                     "Use one of: 'host.VAR_NAME' (host env), 'secrets.SECRET-KEY' (tenant Secret Vault), " +
                     "or set \"constant\": true to take the value as a literal.",
                     nonRetryable: true);
